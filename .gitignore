@@ -1,0 +1,6 @@
+raccoon.egg-info
+build
+.venv
+.claude
+__pycache__
+.idea
