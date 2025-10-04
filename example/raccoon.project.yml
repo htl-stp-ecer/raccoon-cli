@@ -1,0 +1,84 @@
+name: Example Project
+uuid: ee396516-2bdb-4b01-8380-f7853273c125
+
+robot:
+  type: "differential"
+
+  kinematics:
+    wheel_diameter: 0.1016
+    wheelbase_width: 0.3048
+    left_wheel: left_motor
+    right_wheel: right_motor
+
+  # Motion limits
+  limits:
+    chassis:
+      max_velocity: 2.0      # m/s
+      max_angular_velocity: 8.0  # rad/s
+    wheels:
+      max_angular_velocity: 100.0  # rad/s
+      max_angular_acceleration: 1000.0  # rad/s²
+
+  voltage_comp:
+    nominal: 12.0
+
+
+definitions:
+  left_motor:
+    port: 0
+    invert_command: false
+    calibration:
+      # Feedforward gains
+      ff:
+        kS: 0.1      # Static friction compensation
+        kV: 0.05     # Velocity feedforward
+        kA: 0.01     # Acceleration feedforward
+
+      # PID gains
+      pid:
+        kp: 1.0      # Proportional gain
+        ki: 0.1      # Integral gain
+        kd: 0.05     # Derivative gain
+
+      # Deadzone configuration
+      deadzone:
+        enable: true
+        zero_window_percent: 2.0     # Percentage around zero where output is zero
+        start_percent: 5.0           # Minimum percentage to start movement
+        release_percent: 3.0         # Percentage to release from deadzone
+
+      # Motor calibration parameters
+      max_percent_output: 100.0      # Maximum motor output percentage
+      ticks_to_rad: 0.001534         # Conversion factor from encoder ticks to radians
+      vel_lpf_alpha: 0.8             # Low-pass filter alpha for velocity
+      invert_meas: false             # Invert measurement readings
+      invert_cmd: false              # Invert command output
+  right_motor:
+    port: 0
+    invert_command: false
+    calibration:
+      # Feedforward gains
+      ff:
+        kS: 0.1      # Static friction compensation
+        kV: 0.05     # Velocity feedforward
+        kA: 0.01     # Acceleration feedforward
+
+      # PID gains
+      pid:
+        kp: 1.0      # Proportional gain
+        ki: 0.1      # Integral gain
+        kd: 0.05     # Derivative gain
+
+      # Deadzone configuration
+      deadzone:
+        enable: true
+        zero_window_percent: 2.0     # Percentage around zero where output is zero
+        start_percent: 5.0           # Minimum percentage to start movement
+        release_percent: 3.0         # Percentage to release from deadzone
+
+      # Motor calibration parameters
+      max_percent_output: 100.0      # Maximum motor output percentage
+      ticks_to_rad: 0.001534         # Conversion factor from encoder ticks to radians
+      vel_lpf_alpha: 0.8             # Low-pass filter alpha for velocity
+      invert_meas: false             # Invert measurement readings
+      invert_cmd: false              # Invert command output
