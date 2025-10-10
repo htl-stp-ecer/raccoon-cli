@@ -1,143 +1,236 @@
 """Main CLI entry point for raccoon."""
 
+from __future__ import annotations
+
 import logging
+import subprocess
 import sys
+from pathlib import Path
+from typing import Dict
 
 import click
-from rich.logging import RichHandler
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
-from raccoon.project import ProjectError
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s",
-    handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False)]
-)
+from raccoon.codegen import create_pipeline
+from raccoon.logging_utils import configure_logging, render_banner, render_summary
+from raccoon.project import ProjectError, load_project_config, require_project
 
 logger = logging.getLogger("raccoon")
 
+CONTEXT_SETTINGS = {
+    "help_option_names": ["-h", "--help"],
+}
 
-@click.group()
-def main():
+
+def _setup_context(ctx: click.Context) -> None:
+    """Ensure console and logging are ready for a command invocation."""
+    ctx.ensure_object(dict)
+
+    if not ctx.obj.get("initialized"):
+        console = Console()
+        summary = configure_logging(console)
+        ctx.obj["console"] = console
+        ctx.obj["log_summary"] = summary
+        ctx.obj["initialized"] = True
+        render_banner(console)
+    else:
+        summary = ctx.obj["log_summary"]
+
+    summary.clear()
+    ctx.obj["summary_printed"] = False
+
+
+def _print_summary(ctx: click.Context) -> None:
+    """Render the warning/error summary exactly once per command."""
+    if ctx.obj.get("summary_printed"):
+        return
+
+    console: Console | None = ctx.obj.get("console")
+    summary = ctx.obj.get("log_summary")
+    if console is None or summary is None:
+        return
+
+    render_summary(console, summary)
+    summary.clear()
+    ctx.obj["summary_printed"] = True
+
+
+def _render_codegen_success(
+    console: Console,
+    results: Dict[str, Path],
+    project_root: Path,
+    output_dir: Path,
+    formatted: bool,
+    filtered: bool,
+) -> None:
+    """Display a concise overlay of generated files."""
+    heading = Text(
+        "Code generation complete",
+        style="bold green",
+    )
+
+    subtitle_parts = []
+    try:
+        output_display = output_dir.relative_to(project_root)
+    except ValueError:
+        output_display = output_dir
+    subtitle_parts.append(f"Output: {output_display}")
+    subtitle_parts.append("Formatting: on" if formatted else "Formatting: off")
+    if filtered:
+        subtitle_parts.append("Mode: filtered")
+
+    subtitle = Text(" | ".join(subtitle_parts), style="dim")
+
+    table = Table(
+        "Generator",
+        "File",
+        box=box.MINIMAL_DOUBLE_HEAD,
+        header_style="bold cyan",
+        expand=True,
+    )
+
+    for name, path in results.items():
+        try:
+            display_path = path.relative_to(project_root)
+        except ValueError:
+            display_path = path
+        table.add_row(name, str(display_path))
+
+    console.print(
+        Panel(
+            table,
+            title=heading,
+            subtitle=subtitle,
+            border_style="cyan",
+            padding=(1, 2),
+        )
+    )
+
+
+@click.group(context_settings=CONTEXT_SETTINGS, no_args_is_help=True)
+@click.pass_context
+def main(ctx: click.Context) -> None:
     """Raccoon - Toolchain CLI for libstp projects."""
-    pass
+    console: Console = ctx.obj["console"]
+    render_banner(console)
+    _setup_context(ctx)
 
 
 @main.command()
 @click.option(
-    '--only',
+    "--only",
     multiple=True,
-    help='Generate only specific file(s): defs, robot. Can be specified multiple times.',
+    help="Generate specific file(s): defs, robot. May be given multiple times.",
 )
-@click.option('--no-format', is_flag=True, help='Skip black formatting')
+@click.option("--no-format", is_flag=True, help="Skip black formatting")
 @click.option(
-    '-o',
-    '--output-dir',
+    "-o",
+    "--output-dir",
     type=click.Path(),
     default=None,
-    help='Output directory (default: src/hardware/)',
+    help="Override output directory (default: src/hardware/)",
 )
-def codegen(only, no_format, output_dir):
+@click.pass_context
+def codegen(ctx: click.Context, only, no_format: bool, output_dir: str | None) -> None:
     """Generate Python code from raccoon.project.yml."""
-    from pathlib import Path
-
-    from raccoon.project import require_project, load_project_config
-    from raccoon.codegen import create_pipeline
+    console: Console = ctx.obj["console"]
 
     try:
-        # Ensure we're in a project directory
         project_root = require_project()
         logger.info(f"Running in project: {project_root}")
 
-        # Add project root to sys.path so custom modules can be imported
         if str(project_root) not in sys.path:
             sys.path.insert(0, str(project_root))
 
-        # Load project config
         logger.info("Reading config from raccoon.project.yml")
         config = load_project_config(project_root)
         if not isinstance(config, dict):
-            click.echo("Error: raccoon.project.yml must be a mapping", err=True)
-            sys.exit(1)
+            raise ProjectError("raccoon.project.yml must be a mapping")
 
-        # Determine output directory
         if output_dir:
             out_dir = Path(output_dir)
         else:
             out_dir = project_root / "src" / "hardware"
 
-        # Create pipeline
         pipeline = create_pipeline()
 
-        # Generate code
         format_code = not no_format
-        if only:
-            # Generate specific files
+        filtered = bool(only)
+        if filtered:
             results = pipeline.run_specific(list(only), config, out_dir, format_code)
         else:
-            # Generate all files
             results = pipeline.run_all(config, out_dir, format_code)
 
-        # Print summary
-        click.echo(f"✓ Generated {len(results)} file(s) in {out_dir}")
-        for name, path in results.items():
-            click.echo(f"  - {path.name}")
-
-    except ProjectError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+        _render_codegen_success(
+            console,
+            results,
+            project_root,
+            out_dir,
+            formatted=format_code,
+            filtered=filtered,
+        )
+    except ProjectError as exc:
+        logger.error(str(exc))
+        raise SystemExit(1) from exc
+    except Exception:
+        logger.exception("Unexpected error during code generation")
+        raise SystemExit(1) from None
+    finally:
+        _print_summary(ctx)
 
 
 @main.command()
-@click.argument('args', nargs=-1)
-def run(args):
+@click.argument("args", nargs=-1)
+@click.pass_context
+def run(ctx: click.Context, args) -> None:
     """Run codegen and then execute src.main."""
-    from raccoon.project import require_project, load_project_config
-    from raccoon.codegen import create_pipeline
-    import subprocess
+    console: Console = ctx.obj["console"]
 
     try:
-        # Ensure we're in a project directory
         project_root = require_project()
         logger.info(f"Running in project: {project_root}")
 
-        # Add project root to sys.path so custom modules can be imported
         if str(project_root) not in sys.path:
             sys.path.insert(0, str(project_root))
 
-        # Load project config
         logger.info("Reading config from raccoon.project.yml")
         config = load_project_config(project_root)
         if not isinstance(config, dict):
-            click.echo("Error: raccoon.project.yml must be a mapping", err=True)
-            sys.exit(1)
+            raise ProjectError("raccoon.project.yml must be a mapping")
 
-        # Create pipeline and run codegen
         pipeline = create_pipeline()
         output_dir = project_root / "src" / "hardware"
-
-        # Generate all files
         pipeline.run_all(config, output_dir, format_code=True)
 
-        # Run src.main
         logger.info("Running src.main...")
-        cmd_parts = [sys.executable, "-m", "src.main"]
-        cmd_parts.extend(args)
-
+        cmd_parts = [sys.executable, "-m", "src.main", *args]
         logger.info(f"Executing: {' '.join(cmd_parts)}")
+
         result = subprocess.run(cmd_parts, cwd=project_root)
-        sys.exit(result.returncode)
 
-    except ProjectError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+        exit_style = "bold green" if result.returncode == 0 else "bold red"
+        console.print(
+            Panel.fit(
+                Text(f"src.main exited with code {result.returncode}", style=exit_style),
+                border_style="green" if result.returncode == 0 else "red",
+            )
+        )
+
+        if result.returncode != 0:
+            raise SystemExit(result.returncode)
+    except ProjectError as exc:
+        logger.error(str(exc))
+        raise SystemExit(1) from exc
+    except Exception:
+        logger.exception("Unexpected error while running project")
+        raise SystemExit(1) from None
+    finally:
+        _print_summary(ctx)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

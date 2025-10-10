@@ -2,26 +2,20 @@ name: Example Project
 uuid: ee396516-2bdb-4b01-8380-f7853273c125
 
 robot:
-  kinematics:
-    type: "differential"
-    wheelbase: 0.15
-    wheelRadius: 0.07
-    left_wheel: left_motor
-    right_wheel: right_motor
-    max_velocity: 2.0        # m/s
-    max_acceleration: 3.0    # m/s²
+  drive:
+    kinematics:
+      type: "differential"
+      wheelbase: 0.15
+      wheel_radius: 0.07
+      left_motor: left_motor
+      right_motor: right_motor
+      max_velocity: 2.0        # m/s
+      max_acceleration: 3.0    # m/s²
 
-  # Motion limits
-  limits:
-    chassis:
-      max_velocity: 2.0      # m/s
-      max_angular_velocity: 8.0  # rad/s
-    wheels:
-      max_angular_velocity: 100.0  # rad/s
-      max_angular_acceleration: 1000.0  # rad/s²
-
-  voltage_comp:
-    nominal: 12.0
+    # Motion limits
+    limits:
+        max_v: 2.0      # m/s
+        max_omega: 8.0  # rad/s
 
 
 definitions:
