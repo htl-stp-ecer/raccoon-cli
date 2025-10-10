@@ -24,46 +24,64 @@ def main():
 
 
 @main.command()
-@click.option('-o', '--out', type=click.Path(), default='defs.py', help='Output file path')
-@click.option('--class-name', default='Defs', help='Name of the generated class')
+@click.option(
+    '--only',
+    multiple=True,
+    help='Generate only specific file(s): defs, robot. Can be specified multiple times.',
+)
 @click.option('--no-format', is_flag=True, help='Skip black formatting')
-def codegen(out, class_name, no_format):
-    """Generate Python definitions from raccoon.project.yml."""
+@click.option(
+    '-o',
+    '--output-dir',
+    type=click.Path(),
+    default=None,
+    help='Output directory (default: src/hardware/)',
+)
+def codegen(only, no_format, output_dir):
+    """Generate Python code from raccoon.project.yml."""
     from pathlib import Path
 
     from raccoon.project import require_project, load_project_config
-    from raccoon.codegen import generate_defs_source
+    from raccoon.codegen import create_pipeline
 
     try:
         # Ensure we're in a project directory
         project_root = require_project()
         logger.info(f"Running in project: {project_root}")
 
+        # Add project root to sys.path so custom modules can be imported
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+
         # Load project config
-        logger.info(f"Reading config from raccoon.project.yml")
-        data = load_project_config(project_root)
-        if not isinstance(data, dict):
+        logger.info("Reading config from raccoon.project.yml")
+        config = load_project_config(project_root)
+        if not isinstance(config, dict):
             click.echo("Error: raccoon.project.yml must be a mapping", err=True)
             sys.exit(1)
 
-        # Generate source
-        logger.info(f"Generating source code...")
-        src = generate_defs_source(data, class_name=class_name)
+        # Determine output directory
+        if output_dir:
+            out_dir = Path(output_dir)
+        else:
+            out_dir = project_root / "src" / "hardware"
 
-        # Format with black if available
-        if not no_format:
-            try:
-                import black
-                logger.info(f"Formatting with black...")
-                src = black.format_str(src, mode=black.Mode(line_length=88))
-            except ImportError:
-                logger.warning("black not installed, skipping formatting")
+        # Create pipeline
+        pipeline = create_pipeline()
 
-        # Write output
-        out_file = Path(out)
-        out_file.write_text(src, encoding="utf-8")
-        logger.info(f"Wrote {out_file}")
-        click.echo(f"✓ Generated {out_file}")
+        # Generate code
+        format_code = not no_format
+        if only:
+            # Generate specific files
+            results = pipeline.run_specific(list(only), config, out_dir, format_code)
+        else:
+            # Generate all files
+            results = pipeline.run_all(config, out_dir, format_code)
+
+        # Print summary
+        click.echo(f"✓ Generated {len(results)} file(s) in {out_dir}")
+        for name, path in results.items():
+            click.echo(f"  - {path.name}")
 
     except ProjectError as e:
         click.echo(f"Error: {e}", err=True)
@@ -77,9 +95,8 @@ def codegen(out, class_name, no_format):
 @click.argument('args', nargs=-1)
 def run(args):
     """Run codegen and then execute src.main."""
-    from pathlib import Path
     from raccoon.project import require_project, load_project_config
-    from raccoon.codegen import generate_defs_source
+    from raccoon.codegen import create_pipeline
     import subprocess
 
     try:
@@ -87,34 +104,27 @@ def run(args):
         project_root = require_project()
         logger.info(f"Running in project: {project_root}")
 
+        # Add project root to sys.path so custom modules can be imported
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+
         # Load project config
-        logger.info(f"Reading config from raccoon.project.yml")
+        logger.info("Reading config from raccoon.project.yml")
         config = load_project_config(project_root)
         if not isinstance(config, dict):
             click.echo("Error: raccoon.project.yml must be a mapping", err=True)
             sys.exit(1)
 
-        # Run codegen
-        logger.info(f"Generating source code...")
-        src = generate_defs_source(config, class_name='Defs')
+        # Create pipeline and run codegen
+        pipeline = create_pipeline()
+        output_dir = project_root / "src" / "hardware"
 
-        # Format with black if available
-        try:
-            import black
-            logger.info(f"Formatting with black...")
-            src = black.format_str(src, mode=black.Mode(line_length=88))
-        except ImportError:
-            logger.warning("black not installed, skipping formatting")
-
-        # Write output to default location (src/hardware/defs.py)
-        out_file = project_root / 'src' / 'hardware' / 'defs.py'
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text(src, encoding="utf-8")
-        logger.info(f"Wrote {out_file}")
+        # Generate all files
+        pipeline.run_all(config, output_dir, format_code=True)
 
         # Run src.main
-        logger.info(f"Running src.main...")
-        cmd_parts = [sys.executable, '-m', 'src.main']
+        logger.info("Running src.main...")
+        cmd_parts = [sys.executable, "-m", "src.main"]
         cmd_parts.extend(args)
 
         logger.info(f"Executing: {' '.join(cmd_parts)}")

@@ -2,13 +2,14 @@ name: Example Project
 uuid: ee396516-2bdb-4b01-8380-f7853273c125
 
 robot:
-  type: "differential"
-
   kinematics:
-    wheel_diameter: 0.1016
-    wheelbase_width: 0.3048
+    type: "differential"
+    wheelbase: 0.15
+    wheelRadius: 0.07
     left_wheel: left_motor
     right_wheel: right_motor
+    max_velocity: 2.0        # m/s
+    max_acceleration: 3.0    # m/s²
 
   # Motion limits
   limits:
@@ -25,8 +26,9 @@ robot:
 
 definitions:
   left_motor:
+    type: "Motor"
     port: 0
-    invert_command: false
+    inverted: false
     calibration:
       # Feedforward gains
       ff:
@@ -51,11 +53,10 @@ definitions:
       max_percent_output: 100.0      # Maximum motor output percentage
       ticks_to_rad: 0.001534         # Conversion factor from encoder ticks to radians
       vel_lpf_alpha: 0.8             # Low-pass filter alpha for velocity
-      invert_meas: false             # Invert measurement readings
-      invert_cmd: false              # Invert command output
   right_motor:
+    type: "Motor"
     port: 0
-    invert_command: false
+    inverted: false
     calibration:
       # Feedforward gains
       ff:
@@ -80,5 +81,9 @@ definitions:
       max_percent_output: 100.0      # Maximum motor output percentage
       ticks_to_rad: 0.001534         # Conversion factor from encoder ticks to radians
       vel_lpf_alpha: 0.8             # Low-pass filter alpha for velocity
-      invert_meas: false             # Invert measurement readings
-      invert_cmd: false              # Invert command output
+#  wait_for_light_sensor:
+#    type: "LightSensor"
+#    port: 0
+  potato_arm_servo:
+    type: "src.hardware.custom_servo.CustomServo"
+    port: 0

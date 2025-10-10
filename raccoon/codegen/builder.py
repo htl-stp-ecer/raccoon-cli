@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Dict, Set, Tuple
 
-from .introspection import parse_type_from_docstring
+from .introspection import parse_type_from_docstring, get_init_params
 
 logger = logging.getLogger("raccoon")
 
@@ -62,12 +63,46 @@ def build_constructor_expr(
 ) -> str:
     """
     Turn dict into 'ClassName(kw=...)' - recursively handles nested classes.
+
+    This function now validates that all required parameters are provided
+    and checks their types against the class signature.
     """
     if not isinstance(data, dict):
         raise ValueError(f"{context}: expected mapping for {cls.__name__}, got {type(data).__name__}")
 
     logger.info(f"Building {cls.__name__} for {context}")
     imports.add(cls)
+
+    # Get the class's __init__ parameters
+    init_params = get_init_params(cls)
+
+    # Validate required parameters
+    required_params = {
+        name for name, param in init_params.items()
+        if param.default == inspect.Parameter.empty
+    }
+
+    provided_params = set(data.keys())
+    missing_params = required_params - provided_params
+
+    if missing_params:
+        raise ValueError(
+            f"{context}: Missing required parameter(s) for {cls.__name__}: "
+            f"{', '.join(sorted(missing_params))}. "
+            f"Required: {', '.join(sorted(required_params))}, "
+            f"Provided: {', '.join(sorted(provided_params)) if provided_params else 'none'}"
+        )
+
+    # Check for unknown parameters
+    valid_params = set(init_params.keys())
+    unknown_params = provided_params - valid_params
+
+    if unknown_params:
+        logger.warning(
+            f"{context}: Unknown parameter(s) for {cls.__name__}: "
+            f"{', '.join(sorted(unknown_params))}. "
+            f"Valid parameters: {', '.join(sorted(valid_params))}"
+        )
 
     pieces = []
     for name, value in data.items():
