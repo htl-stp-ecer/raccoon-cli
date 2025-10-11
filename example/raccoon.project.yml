@@ -4,24 +4,91 @@ uuid: ee396516-2bdb-4b01-8380-f7853273c125
 robot:
   drive:
     kinematics:
-      type: "differential"
-      wheelbase: 0.15
-      wheel_radius: 0.07
-      left_motor: left_motor
-      right_motor: right_motor
-      max_velocity: 2.0        # m/s
-      max_acceleration: 3.0    # m/s²
+      type: "mecanum"
+      front_left_motor: front_left_motor
+      back_left_motor: rear_left_motor
+      front_right_motor: front_right_motor
+      back_right_motor: rear_left_motor
+      max_acceleration: 3.0
+      max_velocity: 2.0
+      track_width: 0.2       # meters
+      wheel_radius: 0.0375      # meters
+      wheelbase: 0.15         # meters
 
     # Motion limits
     limits:
-        max_v: 2.0      # m/s
-        max_omega: 8.0  # rad/s
+      max_v: 2.0      # m/s
+      max_omega: 8.0  # rad/s
 
+# They have to be placed in src.missions folder (Filename is snake_case of class name)
+# Order matters, first (normal) mission will be executed first
+missions:
+  #  - SetupMission: "setup" # Special mission to initialize hardware
+  #  - ShutdownMission: "shutdown" # Special mission to safely shutdown hardware
+  #  - DriveToPotatoMission # Normal mission to drive to the potato
+  - TestMission # Another normal mission for testing
 
 definitions:
-  left_motor:
+  front_left_motor:
     type: "Motor"
     port: 0
+    inverted: true
+    calibration:
+      # Feedforward gains
+      ff:
+        kS: 0.1      # Static friction compensation
+        kV: 0.05     # Velocity feedforward
+        kA: 0.01     # Acceleration feedforward
+
+      # PID gains
+      pid:
+        kp: 1.0      # Proportional gain
+        ki: 0.1      # Integral gain
+        kd: 0.05     # Derivative gain
+
+      ticks_to_rad: 0.001534         # Conversion factor from encoder ticks to radians
+      vel_lpf_alpha: 0.8             # Low-pass filter alpha for velocity
+  rear_left_motor:
+    type: "Motor"
+    port: 3
+    inverted: true
+    calibration:
+      # Feedforward gains
+      ff:
+        kS: 0.1      # Static friction compensation
+        kV: 0.05     # Velocity feedforward
+        kA: 0.01     # Acceleration feedforward
+
+      # PID gains
+      pid:
+        kp: 1.0      # Proportional gain
+        ki: 0.1      # Integral gain
+        kd: 0.05     # Derivative gain
+
+      ticks_to_rad: 0.001534         # Conversion factor from encoder ticks to radians
+      vel_lpf_alpha: 0.8             # Low-pass filter alpha for velocity
+  front_right_motor:
+    type: "Motor"
+    port: 1
+    inverted: true
+    calibration:
+      # Feedforward gains
+      ff:
+        kS: 0.1      # Static friction compensation
+        kV: 0.05     # Velocity feedforward
+        kA: 0.01     # Acceleration feedforward
+
+      # PID gains
+      pid:
+        kp: 1.0      # Proportional gain
+        ki: 0.1      # Integral gain
+        kd: 0.05     # Derivative gain
+
+      ticks_to_rad: 0.001534         # Conversion factor from encoder ticks to radians
+      vel_lpf_alpha: 0.8             # Low-pass filter alpha for velocity
+  rear_right_motor:
+    type: "Motor"
+    port: 2
     inverted: false
     calibration:
       # Feedforward gains
@@ -36,48 +103,5 @@ definitions:
         ki: 0.1      # Integral gain
         kd: 0.05     # Derivative gain
 
-      # Deadzone configuration
-      deadzone:
-        enable: true
-        zero_window_percent: 2.0     # Percentage around zero where output is zero
-        start_percent: 5.0           # Minimum percentage to start movement
-        release_percent: 3.0         # Percentage to release from deadzone
-
-      # Motor calibration parameters
-      max_percent_output: 100.0      # Maximum motor output percentage
       ticks_to_rad: 0.001534         # Conversion factor from encoder ticks to radians
       vel_lpf_alpha: 0.8             # Low-pass filter alpha for velocity
-  right_motor:
-    type: "Motor"
-    port: 0
-    inverted: false
-    calibration:
-      # Feedforward gains
-      ff:
-        kS: 0.1      # Static friction compensation
-        kV: 0.05     # Velocity feedforward
-        kA: 0.01     # Acceleration feedforward
-
-      # PID gains
-      pid:
-        kp: 1.0      # Proportional gain
-        ki: 0.1      # Integral gain
-        kd: 0.05     # Derivative gain
-
-      # Deadzone configuration
-      deadzone:
-        enable: true
-        zero_window_percent: 2.0     # Percentage around zero where output is zero
-        start_percent: 5.0           # Minimum percentage to start movement
-        release_percent: 3.0         # Percentage to release from deadzone
-
-      # Motor calibration parameters
-      max_percent_output: 100.0      # Maximum motor output percentage
-      ticks_to_rad: 0.001534         # Conversion factor from encoder ticks to radians
-      vel_lpf_alpha: 0.8             # Low-pass filter alpha for velocity
-#  wait_for_light_sensor:
-#    type: "LightSensor"
-#    port: 0
-  potato_arm_servo:
-    type: "src.hardware.custom_servo.CustomServo"
-    port: 0

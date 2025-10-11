@@ -1,6 +1,6 @@
 from .missions.setup_mission import SetupMission
 from .missions.shutdown_mission import ShutdownMission
-from .missions.new_test_mission import NewTestMission
+from .missions.test_mission import NewTestMission
 
 """
 ===========================================================

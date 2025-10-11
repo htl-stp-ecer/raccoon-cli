@@ -13,14 +13,16 @@ class ClassBuilder:
     attributes, methods, and proper formatting.
     """
 
-    def __init__(self, class_name: str):
+    def __init__(self, class_name: str, base_classes: List[str] = None):
         """
         Initialize the class builder.
 
         Args:
             class_name: Name of the class to build
+            base_classes: Optional list of base class names
         """
         self.class_name = class_name
+        self.base_classes = base_classes or []
         self._class_attrs: List[Tuple[str, str]] = []
         self._instance_attrs: List[Tuple[str, str, str]] = []
 
@@ -67,7 +69,13 @@ class ClassBuilder:
             Python class definition as a string
         """
         lines = []
-        lines.append(f"class {self.class_name}:")
+
+        # Build class declaration with base classes if present
+        if self.base_classes:
+            base_classes_str = ", ".join(self.base_classes)
+            lines.append(f"class {self.class_name}({base_classes_str}):")
+        else:
+            lines.append(f"class {self.class_name}:")
 
         # If no attributes, just pass
         if not self._class_attrs and not self._instance_attrs:

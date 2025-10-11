@@ -31,6 +31,7 @@ class RobotGenerator(BaseGenerator):
         """
         super().__init__(class_name)
         self.kinematics_resolver = create_kinematics_resolver()
+        self.mission_imports = []  # Store mission imports separately
 
     def get_output_filename(self) -> str:
         """Return the output filename."""
@@ -102,6 +103,24 @@ class RobotGenerator(BaseGenerator):
             if "type" not in kinematics:
                 raise ValueError("robot.kinematics.type is required")
 
+    def generate(self, config: Dict[str, Any]) -> str:
+        """
+        Generate the complete file content.
+
+        Overridden to pass full config to generate_body for mission processing.
+
+        Args:
+            config: Full project configuration
+
+        Returns:
+            Complete file content as a string
+        """
+        # Store full config for use in generate_body and validation
+        self._full_config = config
+
+        # Call parent generate
+        return super().generate(config)
+
     def generate_body(self, data: Dict[str, Any]) -> str:
         """
         Generate the Robot class body.
@@ -116,7 +135,10 @@ class RobotGenerator(BaseGenerator):
             # Empty Robot class
             return f"class {self.class_name}:\n    pass"
 
-        builder = ClassBuilder(self.class_name)
+        builder = ClassBuilder(self.class_name, base_classes=["GenericRobot"])
+
+        # Add Defs instance as first class attribute
+        builder.add_class_attribute("defs", "Defs()")
 
         # Handle new structure: robot.drive
         if "drive" in data:
@@ -146,14 +168,138 @@ class RobotGenerator(BaseGenerator):
             if drive_expr:
                 builder.add_class_attribute("drive", drive_expr)
 
+        # Add missions from full config
+        if hasattr(self, '_full_config'):
+            self._add_missions_to_builder(builder, self._full_config)
+
         return builder.build()
+
+    def _add_missions_to_builder(self, builder: ClassBuilder, config: Dict[str, Any]) -> None:
+        """
+        Add mission attributes to the class builder.
+
+        Args:
+            builder: The ClassBuilder instance to add missions to
+            config: Full project configuration
+        """
+        missions = config.get("missions", [])
+        if not missions:
+            return
+
+        normal_missions = []
+        setup_mission = None
+        shutdown_mission = None
+
+        for mission_entry in missions:
+            # Handle both string format and dict format
+            if isinstance(mission_entry, str):
+                mission_name = mission_entry
+                mission_type = "normal"
+            elif isinstance(mission_entry, dict):
+                mission_name = list(mission_entry.keys())[0]
+                mission_type = mission_entry[mission_name]
+            else:
+                logger.warning(f"Skipping invalid mission entry: {mission_entry}")
+                continue
+
+            # Convert mission name to snake_case for filename
+            mission_file = self._class_name_to_snake_case(mission_name)
+
+            # Store mission import
+            self.mission_imports.append({
+                "class_name": mission_name,
+                "file_name": mission_file,
+                "type": mission_type
+            })
+
+            # Categorize missions
+            if mission_type == "setup":
+                setup_mission = mission_name
+            elif mission_type == "shutdown":
+                shutdown_mission = mission_name
+            else:
+                normal_missions.append(mission_name)
+
+        # Add missions list
+        if normal_missions:
+            mission_instances = ", ".join([f"{name}()" for name in normal_missions])
+            builder.add_class_attribute("missions", f"[\n        {mission_instances.replace(', ', ',\n        ')}\n    ]")
+
+        # Add setup mission
+        if setup_mission:
+            builder.add_class_attribute("setup_mission", f"{setup_mission}()")
+        else:
+            builder.add_class_attribute("setup_mission", "None")
+
+        # Add shutdown mission
+        if shutdown_mission:
+            builder.add_class_attribute("shutdown_mission", f"{shutdown_mission}()")
+        else:
+            builder.add_class_attribute("shutdown_mission", "None")
+
+    @staticmethod
+    def _class_name_to_snake_case(class_name: str) -> str:
+        """
+        Convert a class name to snake_case for filename.
+
+        Args:
+            class_name: The class name (e.g., "DriveToPotatoMission")
+
+        Returns:
+            Snake case filename (e.g., "drive_to_potato_mission")
+        """
+        import re
+        # Insert underscore before uppercase letters (except at start)
+        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', class_name)
+        # Insert underscore before uppercase letters preceded by lowercase
+        return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
     # Parameters that reference hardware definitions (motors)
     # These will be converted to Defs.<name> references
     HARDWARE_REF_PARAMS = {
         "left_motor", "right_motor",
         "front_left_motor", "front_right_motor", "back_left_motor", "back_right_motor",
+        "rear_left_motor", "rear_right_motor",
     }
+
+    def _validate_hardware_refs(self, hardware_refs: Dict[str, str]) -> None:
+        """
+        Validate that all hardware references exist in definitions.
+
+        Args:
+            hardware_refs: Dictionary mapping parameter names to hardware definition names
+
+        Raises:
+            ValueError: If any hardware reference doesn't exist in definitions
+        """
+        if not hardware_refs:
+            return
+
+        # Get definitions from full config
+        if not hasattr(self, '_full_config'):
+            logger.warning("Cannot validate hardware references: full config not available")
+            return
+
+        definitions = self._full_config.get("definitions", {})
+        if not definitions:
+            raise ValueError(
+                "No hardware definitions found in config, but kinematics references hardware: "
+                f"{', '.join(hardware_refs.values())}"
+            )
+
+        # Check each hardware reference
+        missing_refs = []
+        for param_name, def_name in hardware_refs.items():
+            if def_name not in definitions:
+                missing_refs.append(f"{param_name}='{def_name}'")
+
+        if missing_refs:
+            available_defs = ', '.join(sorted(definitions.keys()))
+            raise ValueError(
+                f"robot.drive.kinematics: Hardware reference(s) not found in definitions: "
+                f"{', '.join(missing_refs)}. "
+                f"Available definitions: {available_defs}"
+            )
 
     def _build_kinematics(self, kinematics_cfg: Dict[str, Any]) -> str:
         """
@@ -241,6 +387,9 @@ class RobotGenerator(BaseGenerator):
                 f"Valid parameters: {', '.join(sorted(valid_params))}"
             )
 
+        # Validate that all hardware references exist in definitions
+        self._validate_hardware_refs(hardware_refs)
+
         # Add to imports
         self.imports.add(kinematics_class)
 
@@ -249,7 +398,7 @@ class RobotGenerator(BaseGenerator):
         for key in sorted(params.keys()):  # Sort for deterministic output
             value = params[key]
             if isinstance(value, tuple) and value[0] == "__hardware_ref__":
-                args.append(f"{key}=Defs.{value[1]}")
+                args.append(f"{key}=defs.{value[1]}")
             else:
                 args.append(f"{key}={build_literal_expr(value)}")
 
@@ -404,13 +553,36 @@ class RobotGenerator(BaseGenerator):
         return f"MotionLimits({', '.join(args)})"
 
     def generate_imports(self) -> str:
-        """Generate import statements including Defs import."""
+        """Generate import statements including Defs, GenericRobot, and mission imports."""
         # Add standard imports
         base_imports = super().generate_imports()
+
+        # Add GenericRobot import
+        generic_robot_import = "from libstp.robot.api import GenericRobot"
 
         # Add Defs import - always use src.hardware.defs
         defs_import = "from src.hardware.defs import Defs"
 
+        # Build mission imports
+        mission_import_lines = []
+        if self.mission_imports:
+            for mission in self.mission_imports:
+                class_name = mission["class_name"]
+                file_name = mission["file_name"]
+                # Use import from src.missions (project root is in sys.path)
+                mission_import_lines.append(
+                    f"from src.missions.{file_name} import {class_name}"
+                )
+
+        # Combine all imports
+        parts = []
         if base_imports:
-            return f"{base_imports}\n\n{defs_import}"
-        return defs_import
+            parts.append(base_imports)
+
+        parts.append(generic_robot_import)
+        parts.append(defs_import)
+
+        if mission_import_lines:
+            parts.append("\n" + "\n".join(mission_import_lines))
+
+        return "\n\n".join(parts)

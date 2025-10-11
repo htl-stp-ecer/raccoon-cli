@@ -115,8 +115,6 @@ def _render_codegen_success(
 @click.pass_context
 def main(ctx: click.Context) -> None:
     """Raccoon - Toolchain CLI for libstp projects."""
-    console: Console = ctx.obj["console"]
-    render_banner(console)
     _setup_context(ctx)
 
 

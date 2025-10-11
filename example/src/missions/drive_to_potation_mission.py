@@ -10,7 +10,7 @@ from libstp_helpers.api.steps.motion.lineup import backward_lineup_on_white
 from libstp_helpers.api.steps import parallel
 from libstp_helpers.api.steps import turn_ccw
 
-class DriveToPotato(Mission):
+class DriveToPotatoMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
             drive_forward(1.5, 1),
