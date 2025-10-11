@@ -22,11 +22,11 @@ robot:
 
 # They have to be placed in src.missions folder (Filename is snake_case of class name)
 # Order matters, first (normal) mission will be executed first
-missions:
-  #  - SetupMission: "setup" # Special mission to initialize hardware
-  #  - ShutdownMission: "shutdown" # Special mission to safely shutdown hardware
-  #  - DriveToPotatoMission # Normal mission to drive to the potato
-  - TestMission # Another normal mission for testing
+#missions:
+#  #  - SetupMission: "setup" # Special mission to initialize hardware
+#  #  - ShutdownMission: "shutdown" # Special mission to safely shutdown hardware
+#  #  - DriveToPotatoMission # Normal mission to drive to the potato
+#  - TestMission # Another normal mission for testing
 
 definitions:
   front_left_motor:

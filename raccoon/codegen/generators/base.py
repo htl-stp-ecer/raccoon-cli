@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ..builder import ImportSet
+from ..cache import CodegenCache, hash_payload, source_fingerprint
 
 logger = logging.getLogger("raccoon")
 
@@ -19,6 +20,8 @@ class BaseGenerator(ABC):
     Uses the Template Method pattern to define the generation workflow.
     Subclasses override specific steps to customize behavior.
     """
+
+    CACHE_SCHEMA_VERSION = "1"
 
     def __init__(self, class_name: str = None):
         """
@@ -116,6 +119,30 @@ Authors:
             return f"\n__all__ = ['{self.class_name}']\n"
         return ""
 
+    def _prepare_data(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract and validate configuration for downstream use."""
+        data = self.extract_config(config)
+        logger.debug(f"Extracted config for {self.__class__.__name__}")
+        self.validate_config(data)
+        logger.debug(f"Validated config for {self.__class__.__name__}")
+        return data
+
+    def _compose_source(self, config: Dict[str, Any], data: Dict[str, Any]) -> str:
+        """Compose the final source code from prepared components."""
+        header = self.generate_header(config)
+        body = self.generate_body(data)
+        imports = self.generate_imports()
+        footer = self.generate_footer()
+
+        parts = [header]
+        if imports:
+            parts.append(imports)
+        parts.append("")  # Blank line after imports
+        parts.append(body)
+        parts.append(footer)
+
+        return "\n".join(parts)
+
     def generate(self, config: Dict[str, Any]) -> str:
         """
         Template method that orchestrates the generation process.
@@ -128,29 +155,8 @@ Authors:
         """
         logger.info(f"Generating {self.get_output_filename()}...")
 
-        # Extract relevant config
-        data = self.extract_config(config)
-        logger.debug(f"Extracted config for {self.__class__.__name__}")
-
-        # Validate
-        self.validate_config(data)
-        logger.debug(f"Validated config for {self.__class__.__name__}")
-
-        # Generate components
-        header = self.generate_header(config)
-        body = self.generate_body(data)
-        imports = self.generate_imports()
-        footer = self.generate_footer()
-
-        # Compose final source
-        parts = [header]
-        if imports:
-            parts.append(imports)
-        parts.append("")  # Blank line after imports
-        parts.append(body)
-        parts.append(footer)
-
-        result = "\n".join(parts)
+        data = self._prepare_data(config)
+        result = self._compose_source(config, data)
         logger.info(f"✓ Generated {self.get_output_filename()}")
         return result
 
@@ -166,21 +172,67 @@ Authors:
         Returns:
             Path to written file
         """
-        source = self.generate(config)
+        filename = self.get_output_filename()
+        output_file = output_dir / filename
+
+        data = self._prepare_data(config)
+
+        cache = CodegenCache(output_dir)
+        config_digest = hash_payload(data)
+        generator_fingerprint = source_fingerprint(self.__class__)
+        fingerprint_payload = {
+            "config": config_digest,
+            "format_code": bool(format_code),
+            "generator": f"{self.__class__.__module__}.{self.__class__.__qualname__}",
+            "generator_source": generator_fingerprint,
+            "class_name": self.class_name,
+            "schema_version": self.CACHE_SCHEMA_VERSION,
+        }
+        fingerprint = hash_payload(fingerprint_payload)
+
+        cached_entry = cache.get(filename)
+        if (
+            cached_entry
+            and cached_entry.get("fingerprint") == fingerprint
+            and output_file.exists()
+        ):
+            logger.info(f"Skipping {filename} (cache hit)")
+            return output_file
+
+        logger.info(f"Generating {filename}...")
+        source = self._compose_source(config, data)
 
         # Format with black if requested and available
         if format_code:
             try:
                 import black
-                logger.debug(f"Formatting {self.get_output_filename()} with black...")
+                logger.debug(f"Formatting {filename} with black...")
                 source = black.format_str(source, mode=black.Mode(line_length=88))
             except ImportError:
                 logger.warning("black not installed, skipping formatting")
 
-        # Write to disk
-        output_file = output_dir / self.get_output_filename()
+        # Write to disk (avoid touching file when unchanged)
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(source, encoding="utf-8")
-        logger.debug(f"Wrote {output_file}")
+        try:
+            existing = output_file.read_text(encoding="utf-8")
+        except OSError:
+            existing = None
+
+        if existing == source:
+            logger.info(f"✓ {filename} already up to date")
+        else:
+            output_file.write_text(source, encoding="utf-8")
+            logger.debug(f"Wrote {output_file}")
+            logger.info(f"✓ Generated {filename}")
+
+        cache.set(
+            filename,
+            {
+                "fingerprint": fingerprint,
+                "config_hash": config_digest,
+                "generator_source": generator_fingerprint,
+                "format_code": bool(format_code),
+            },
+        )
 
         return output_file

@@ -223,7 +223,11 @@ class RobotGenerator(BaseGenerator):
         # Add missions list
         if normal_missions:
             mission_instances = ", ".join([f"{name}()" for name in normal_missions])
-            builder.add_class_attribute("missions", f"[\n        {mission_instances.replace(', ', ',\n        ')}\n    ]")
+            formatted_instances = mission_instances.replace(", ", ",\n        ")
+            builder.add_class_attribute(
+                "missions",
+                f"[\n        {formatted_instances}\n    ]",
+            )
 
         # Add setup mission
         if setup_mission:

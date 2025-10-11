@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   Example Project
- Generated: 2025-10-11 11:44:25
+ Generated: 2025-10-11 13:52:33
 ===========================================================
 
 Authors:
@@ -20,9 +20,6 @@ from libstp.robot.api import GenericRobot
 from src.hardware.defs import Defs
 
 
-from src.missions.test_mission import TestMission
-
-
 class Robot(GenericRobot):
     defs = Defs()
     kinematics = MecanumKinematics(
@@ -39,9 +36,6 @@ class Robot(GenericRobot):
     drive = Drive(
         kinematics=kinematics, chassis_lim=MotionLimits(max_omega=8.0, max_v=2.0)
     )
-    missions = [TestMission()]
-    setup_mission = None
-    shutdown_mission = None
 
 
 __all__ = ["Robot"]
