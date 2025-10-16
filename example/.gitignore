@@ -256,4 +256,4 @@ fabric.properties
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-**/.raccoon_codegen_cache.json
+src/hardware/.raccoon_codegen_cache.json
