@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   Example Project
- Generated: 2025-10-11 13:52:33
+ Generated: 2025-10-16 08:44:22
 ===========================================================
 
 Authors:
@@ -24,7 +24,7 @@ class Robot(GenericRobot):
     defs = Defs()
     kinematics = MecanumKinematics(
         back_left_motor=defs.rear_left_motor,
-        back_right_motor=defs.rear_left_motor,
+        back_right_motor=defs.rear_right_motor,
         front_left_motor=defs.front_left_motor,
         front_right_motor=defs.front_right_motor,
         max_acceleration=3.0,

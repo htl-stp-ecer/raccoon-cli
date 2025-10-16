@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   Example Project
- Generated: 2025-10-11 13:52:33
+ Generated: 2025-10-16 08:44:22
 ===========================================================
 
 Authors:
@@ -28,7 +28,7 @@ class Defs:
         ),
     )
     rear_left_motor = Motor(
-        port=3,
+        port=2,
         inverted=True,
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.1, kV=0.05, kA=0.01),
@@ -48,7 +48,7 @@ class Defs:
         ),
     )
     rear_right_motor = Motor(
-        port=2,
+        port=3,
         inverted=False,
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.1, kV=0.05, kA=0.01),
