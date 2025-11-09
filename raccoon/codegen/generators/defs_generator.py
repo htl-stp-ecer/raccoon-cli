@@ -8,6 +8,7 @@ from typing import Any, Dict
 from .base import BaseGenerator
 from ..builder import build_constructor_expr
 from ..class_builder import ClassBuilder
+from ..introspection import resolve_class
 from ..yaml_resolver import create_hardware_resolver
 
 logger = logging.getLogger("raccoon")
@@ -30,6 +31,7 @@ class DefsGenerator(BaseGenerator):
         """
         super().__init__(class_name)
         self.resolver = create_hardware_resolver()
+        self._imu_import_line: str | None = None
 
     def get_output_filename(self) -> str:
         """Return the output filename."""
@@ -93,13 +95,17 @@ class DefsGenerator(BaseGenerator):
         Returns:
             Class definition as a string
         """
-        if not data:
-            # Empty class
-            return f"class {self.class_name}:\n    pass"
+        self._ensure_imu_import()
 
         # Build class attributes
-        attributes = []
+        attributes = [("imu", "Imu()")]
         for field_name, hw_cfg in data.items():
+            if field_name == "imu":
+                logger.info(
+                    "definitions.imu is generated automatically; ignoring configuration entry"
+                )
+                continue
+
             logger.info(f"Processing definition: {field_name}")
 
             # Resolve type and extract parameters using the unified resolver
@@ -117,3 +123,43 @@ class DefsGenerator(BaseGenerator):
 
         # Use ClassBuilder to construct the class
         return ClassBuilder.build_simple_class(self.class_name, attributes)
+
+    def _ensure_imu_import(self) -> None:
+        """Resolve the appropriate import line for the Imu definition."""
+        if self._imu_import_line is not None:
+            return
+
+        candidates = [
+            ("from libstp.imu import Imu", "libstp.imu.Imu"),
+            ("from libstp.hal import IMU as Imu", "libstp.hal.IMU"),
+        ]
+
+        for import_line, qualname in candidates:
+            try:
+                resolve_class(qualname)
+                self._imu_import_line = import_line
+                logger.debug(f"Using '{import_line}' for Imu definition")
+                return
+            except (ImportError, AttributeError):
+                continue
+
+        # Fall back to legacy HAL import so generation still succeeds.
+        self._imu_import_line = "from libstp.hal import IMU as Imu"
+        logger.warning(
+            "Could not import libstp.imu.Imu or libstp.hal.IMU during generation. "
+            "Defaulting to 'from libstp.hal import IMU as Imu'; ensure the target "
+            "environment provides a compatible IMU class."
+        )
+
+    def generate_imports(self) -> str:
+        """Generate import statements, ensuring Imu is always imported."""
+        base_imports = super().generate_imports()
+        self._ensure_imu_import()
+
+        parts = []
+        if base_imports:
+            parts.append(base_imports)
+        if self._imu_import_line:
+            parts.append(self._imu_import_line)
+
+        return "\n".join(parts)

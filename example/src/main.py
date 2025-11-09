@@ -1,49 +1,46 @@
 import math
 import time
 
-from libstp.hal import IMU
+from libstp.hal import IMU, DigitalSensor
+from libstp.motion import DriveStraightMotion, DriveStraightConfig, TurnMotionConfig, TurnMotion
+from libstp.odometry_imu import ImuOdometry
 
 from src.hardware.robot import Robot
 
 
-def quaternion_to_euler(w, x, y, z):
-    # Roll (x-axis rotation)
-    t0 = 2.0 * (w * x + y * z)
-    t1 = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(t0, t1)
-
-    # Pitch (y-axis rotation)
-    t2 = 2.0 * (w * y - z * x)
-    t2 = max(-1.0, min(1.0, t2))  # clamp
-    pitch = math.asin(t2)
-
-    # Yaw (z-axis rotation)
-    t3 = 2.0 * (w * z + x * y)
-    t4 = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(t3, t4)
-
-    return (
-        math.degrees(roll),
-        math.degrees(pitch),
-        math.degrees(yaw)
-    )
-
-
 robot = Robot()
 if __name__ == "__main__":
-    imu = IMU()
-    while True:
-        w, x, y, z = imu.get_orientation()
-        print(quaternion_to_euler(w, x, y, z))
-        time.sleep(0.5)
-    motion = DriveStraightMotion(robot.drive, imu, 10, 1)
-    # robot.defs.front_left_motor.set_speed(100)
-    # robot.defs.rear_left_motor.set_speed(100)
-    # robot.defs.front_right_motor.set_speed(100)
-    # robot.defs.rear_right_motor.set_speed(100)
-    # dig = DigitalSensor(10)
-    # # while not dig.read():
-    # #     time.sleep(0.1)
+    # dig = robot.defs.button
+    # # config = DriveStraightConfig()
+    # # config.distance_m = 0.1
+    # # config.distance_tolerance_m = 0.01
+    # # config.heading_kp = 50
+    # # config.max_speed_mps = 1.0
+    # # motion = DriveStraightMotion(robot.drive, robot.odometry, config)
+    # config = TurnMotionConfig()
+    # config.angle_deg = 180.0
+    # config.max_angular_speed_rps = 2.0
+    # config.angle_tolerance_deg = 1.0
+    # config.angle_kp = 3.5
+    # motion = TurnMotion(robot.drive, robot.odometry, config)
+    #
+    # while not dig.read():
+    #     time.sleep(0.1)
+    #
+    # while dig.read():
+    #     time.sleep(0.1)
+    #
+    # #
+    # while not motion.is_finished():
+    #     motion.update(0.1)
+    #     time.sleep(0.1)
+
+    # robot.defs.front_left_motor.set_speed(10)
+    # robot.defs.rear_left_motor.set_speed(10)
+    # robot.defs.front_right_motor.set_speed(10)
+    # robot.defs.rear_right_motor.set_speed(10)
+    # while not dig.read():
+    #     time.sleep(0.1)
     # cmd = ChassisVel()
     # cmd.vx = 0.0
     # cmd.vy = 1.0
@@ -55,4 +52,4 @@ if __name__ == "__main__":
     #     state = robot.drive.estimate_state()
     #     debug(f"Vel: {state.vx}, {state.vy}, {state.wz}")
     #     time.sleep(0.1)
-    # robot.start()
+    robot.start()

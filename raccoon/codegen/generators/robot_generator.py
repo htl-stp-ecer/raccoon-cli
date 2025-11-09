@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from .base import BaseGenerator
 from ..builder import build_constructor_expr, build_literal_expr
 from ..class_builder import ClassBuilder
 from ..introspection import resolve_class
-from ..yaml_resolver import create_kinematics_resolver
+from ..yaml_resolver import create_kinematics_resolver, create_odometry_resolver
 
 logger = logging.getLogger("raccoon")
 
@@ -31,6 +31,7 @@ class RobotGenerator(BaseGenerator):
         """
         super().__init__(class_name)
         self.kinematics_resolver = create_kinematics_resolver()
+        self.odometry_resolver = create_odometry_resolver()
         self.mission_imports = []  # Store mission imports separately
 
     def get_output_filename(self) -> str:
@@ -103,6 +104,14 @@ class RobotGenerator(BaseGenerator):
             if "type" not in kinematics:
                 raise ValueError("robot.kinematics.type is required")
 
+        # Validate odometry structure if present
+        if "odometry" in data:
+            odometry_cfg = data["odometry"]
+            if not isinstance(odometry_cfg, (str, dict)):
+                raise ValueError("robot.odometry must be a string or a mapping")
+            if isinstance(odometry_cfg, dict) and "type" not in odometry_cfg:
+                raise ValueError("robot.odometry.type is required when using mapping form")
+
     def generate(self, config: Dict[str, Any]) -> str:
         """
         Generate the complete file content.
@@ -140,6 +149,9 @@ class RobotGenerator(BaseGenerator):
         # Add Defs instance as first class attribute
         builder.add_class_attribute("defs", "Defs()")
 
+        kinematics_expr = ""
+        drive_expr = ""
+
         # Handle new structure: robot.drive
         if "drive" in data:
             drive_cfg = data["drive"]
@@ -148,25 +160,31 @@ class RobotGenerator(BaseGenerator):
             if "kinematics" in drive_cfg:
                 kinematics_cfg = drive_cfg["kinematics"]
                 kinematics_expr = self._build_kinematics(kinematics_cfg)
-                if kinematics_expr:
-                    builder.add_class_attribute("kinematics", kinematics_expr)
 
                 # Build drive using the full drive config
-                drive_expr = self._build_drive_from_config(drive_cfg)
-                if drive_expr:
-                    builder.add_class_attribute("drive", drive_expr)
+            drive_expr = self._build_drive_from_config(drive_cfg)
 
         # Legacy structure: robot.kinematics at top level
         elif "kinematics" in data:
             kinematics_cfg = data["kinematics"]
             kinematics_expr = self._build_kinematics(kinematics_cfg)
-            if kinematics_expr:
-                builder.add_class_attribute("kinematics", kinematics_expr)
 
             # Generate drive system with legacy approach
             drive_expr = self._build_drive_legacy(data)
-            if drive_expr:
-                builder.add_class_attribute("drive", drive_expr)
+
+        if kinematics_expr:
+            builder.add_class_attribute("kinematics", kinematics_expr)
+
+        if drive_expr:
+            builder.add_class_attribute("drive", drive_expr)
+
+        odometry_expr = self._build_odometry(
+            data.get("odometry"),
+            has_kinematics=bool(kinematics_expr),
+            has_drive=bool(drive_expr),
+        )
+        if odometry_expr:
+            builder.add_class_attribute("odometry", odometry_expr)
 
         # Add missions from full config
         if hasattr(self, '_full_config'):
@@ -491,6 +509,234 @@ class RobotGenerator(BaseGenerator):
                     return ""
 
         return f"Drive({', '.join(drive_args)})"
+
+    ODOMETRY_PARAM_HINTS = {
+        # IMU-only odometry
+        "libstp.odometry_imu.ImuOdometry": ["imu", "kinematics"],
+        "ImuOdometry": ["imu", "kinematics"],
+        # Fused odometry combines IMU + kinematics with invert flags
+        "libstp.odometry_fused.FusedOdometry": [
+            "imu",
+            "kinematics",
+            "invert_x",
+            "invert_y",
+            "invert_z",
+            "invert_w",
+        ],
+        "FusedOdometry": [
+            "imu",
+            "kinematics",
+            "invert_x",
+            "invert_y",
+            "invert_z",
+            "invert_w",
+        ],
+    }
+
+    def _build_odometry(
+        self,
+        odometry_cfg: Any,
+        *,
+        has_kinematics: bool,
+        has_drive: bool,
+    ) -> str:
+        """
+        Build odometry constructor expression.
+
+        Args:
+            odometry_cfg: Odometry configuration (string or mapping)
+            has_kinematics: Whether a kinematics attribute will be generated
+            has_drive: Whether a drive attribute will be generated
+
+        Returns:
+            Constructor expression string
+        """
+        if odometry_cfg is None:
+            return ""
+
+        if isinstance(odometry_cfg, str):
+            odometry_type = odometry_cfg
+            params_cfg: Dict[str, Any] = {}
+        elif isinstance(odometry_cfg, dict):
+            odometry_type = odometry_cfg.get("type", "")
+            params_cfg = {k: v for k, v in odometry_cfg.items() if k != "type"}
+        else:
+            raise ValueError("robot.odometry must be a string or mapping")
+
+        if not odometry_type:
+            logger.error("robot.odometry.type is required to generate odometry")
+            return ""
+
+        qualified_name = self._resolve_odometry_qualified_name(odometry_type)
+
+        try:
+            odometry_class = self.odometry_resolver.resolve_type(odometry_type)
+            logger.info(
+                f"Resolved odometry type '{odometry_type}' to {odometry_class.__name__}"
+            )
+            init_params = self._introspect_odometry_params(odometry_class)
+        except ValueError as e:
+            logger.warning(
+                "robot.odometry: %s. Falling back to heuristic parameter mapping "
+                "for '%s'. Ensure libstp is available during generation for full validation.",
+                e,
+                qualified_name,
+            )
+            odometry_class = self._create_placeholder_class(qualified_name)
+            init_params = self._odometry_param_hints(qualified_name)
+            if not init_params:
+                raise ValueError(
+                    f"robot.odometry: Unable to determine parameters for '{qualified_name}'. "
+                    "Install libstp to enable introspection or provide parameter hints."
+                ) from e
+
+        self.imports.add(odometry_class)
+
+        import inspect
+
+        definitions = {}
+        if hasattr(self, "_full_config"):
+            definitions = self._full_config.get("definitions", {}) or {}
+        definition_names = set(definitions.keys())
+
+        reference_map = {
+            "imu": "defs.imu",
+            "defs": "defs",
+        }
+        if has_kinematics:
+            reference_map["kinematics"] = "kinematics"
+        if has_drive:
+            reference_map["drive"] = "drive"
+        for name in definition_names:
+            reference_map[name] = f"defs.{name}"
+
+        param_exprs: Dict[str, str] = {}
+        used_config_keys: set[str] = set()
+
+        for name, param in init_params.items():
+            if name in params_cfg:
+                param_exprs[name] = self._render_odometry_param_value(
+                    params_cfg[name],
+                    reference_map,
+                )
+                used_config_keys.add(name)
+            elif name in reference_map:
+                ref_expr = reference_map[name]
+                if ref_expr == "kinematics" and not has_kinematics:
+                    raise ValueError(
+                        f"robot.odometry: '{odometry_class.__name__}' requires a kinematics attribute"
+                    )
+                if ref_expr == "drive" and not has_drive:
+                    raise ValueError(
+                        f"robot.odometry: '{odometry_class.__name__}' requires a drive attribute"
+                    )
+                param_exprs[name] = ref_expr
+            elif param.default == inspect.Parameter.empty:
+                raise ValueError(
+                    f"robot.odometry: Missing required parameter '{name}' for {odometry_class.__name__}"
+                )
+
+        # Warn about unused configuration keys
+        unused_keys = set(params_cfg.keys()) - used_config_keys
+        for key in sorted(unused_keys):
+            if key not in init_params:
+                logger.warning(
+                    f"robot.odometry: Unknown parameter '{key}' for {odometry_class.__name__}"
+                )
+
+        args = []
+        for name in init_params.keys():
+            if name in param_exprs:
+                args.append(f"{name}={param_exprs[name]}")
+
+        # Append optional parameters supplied in config but not part of the signature ordering
+        # (e.g., when odometry __init__ accepts **kwargs in the binding).
+        extra_keys = [
+            key for key in used_config_keys if key not in init_params.keys()
+        ]
+        for key in extra_keys:
+            args.append(
+                f"{key}={self._render_odometry_param_value(params_cfg[key], reference_map)}"
+            )
+
+        return f"{odometry_class.__name__}({', '.join(args)})"
+
+    def _render_odometry_param_value(
+        self,
+        value: Any,
+        reference_map: Dict[str, str],
+    ) -> str:
+        """
+        Convert an odometry parameter value to a Python expression.
+
+        Args:
+            value: Raw value from configuration
+            reference_map: Mapping of known reference names to expressions
+
+        Returns:
+            Python expression string
+        """
+        if isinstance(value, str):
+            if value in reference_map:
+                return reference_map[value]
+            if value.startswith("defs.") and value[5:] in reference_map:
+                return reference_map[value[5:]]
+        return build_literal_expr(value)
+
+    def _resolve_odometry_qualified_name(self, odometry_type: str) -> str:
+        """
+        Determine the qualified name for the odometry class without requiring import.
+        """
+        if "." in odometry_type:
+            return odometry_type
+
+        lookup = self.odometry_resolver.type_lookup.get(odometry_type.lower())
+        if lookup:
+            return lookup
+
+        # Assume the type is declared in libstp.odometry.<lowercase> by convention
+        module_name = f"libstp.odometry_{odometry_type.lower()}"
+        return f"{module_name}.{odometry_type}"
+
+    def _create_placeholder_class(self, qualified_name: str) -> type:
+        """
+        Create a lightweight stand-in class for import emission when actual type is unavailable.
+        """
+        module_name, class_name = qualified_name.rsplit(".", 1)
+        return type(class_name, (), {"__module__": module_name})
+
+    def _introspect_odometry_params(self, odometry_class: type) -> Dict[str, Any]:
+        """
+        Introspect odometry __init__ parameters using available bindings.
+        """
+        from ..introspection import get_init_params
+
+        return get_init_params(odometry_class)
+
+    def _odometry_param_hints(self, qualified_name: str) -> Dict[str, Any]:
+        """
+        Provide parameter hints for known odometry classes when introspection is unavailable.
+        """
+        import inspect
+
+        hints: Optional[List[str]] = None
+        if qualified_name in self.ODOMETRY_PARAM_HINTS:
+            hints = self.ODOMETRY_PARAM_HINTS[qualified_name]
+        else:
+            class_name = qualified_name.rsplit(".", 1)[-1]
+            hints = self.ODOMETRY_PARAM_HINTS.get(class_name)
+
+        if not hints:
+            return {}
+
+        return {
+            name: inspect.Parameter(
+                name,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=inspect.Parameter.empty,
+            )
+            for name in hints
+        }
 
     def _build_motion_limits(self, limits_cfg: Dict[str, Any]) -> str:
         """

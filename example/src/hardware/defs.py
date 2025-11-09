@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   Example Project
- Generated: 2025-10-16 08:44:22
+ Generated: 2025-11-09 12:39:04
 ===========================================================
 
 Authors:
@@ -13,37 +13,39 @@ Authors:
 """
 
 from libstp.foundation import Feedforward, MotorCalibration, PidGains
-from libstp.hal import Motor
+from libstp.hal import DigitalSensor, Motor
+from libstp.hal import IMU as Imu
 
 
 class Defs:
+    imu = Imu()
     front_left_motor = Motor(
         port=0,
-        inverted=True,
+        inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.1, kV=0.05, kA=0.01),
-            pid=PidGains(kp=1.0, ki=0.1, kd=0.05),
-            ticks_to_rad=0.001534,
+            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
+            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
+            ticks_to_rad=0.00418879,
             vel_lpf_alpha=0.8,
         ),
     )
     rear_left_motor = Motor(
         port=2,
-        inverted=True,
+        inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.1, kV=0.05, kA=0.01),
-            pid=PidGains(kp=1.0, ki=0.1, kd=0.05),
-            ticks_to_rad=0.001534,
+            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
+            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
+            ticks_to_rad=0.00418879,
             vel_lpf_alpha=0.8,
         ),
     )
     front_right_motor = Motor(
         port=1,
-        inverted=True,
+        inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.1, kV=0.05, kA=0.01),
-            pid=PidGains(kp=1.0, ki=0.1, kd=0.05),
-            ticks_to_rad=0.001534,
+            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
+            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
+            ticks_to_rad=0.00418879,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -51,12 +53,13 @@ class Defs:
         port=3,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.1, kV=0.05, kA=0.01),
-            pid=PidGains(kp=1.0, ki=0.1, kd=0.05),
-            ticks_to_rad=0.001534,
+            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
+            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
+            ticks_to_rad=0.00418879,
             vel_lpf_alpha=0.8,
         ),
     )
+    button = DigitalSensor(port=10)
 
 
 __all__ = ["Defs"]

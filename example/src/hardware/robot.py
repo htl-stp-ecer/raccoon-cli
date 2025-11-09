@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   Example Project
- Generated: 2025-10-16 08:44:22
+ Generated: 2025-11-09 12:36:04
 ===========================================================
 
 Authors:
@@ -14,10 +14,12 @@ Authors:
 
 from libstp.drive import Drive, MotionLimits
 from libstp.kinematics_mecanum import MecanumKinematics
+from libstp.odometry_fused import FusedOdometry
 
 from libstp.robot.api import GenericRobot
 
 from src.hardware.defs import Defs
+from src.missions.drive_to_potation_mission import DriveToPotatoMission
 
 
 class Robot(GenericRobot):
@@ -27,15 +29,26 @@ class Robot(GenericRobot):
         back_right_motor=defs.rear_right_motor,
         front_left_motor=defs.front_left_motor,
         front_right_motor=defs.front_right_motor,
-        max_acceleration=3.0,
-        max_velocity=2.0,
-        track_width=0.2,
-        wheel_radius=0.0375,
-        wheelbase=0.15,
+        max_acceleration=240.0,
+        max_velocity=40.0,
+        track_width=0.19,
+        wheel_radius=0.03,
+        wheelbase=0.12,
     )
     drive = Drive(
-        kinematics=kinematics, chassis_lim=MotionLimits(max_omega=8.0, max_v=2.0)
+        kinematics=kinematics, chassis_lim=MotionLimits(max_omega=10.0, max_v=1.6)
     )
+    odometry = FusedOdometry(
+        imu=defs.imu,
+        kinematics=kinematics,
+        invert_x=False,
+        invert_y=False,
+        invert_z=True,
+        invert_w=False,
+    )
+    missions = [
+        DriveToPotatoMission(),
+    ]
 
 
 __all__ = ["Robot"]

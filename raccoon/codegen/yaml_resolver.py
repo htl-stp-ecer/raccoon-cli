@@ -138,7 +138,7 @@ class YamlResolver:
 
 def create_hardware_resolver() -> YamlResolver:
     """Create a resolver configured for hardware types."""
-    resolver = YamlResolver(default_namespaces=["libstp.hal", "libstp.foundation"])
+    resolver = YamlResolver(default_namespaces=["libstp.hal", "libstp.foundation", "libstp.imu"])
     return resolver
 
 
@@ -147,4 +147,14 @@ def create_kinematics_resolver() -> YamlResolver:
     resolver = YamlResolver()
     resolver.add_type_mapping("differential", "libstp.kinematics_differential.DifferentialKinematics")
     resolver.add_type_mapping("mecanum", "libstp.kinematics_mecanum.MecanumKinematics")
+    return resolver
+
+
+def create_odometry_resolver() -> YamlResolver:
+    """Create a resolver configured for odometry types."""
+    resolver = YamlResolver(default_namespaces=["libstp.odometry"])
+    resolver.add_type_mapping("imuodometry", "libstp.odometry_imu.ImuOdometry")
+    resolver.add_type_mapping("imu", "libstp.odometry_imu.ImuOdometry")
+    resolver.add_type_mapping("fusedodometry", "libstp.odometry_fused.FusedOdometry")
+    resolver.add_type_mapping("fused", "libstp.odometry_fused.FusedOdometry")
     return resolver
