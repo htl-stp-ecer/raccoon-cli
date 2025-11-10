@@ -41,10 +41,6 @@ class Robot(GenericRobot):
     odometry = FusedOdometry(
         imu=defs.imu,
         kinematics=kinematics,
-        invert_x=False,
-        invert_y=False,
-        invert_z=True,
-        invert_w=False,
     )
     missions = [
         DriveToPotatoMission(),
