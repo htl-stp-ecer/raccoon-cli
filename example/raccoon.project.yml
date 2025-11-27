@@ -42,15 +42,15 @@ definitions:
     calibration:
       # Feedforward gains — tuned for faster response with minimal overshoot
       ff:
-        kS: 0.08     # Static friction term; just enough to break stiction
-        kV: 0.12     # Velocity feedforward; maps rad/s → % output
-        kA: 0.1     # Acceleration feedforward to help with rapid ramps
+        kS: 0.016920807346578488     # Static friction term; just enough to break stiction
+        kV: 0.04423213915055575     # Velocity feedforward; maps rad/s → % output
+        kA: 0.008667140582131706     # Acceleration feedforward to help with rapid ramps
 
       # PID gains — higher loop stiffness for quick correction
       pid:
-        kp: 2.4      # Proportional gain for tight velocity tracking
-        ki: 0.3      # Integral gain to clear steady-state error
-        kd: 0.08     # Derivative gain to damp the stronger P term
+        kp: 3.540848511169753      # Proportional gain for tight velocity tracking
+        ki: 6.722219606647976      # Integral gain to clear steady-state error
+        kd: 0.15542495525651875     # Derivative gain to damp the stronger P term
 
       ticks_to_rad: 0.00418879         # Encoder conversion factor (ticks → radians)
       vel_lpf_alpha: 0.8             # Velocity filter alpha; high to trust new data
@@ -61,13 +61,13 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
+        kS: 0.0067334830462057235
+        kV: 0.05492798592368888
+        kA: 0.00952096699338497
       pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
+        kp: 4.065085339227012
+        ki: 7.713979572796428
+        kd: 0.17851700992176586
       ticks_to_rad: 0.00418879
       vel_lpf_alpha: 0.8
 
@@ -77,29 +77,28 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
+        kS: 0.029539517397763042
+        kV: 0.041697440852993976
+        kA: 0.007724684540481093
       pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
+        kp: 3.963598212626756
+        ki: 8.85105874981659
+        kd: 0.14791178504928915
       ticks_to_rad: 0.00418879
       vel_lpf_alpha: 0.8
-
   rear_right_motor:
     type: "Motor"
     port: 3            # rear-right wheel on Wombat port 3
     inverted: false
     calibration:
       ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
+        kS: 0.024995811866685317
+        kV: 0.04165603596837704
+        kA: 0.007957684774524531
       pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
+        kp: 4.455453994623986
+        ki: 10.006495754164112
+        kd: 0.1653181991803507
       ticks_to_rad: 0.00418879
       vel_lpf_alpha: 0.8
   button:
