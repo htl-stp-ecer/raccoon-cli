@@ -1,0 +1,6 @@
+codemods:
+  - name: mission_registration
+    kwargs:
+      mission_module: "{{ mission_snake_case }}_mission"
+      mission_class: "{{ mission_pascal_case }}Mission"
+      file: "src/main.py"

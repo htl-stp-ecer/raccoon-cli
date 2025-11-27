@@ -106,7 +106,7 @@ def render_banner(console: Console) -> None:
     subtitle = Text("CLI for Raccoon Projects", style="bold white")
 
     body = Text.from_markup(
-        "Generate and run your robot's competition code.\n",
+        "Generate and run your robot's competition code.",
         style="dim white",
     )
 

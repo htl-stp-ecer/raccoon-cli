@@ -1,0 +1,17 @@
+_jinja_extensions:
+  - jinja2_time.TimeExtension
+
+_templates_suffix: .jinja
+
+_exclude:
+  - "copier.yaml"
+  - "project.yaml"
+
+generated_at:
+  when: false
+  default: "{{ '%Y-%m-%d %H:%M:%S' | strftime }}"
+
+project_id:
+  type: str
+project_name:
+  type: str
