@@ -28,7 +28,13 @@ def find_project_root(start_path: Path | None = None) -> Path:
         ProjectError: If no raccoon.project.yml is found
     """
     if start_path is None:
-        start_path = Path.cwd()
+        try:
+            start_path = Path.cwd()
+        except (FileNotFoundError, OSError) as e:
+            raise ProjectError(
+                f"Current directory not accessible: {e}\n"
+                "Please navigate to a valid directory and try again."
+            )
 
     current = start_path.resolve()
 

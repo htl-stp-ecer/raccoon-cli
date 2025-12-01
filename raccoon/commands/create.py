@@ -45,8 +45,7 @@ def _get_templates_dir() -> Path:
     """Get the templates directory path."""
     # Templates should be in the package directory
     import raccoon
-    package_dir = Path(raccoon.__file__).parent.parent
-    templates_dir = package_dir / "templates"
+    templates_dir = Path.home() / "toolchain" / "templates"
     
     if not templates_dir.exists():
         raise ProjectError(f"Templates directory not found at {templates_dir}")
