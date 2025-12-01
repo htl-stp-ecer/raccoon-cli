@@ -1,5 +1,6 @@
 """Command modules for the raccoon CLI."""
 
+from .calibrate import calibrate_command
 from .codegen import codegen_command
 from .run import run_command
 from .wizard import wizard_command
@@ -8,6 +9,7 @@ from .list_cmd import list_command
 from .remove_cmd import remove_command
 
 __all__ = [
+    "calibrate_command",
     "codegen_command",
     "run_command",
     "wizard_command",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 from rich.console import Console
 
-from raccoon.commands import codegen_command, run_command, wizard_command, create_command, list_command, remove_command
+from raccoon.commands import calibrate_command, codegen_command, run_command, wizard_command, create_command, list_command, remove_command
 from raccoon.logging_utils import configure_logging, render_banner, render_summary
 
 CONTEXT_SETTINGS = {
@@ -56,6 +56,7 @@ def main(ctx: click.Context) -> None:
     _setup_context(ctx)
 
 
+main.add_command(calibrate_command)
 main.add_command(codegen_command)
 main.add_command(run_command)
 main.add_command(wizard_command)

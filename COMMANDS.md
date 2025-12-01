@@ -4,18 +4,19 @@
 
 The Raccoon CLI uses a hierarchical command structure:
 
-- **`raccoon create`** - Create projects and missions
-  - `project` - Create a new project
-  - `mission` - Create a new mission
-- **`raccoon list`** - List projects and missions
-  - `projects` - List all projects
-  - `missions` - List missions in current project
-- **`raccoon remove`** - Remove projects and missions
-  - `project` - Remove a project
-  - `mission` - Remove a mission
-- **`raccoon wizard`** - Interactive project configuration
-- **`raccoon codegen`** - Generate code from configuration
-- **`raccoon run`** - Run the project
+- [**`raccoon create`**](#raccoon-create-project-name) - Create projects and missions
+  - [`project`](#raccoon-create-project-name) - Create a new project
+  - [`mission`](#raccoon-create-mission-name) - Create a new mission
+- [**`raccoon list`**](#raccoon-list-projects) - List projects and missions
+  - [`projects`](#raccoon-list-projects) - List all projects
+  - [`missions`](#raccoon-list-missions) - List missions in current project
+- [**`raccoon remove`**](#raccoon-remove-project-name) - Remove projects and missions
+  - [`project`](#raccoon-remove-project-name) - Remove a project
+  - [`mission`](#raccoon-remove-mission-name) - Remove a mission
+- [**`raccoon calibrate`**](#raccoon-calibrate) - Calibrate robot motors
+- [**`raccoon wizard`**](#raccoon-wizard) - Interactive project configuration
+- [**`raccoon codegen`**](#raccoon-codegen) - Generate code from configuration
+- [**`raccoon run`**](#raccoon-run) - Run the project
 
 ---
 
@@ -125,6 +126,42 @@ raccoon remove mission TestMission --keep-file
 
 ---
 
+### `raccoon list projects`
+
+Lists all Raccoon projects in a specified directory.
+
+**Usage:**
+```bash
+raccoon list projects
+raccoon list projects --path /path/to/search
+```
+
+**Options:**
+- `--path PATH` - Directory to search for projects (default: current directory)
+
+**What it does:**
+1. Searches the specified directory and its immediate subdirectories
+2. Finds all directories containing `raccoon.project.yml`
+3. Displays a table with project information
+4. Shows mission count for each project
+
+**Example Output:**
+```
+Searching for projects in: /home/user/projects
+
+                  Raccoon Projects                   
+┏━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
+┃ # ┃ Project Name   ┃ Location        ┃ Missions ┃
+┡━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
+│ 1 │ BotblockRobot  │ ./BotblockRobot │        3 │
+│ 2 │ TestProject    │ ./TestProject   │        1 │
+└───┴────────────────┴─────────────────┴──────────┘
+
+Total: 2 project(s)
+```
+
+---
+
 ### `raccoon list missions`
 
 Lists all missions configured in the current project.
@@ -165,42 +202,6 @@ Total: 3 mission(s)
 
 ---
 
-### `raccoon list projects`
-
-Lists all Raccoon projects in a specified directory.
-
-**Usage:**
-```bash
-raccoon list projects
-raccoon list projects --path /path/to/search
-```
-
-**Options:**
-- `--path PATH` - Directory to search for projects (default: current directory)
-
-**What it does:**
-1. Searches the specified directory and its immediate subdirectories
-2. Finds all directories containing `raccoon.project.yml`
-3. Displays a table with project information
-4. Shows mission count for each project
-
-**Example Output:**
-```
-Searching for projects in: /home/user/projects
-
-                  Raccoon Projects                   
-┏━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ # ┃ Project Name   ┃ Location        ┃ Missions ┃
-┡━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ 1 │ BotblockRobot  │ ./BotblockRobot │        3 │
-│ 2 │ TestProject    │ ./TestProject   │        1 │
-└───┴────────────────┴─────────────────┴──────────┘
-
-Total: 2 project(s)
-```
-
----
-
 ### `raccoon remove project <name>`
 
 Removes a project and all its files.
@@ -237,6 +238,85 @@ raccoon remove project OldRobot
 
 ---
 
+### `raccoon calibrate`
+
+Calibrate robot motors to determine optimal PID and feedforward parameters.
+
+**Usage:**
+```bash
+cd MyRobot
+raccoon calibrate
+raccoon calibrate --aggressive  # Use aggressive calibration mode
+```
+
+**Options:**
+- `--aggressive` - Use aggressive calibration mode (relay feedback) for more precise tuning
+
+**What it does:**
+1. Initializes the robot from your generated hardware configuration
+2. Runs motor calibration routines to determine:
+   - PID parameters (kp, ki, kd)
+   - Feedforward parameters (kS, kV, kA)
+3. Displays calibration results in a formatted table
+4. Saves the calibration data to `raccoon.project.yml`
+
+**Requirements:**
+- Must be run from within a project directory
+- Requires `raccoon codegen` to have been run first
+- Robot hardware must be connected and accessible
+
+**Example:**
+```bash
+cd BotblockRobot
+raccoon codegen  # Generate robot code first
+raccoon calibrate
+
+# Starting Motor Calibration
+# Mode: Standard
+# Project: BotblockRobot
+#
+# Running calibration... This may take a few moments.
+#
+# ┌──────────────────────────────────────────────────────────┐
+# │              Motor Calibration Results                   │
+# ├────────────────┬──────────┬─────────────┬────────────────┤
+# │ Motor          │ Status   │ PID         │ Feedforward    │
+# ├────────────────┼──────────┼─────────────┼────────────────┤
+# │ front_left...  │ ✓ Success│ kp=4.4554   │ kS=0.024996    │
+# │                │          │ ki=10.0065  │ kV=0.041656    │
+# │                │          │ kd=0.1653   │ kA=0.007958    │
+# └────────────────┴──────────┴─────────────┴────────────────┘
+#
+# Save calibration results to raccoon.project.yml? [Y/n]: y
+# ✓ Calibration results saved to raccoon.project.yml
+```
+
+**Calibration Modes:**
+- **Standard** (default): Uses standard calibration routines suitable for most robots
+- **Aggressive** (`--aggressive`): Uses relay feedback method for more aggressive tuning, may provide better results but requires more careful monitoring
+
+**Updated YAML Format:**
+After calibration, each motor in your `raccoon.project.yml` will have a `calibration` section:
+```yaml
+rear_right_motor:
+  type: "Motor"
+  port: 3
+  inverted: false
+  calibration:
+    ff:
+      kS: 0.024995811866685317
+      kV: 0.04165603596837704
+      kA: 0.007957684774524531
+    pid:
+      kp: 4.455453994623986
+      ki: 10.006495754164112
+      kd: 0.1653181991803507
+    ticks_to_rad: 0.00418879
+    vel_lpf_alpha: 0.8
+```
+
+---
+
 ### `raccoon wizard`
 
 Interactive wizard to configure `raccoon.project.yml`.
@@ -257,16 +337,185 @@ raccoon wizard --dry-run  # Preview without saving
 
 ---
 
+### `raccoon codegen`
+
+Generate Python code from your `raccoon.project.yml` configuration.
+
+**Usage:**
+```bash
+cd MyRobot
+raccoon codegen
+raccoon codegen --only defs         # Generate only defs.py
+raccoon codegen --only robot        # Generate only robot.py
+raccoon codegen --only defs --only robot  # Generate both
+raccoon codegen --no-format         # Skip code formatting
+raccoon codegen -o custom/path      # Custom output directory
+```
+
+**Options:**
+- `--only TEXT` - Generate specific file(s) only (`defs`, `robot`). Can be specified multiple times.
+- `--no-format` - Skip black code formatting
+- `-o, --output-dir PATH` - Override output directory (default: `src/hardware/`)
+
+**What it does:**
+1. Reads your `raccoon.project.yml` configuration
+2. Generates Python code for your robot hardware:
+   - **`defs.py`** - Hardware definitions (motors, sensors, etc.)
+   - **`robot.py`** - Robot class with drive, odometry, and kinematics
+3. Formats the generated code with Black (unless `--no-format` is used)
+4. Displays a summary of generated files
+
+**Requirements:**
+- Must be run from within a project directory
+- Requires a valid `raccoon.project.yml` configuration file
+
+**Example Output:**
+```bash
+cd BotblockRobot
+raccoon codegen
+
+# ╭────────────────────────────────────────────────────╮
+# │       Code generation complete                     │
+# │   Output: src/hardware | Formatting: on            │
+# │ ┌───────────┬─────────────────────────────────┐   │
+# │ │ Generator │ File                            │   │
+# │ ├───────────┼─────────────────────────────────┤   │
+# │ │ defs      │ src/hardware/defs.py            │   │
+# │ │ robot     │ src/hardware/robot.py           │   │
+# │ └───────────┴─────────────────────────────────┘   │
+# ╰────────────────────────────────────────────────────╯
+```
+
+**Generated Files:**
+
+**`src/hardware/defs.py`** - Contains hardware component definitions:
+```python
+# Auto-generated motor definitions
+front_left_motor = Motor(port=0, inverted=False, ticks_to_rad=0.00418879, vel_lpf_alpha=0.8)
+front_right_motor = Motor(port=1, inverted=True, ticks_to_rad=0.00418879, vel_lpf_alpha=0.8)
+# ... more components
+imu = IMU()
+```
+
+**`src/hardware/robot.py`** - Contains the Robot class:
+```python
+class Robot:
+    def __init__(self):
+        self.drive = MecanumDrive(...)
+        self.odometry = FusedOdometry(...)
+        # ... initialization code
+```
+
+**Use Cases:**
+- **Initial setup**: Generate hardware classes after running the wizard
+- **Configuration changes**: Regenerate after modifying `raccoon.project.yml`
+- **Selective generation**: Use `--only` to regenerate specific files during development
+- **CI/CD**: Integrate into build pipelines with `--no-format` for faster execution
+
+**When to run:**
+- After creating a new project
+- After running `raccoon wizard`
+- After manually editing `raccoon.project.yml`
+- Before running `raccoon calibrate` or `raccoon run`
+
+---
+
+### `raccoon run`
+
+Run code generation and then execute your robot's main program.
+
+**Usage:**
+```bash
+cd MyRobot
+raccoon run
+raccoon run --arg1 value1 --arg2 value2  # Pass arguments to src.main
+```
+
+**Arguments:**
+- `[ARGS]...` - Any arguments passed will be forwarded to `src.main`
+
+**What it does:**
+1. Automatically runs `raccoon codegen` to ensure code is up-to-date
+2. Formats the generated code with Black
+3. Executes `python -m src.main` with any provided arguments
+4. Displays the exit code and status
+
+**Requirements:**
+- Must be run from within a project directory
+- Requires a valid `raccoon.project.yml` configuration file
+- Requires a `src/main.py` file with proper entry point
+
+**Example:**
+```bash
+cd BotblockRobot
+raccoon run
+
+# Running in project: /path/to/BotblockRobot
+# Reading config from raccoon.project.yml
+# Code generation complete
+# Running src.main...
+# 
+# [Your program output here]
+# 
+# ╭─────────────────────────────────────╮
+# │ src.main exited with code 0         │
+# ╰─────────────────────────────────────╯
+```
+
+**Passing Arguments:**
+```bash
+# Pass mission name to your program
+raccoon run --mission CollectSamples
+
+# Pass multiple arguments
+raccoon run --debug --mission TestMission --timeout 30
+```
+
+**Exit Codes:**
+- **0** - Program completed successfully (green panel)
+- **Non-zero** - Program encountered an error (red panel)
+
+**Workflow Integration:**
+This command is ideal for rapid development:
+```bash
+# Edit raccoon.project.yml or mission code
+vim src/missions/collect_samples_mission.py
+
+# Run automatically regenerates hardware code and executes
+raccoon run
+
+# No need to manually run codegen first!
+```
+
+**Difference from direct execution:**
+```bash
+# Manual approach (3 steps):
+raccoon codegen
+cd src
+python -m main
+
+# raccoon run (1 step, auto-regenerates):
+raccoon run
+```
+
+**Use Cases:**
+- **Development**: Quick iteration during mission development
+- **Testing**: Test missions on actual hardware
+- **Debugging**: Run with debug arguments passed through
+- **Competition**: Execute competition missions with specific parameters
+
+---
+
 ## Name Format Handling
 
 The commands intelligently handle different naming formats:
 
-| Input Format | Mission Class | File Name | 
-|--------------|---------------|-----------|
-| `CollectSamples` | `CollectSamplesMission` | `collect_samples_mission.py` |
-| `collect-samples` | `CollectSamplesMission` | `collect_samples_mission.py` |
-| `collect_samples` | `CollectSamplesMission` | `collect_samples_mission.py` |
-| `NavigateToGoal` | `NavigateToGoalMission` | `navigate_to_goal_mission.py` |
+| Input Format      | Mission Class           | File Name                     | 
+|-------------------|-------------------------|-------------------------------|
+| `CollectSamples`  | `CollectSamplesMission` | `collect_samples_mission.py`  |
+| `collect-samples` | `CollectSamplesMission` | `collect_samples_mission.py`  |
+| `collect_samples` | `CollectSamplesMission` | `collect_samples_mission.py`  |
+| `NavigateToGoal`  | `NavigateToGoalMission` | `navigate_to_goal_mission.py` |
 
 ---
 
@@ -299,7 +548,10 @@ raccoon list projects
 cd BotblockRobot
 raccoon codegen
 
-# 8. Test your missions
+# 8. Calibrate the robot motors
+raccoon calibrate
+
+# 9. Test your missions
 raccoon run
 ```
 
