@@ -16,11 +16,29 @@ dependencies = [
     "wheel>=0.45.1",
     "jinja2>=3.0",
     "jinja2-time>=0.2",
+    # Server dependencies (Pi-side)
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
+    "websockets>=10.0",
+    # Client dependencies (Laptop-side)
+    "paramiko>=3.0",
+    "httpx>=0.24",
+    "websocket-client>=1.0",
 ]
 
 [project.scripts]
 raccoon = "raccoon.cli:main"
+raccoon-server = "raccoon.server.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["raccoon*"]
+
+[tool.setuptools.package-data]
+raccoon = [
+    "templates/**/*",
+    "templates/**/*.jinja",
+    "templates/**/*.py",
+    "templates/**/*.sh",
+    "templates/**/*.gitignore",
+]

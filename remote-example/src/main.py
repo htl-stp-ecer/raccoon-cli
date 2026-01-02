@@ -1,8 +1,9 @@
-#!/bin/bash
-: '
+from .missions.setup_mission import SetupMission
+from .missions.shutdown_mission import ShutdownMission
+"""
 ===========================================================
- Project:   Sample Project
- Generated: 2025-08-19 00:51:46
+ Project:   remote-example
+ Generated: 2026-01-02 15:57:10
  Tool:      Raccoon IDE
  Platform:  StpOS – Robotics Operating System
 ===========================================================
@@ -16,8 +17,15 @@ Authors:
 
 Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
-'
+"""
 
-IP_ADDRESS="192.168.100.129"
-USERNAME="pi"
-rsync -avz --progress ./ $USERNAME@$IP_ADDRESS:/home/$USERNAME/toolchain/example
+robot = Robot(config="config.yaml")
+
+# --- Missions that will be used in a run ---
+robot.use_missions()
+
+robot.set_setup_mission(SetupMission())
+robot.set_shutdown_mission(ShutdownMission())
+
+if __name__ == "__main__":
+    robot.start()

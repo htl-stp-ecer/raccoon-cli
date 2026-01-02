@@ -1,0 +1,88 @@
+"""Connect command - establish connection to a Raccoon Pi."""
+
+import asyncio
+from typing import Optional
+
+import click
+from rich.console import Console
+
+from raccoon.client.connection import get_connection_manager
+from raccoon.client.discovery import check_address
+from raccoon.project import find_project_root
+
+
+@click.command(name="connect")
+@click.argument("address", type=str)
+@click.option("--port", "-p", type=int, default=8421, help="Pi server port")
+@click.option("--user", "-u", type=str, default="pi", help="SSH username")
+@click.option(
+    "--save/--no-save", default=True, help="Save connection to project config"
+)
+@click.pass_context
+def connect_command(
+    ctx: click.Context,
+    address: str,
+    port: int,
+    user: str,
+    save: bool,
+) -> None:
+    """Connect to a Raccoon Pi server at ADDRESS.
+
+    ADDRESS is the IP address or hostname of the Pi.
+
+    Examples:
+        raccoon connect 192.168.4.1
+        raccoon connect raspberrypi.local
+        raccoon connect 192.168.1.100 --port 8421
+    """
+    console: Console = ctx.obj.get("console", Console())
+
+    # Check if the Pi is reachable
+    console.print(f"[cyan]Checking connection to {address}:{port}...[/cyan]")
+    result = asyncio.run(check_address(address, port))
+
+    if not result:
+        console.print(f"[red]Failed to connect to {address}:{port}[/red]")
+        console.print("Make sure the Pi is running and raccoon-server is started.")
+        return
+
+    # Connect
+    manager = get_connection_manager()
+    success = asyncio.run(
+        manager.connect(address=address, port=port, user=user, auto_discover=False)
+    )
+
+    if success:
+        state = manager.state
+        console.print(f"[green]Connected to {state.pi_hostname}[/green]")
+        console.print(f"  Address: {state.pi_address}:{state.pi_port}")
+        console.print(f"  Version: {state.pi_version or 'unknown'}")
+
+        # Save connection
+        if save:
+            # Always save to global config
+            manager.save_to_global()
+            console.print(f"  [dim]Saved to ~/.raccoon/config.yml[/dim]")
+
+            # Save to project config if in a project
+            project_root = find_project_root()
+            if project_root:
+                manager.save_to_project(project_root)
+                console.print(f"  [dim]Saved to raccoon.project.yml[/dim]")
+    else:
+        console.print(f"[red]Failed to connect to {address}:{port}[/red]")
+
+
+@click.command(name="disconnect")
+@click.pass_context
+def disconnect_command(ctx: click.Context) -> None:
+    """Disconnect from the current Raccoon Pi."""
+    console: Console = ctx.obj.get("console", Console())
+    manager = get_connection_manager()
+
+    if manager.is_connected:
+        hostname = manager.state.pi_hostname
+        manager.disconnect()
+        console.print(f"[yellow]Disconnected from {hostname}[/yellow]")
+    else:
+        console.print("[dim]Not connected to any Pi[/dim]")

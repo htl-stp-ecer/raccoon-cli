@@ -1,5 +1,5 @@
-name: Example Project
-uuid: ee396516-2bdb-4b01-8380-f7853273c125
+name: {{ project_name }}
+uuid: {{ project_uuid }}
 
 robot:
   button: button
@@ -96,79 +96,11 @@ robot:
 # They have to be placed in src.missions folder (Filename is snake_case of class name)
 # Order matters, first (normal) mission will be executed first
 missions:
-#  #  - SetupMission: "setup" # Special mission to initialize hardware
-#  #  - ShutdownMission: "shutdown" # Special mission to safely shutdown hardware
-  - DriveToPotatoMission # Normal mission to drive to the potato
-#  - TestMission # Another normal mission for testing
+  - SetupMission: "setup" # Special mission to initialize hardware
+  - ShutdownMission: "shutdown" # Special mission to safely shutdown hardware
+
 
 definitions:
-  front_left_motor:
-    type: "Motor"
-    port: 0            # front-left wheel on Wombat port 0
-    inverted: false
-    calibration:
-      # Feedforward gains — tuned for faster response with minimal overshoot
-      ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
-      pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
-
-      ticks_to_rad: 0.00418879         # Encoder conversion factor (ticks → radians)
-      vel_lpf_alpha: 0.8             # Velocity filter alpha; high to trust new data
-
-  rear_left_motor:
-    type: "Motor"
-    port: 2            # rear-left wheel on Wombat port 2
-    inverted: false
-    calibration:
-      ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
-      pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
-      ticks_to_rad: 0.00418879
-      vel_lpf_alpha: 0.8
-
-  front_right_motor:
-    type: "Motor"
-    port: 1            # front-right wheel on Wombat port 1
-    inverted: false
-    calibration:
-      ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
-      pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
-      ticks_to_rad: 0.00418879
-      vel_lpf_alpha: 0.8
-  rear_right_motor:
-    type: "Motor"
-    port: 3            # rear-right wheel on Wombat port 3
-    inverted: false
-    calibration:
-      ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
-      pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
-      ticks_to_rad: 0.00418879
-      vel_lpf_alpha: 0.8
   button:
     type: "DigitalSensor"
     port: 10
-  potato_server:
-    type: "Servo"
-    port: 0

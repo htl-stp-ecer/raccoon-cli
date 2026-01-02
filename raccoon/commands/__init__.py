@@ -7,6 +7,9 @@ from .wizard import wizard_command
 from .create import create_command
 from .list_cmd import list_command
 from .remove_cmd import remove_command
+from .connect import connect_command, disconnect_command
+from .status import status_command
+from .sync_cmd import sync_command
 
 __all__ = [
     "calibrate_command",
@@ -16,4 +19,8 @@ __all__ = [
     "create_command",
     "list_command",
     "remove_command",
+    "connect_command",
+    "disconnect_command",
+    "status_command",
+    "sync_command",
 ]

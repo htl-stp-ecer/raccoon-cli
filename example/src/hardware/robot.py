@@ -19,7 +19,7 @@ from libstp.odometry_fused import FusedOdometry
 from libstp.robot.api import GenericRobot
 
 from src.hardware.defs import Defs
-from src.missions.drive_to_potation_mission import DriveToPotatoMission
+from src.missions.drive_to_potato_mission import DriveToPotatoMission
 
 
 class Robot(GenericRobot):

@@ -1,7 +1,8 @@
-"""
+#!/bin/bash
+: '
 ===========================================================
- Project:   {{ project_name }}
- Generated: {{ generated_at }}
+ Project:   remote-example
+ Generated: 2026-01-02 15:57:10
  Tool:      Raccoon IDE
  Platform:  StpOS – Robotics Operating System
 ===========================================================
@@ -15,8 +16,8 @@ Authors:
 
 Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
-"""
-from libstp_helpers.api.missions import Mission
+'
 
-class {{ mission_pascal_case }}Mission(Mission):
-    pass
+IP_ADDRESS="192.168.100.237"
+USERNAME="pi"
+rsync -avz --progress ./ $USERNAME@$IP_ADDRESS:/home/$USERNAME/programs/remote_example

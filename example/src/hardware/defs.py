@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   Example Project
- Generated: 2025-11-09 12:39:04
+ Generated: 2025-12-11 08:42:56
 ===========================================================
 
 Authors:
@@ -13,7 +13,7 @@ Authors:
 """
 
 from libstp.foundation import Feedforward, MotorCalibration, PidGains
-from libstp.hal import DigitalSensor, Motor
+from libstp.hal import DigitalSensor, Motor, Servo
 from libstp.hal import IMU as Imu
 
 
@@ -60,6 +60,7 @@ class Defs:
         ),
     )
     button = DigitalSensor(port=10)
+    potato_server = Servo(port=0)
 
 
 __all__ = ["Defs"]

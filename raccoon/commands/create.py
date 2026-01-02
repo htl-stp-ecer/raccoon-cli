@@ -43,14 +43,18 @@ def _to_pascal_case(name: str) -> str:
 
 def _get_templates_dir() -> Path:
     """Get the templates directory path."""
-    # Templates should be in the package directory
+    # Templates are inside the raccoon package at raccoon/templates/
     import raccoon
-    templates_dir = Path.home() / "toolchain" / "templates"
-    
-    if not templates_dir.exists():
-        raise ProjectError(f"Templates directory not found at {templates_dir}")
-    
-    return templates_dir
+    package_dir = Path(raccoon.__file__).parent
+    templates_dir = package_dir / "templates"
+
+    if templates_dir.exists():
+        return templates_dir
+
+    raise ProjectError(
+        f"Templates directory not found at {templates_dir}.\n"
+        f"Please reinstall the raccoon package."
+    )
 
 
 def _render_template(template_path: Path, output_path: Path, context: Dict[str, Any]) -> None:
@@ -129,6 +133,33 @@ def _add_mission_to_project_config(project_root: Path, mission_class: str) -> No
 
 
 
+def _open_pycharm_with_instructions(console: Console, project_root: Path) -> None:
+    """Open PyCharm and show SSH interpreter setup instructions."""
+    from raccoon.ide.launcher import PyCharmLauncher
+
+    # Open PyCharm
+    launcher = PyCharmLauncher()
+    if launcher.is_available():
+        console.print("[cyan]Opening PyCharm...[/cyan]")
+        if launcher.launch(project_root):
+            console.print("[green]PyCharm launched![/green]")
+        else:
+            console.print("[yellow]Failed to launch PyCharm automatically.[/yellow]")
+            console.print(f"Open the project manually: {project_root}")
+    else:
+        console.print("[yellow]PyCharm not found in PATH.[/yellow]")
+        console.print(f"Open the project manually: {project_root}")
+
+    # Show SSH interpreter setup instructions
+    console.print()
+    console.print("[bold]To set up the SSH Python interpreter:[/bold]")
+    console.print("  1. Run [cyan]raccoon connect <PI_ADDRESS>[/cyan] to connect to your Pi")
+    console.print("  2. In PyCharm, follow the SSH interpreter setup guide:")
+    console.print("     [link=https://www.jetbrains.com/help/pycharm/configuring-remote-interpreters-via-ssh.html]https://www.jetbrains.com/help/pycharm/configuring-remote-interpreters-via-ssh.html[/link]")
+    console.print()
+    console.print("[dim]Use your Pi's IP address, username 'pi', and interpreter path '/usr/bin/python3'[/dim]")
+
+
 def _add_mission_import_to_main(project_root: Path, mission_snake: str, mission_pascal: str) -> None:
     """Add mission import and registration to main.py."""
     main_py = project_root / "src" / "main.py"
@@ -199,54 +230,27 @@ def create_project_command(ctx: click.Context, name: str, path: str, wizard: boo
         logger.error(f"Project template not found at {project_template}")
         raise SystemExit(1)
     
+    # Generate UUID for project
+    project_uuid = str(uuid_module.uuid4())
+
     # Prepare template context
     import datetime
     context = {
         'project_id': _to_snake_case(name),
         'project_name': name,
+        'project_uuid': project_uuid,
         'generated_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
-    
-    # Copy and render templates
+
+    # Copy and render templates (includes raccoon.project.yml)
     _copy_template_dir(project_template, target_dir, context)
-    
-    # Create raccoon.project.yml with UUID
-    project_uuid = str(uuid_module.uuid4())
-    project_config = {
-        'name': name,
-        'uuid': project_uuid,
-        'robot': {
-            'drive': {
-                'kinematics': {
-                    'type': 'mecanum',
-                },
-                'limits': {
-                    'max_v': 2.0,
-                    'max_omega': 10.0,
-                }
-            },
-            'odometry': {
-                'type': 'FusedOdometry',
-                'invert_x': False,
-                'invert_y': False,
-                'invert_z': True,
-                'invert_w': False,
-            }
-        },
-        'missions': [
-            'SetupMission',
-            'ShutdownMission'
-        ],
-        'definitions': {}
-    }
-    
-    config_path = target_dir / "raccoon.project.yml"
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.safe_dump(project_config, f, sort_keys=False)
-    
+
     console.print(f"[green]✓ Project '{name}' created successfully at {target_dir}[/green]")
     console.print(f"[cyan]Project UUID: {project_uuid}[/cyan]")
-    
+
+    # Open PyCharm and show setup instructions
+    _open_pycharm_with_instructions(console, target_dir)
+
     # Run wizard if requested
     if wizard:
         console.print("\n[cyan]Launching setup wizard...[/cyan]\n")

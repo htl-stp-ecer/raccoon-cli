@@ -1,5 +1,3 @@
-from .missions.setup_mission import SetupMission
-from .missions.shutdown_mission import ShutdownMission
 """
 ===========================================================
  Project:   {{ project_name }}
@@ -19,13 +17,7 @@ Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
 
-robot = Robot(config="config.yaml")
+from libstp.mission.api import Mission
 
-# --- Missions that will be used in a run ---
-robot.use_missions()
-
-robot.set_setup_mission(SetupMission())
-robot.set_shutdown_mission(ShutdownMission())
-
-if __name__ == "__main__":
-    robot.start()
+class SetupMission(Mission):
+    pass
