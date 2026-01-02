@@ -170,6 +170,59 @@ async def calibrate_project(
     )
 
 
+@router.post("/codegen/{project_id}", response_model=CommandResponse)
+async def codegen_project(
+    project_id: str, request: CommandRequest = CommandRequest()
+):
+    """
+    Run code generation for a project.
+
+    Executes `raccoon codegen` in the project directory.
+    """
+    from raccoon.server.app import get_config
+    from raccoon.server.services.project_manager import ProjectManager
+    from raccoon.server.services.executor import CommandExecutor
+
+    config = get_config()
+    manager = ProjectManager(config.projects_dir)
+
+    project = manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
+    command_id = str(uuid.uuid4())
+    executor = CommandExecutor()
+
+    # Start the command asynchronously
+    # Use --no-sync since we're already on the Pi
+    asyncio.create_task(
+        executor.execute(
+            command_id=command_id,
+            project_path=project["path"],
+            command="raccoon",
+            args=["codegen", "--no-sync"] + request.args,
+            env=request.env,
+        )
+    )
+
+    _active_commands[command_id] = {
+        "status": CommandStatus.PENDING,
+        "project_id": project_id,
+        "command_type": CommandType.CODEGEN,
+        "started_at": datetime.utcnow().isoformat(),
+        "executor": executor,
+    }
+
+    return CommandResponse(
+        command_id=command_id,
+        status=CommandStatus.PENDING,
+        project_id=project_id,
+        command_type=CommandType.CODEGEN,
+        started_at=_active_commands[command_id]["started_at"],
+        websocket_url=f"/ws/output/{command_id}",
+    )
+
+
 @router.get("/commands/{command_id}/status", response_model=CommandStatusResponse)
 async def get_command_status(command_id: str):
     """

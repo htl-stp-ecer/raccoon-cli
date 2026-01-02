@@ -159,6 +159,31 @@ class RaccoonApiClient:
             websocket_url=data["websocket_url"],
         )
 
+    async def codegen_project(
+        self, project_id: str, args: list[str] = None, env: dict = None
+    ) -> CommandResult:
+        """
+        Run code generation for a project.
+
+        Returns command info including WebSocket URL for output streaming.
+        """
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/v1/codegen/{project_id}",
+            json={"args": args or [], "env": env or {}},
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        data = response.json()
+        return CommandResult(
+            command_id=data["command_id"],
+            status=data["status"],
+            project_id=data["project_id"],
+            command_type=data["command_type"],
+            started_at=data["started_at"],
+            websocket_url=data["websocket_url"],
+        )
+
     async def get_command_status(self, command_id: str) -> dict:
         """Get the status of a running command."""
         client = self._get_client()

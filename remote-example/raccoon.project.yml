@@ -69,7 +69,7 @@ missions:
 - ShutdownMission: shutdown
 definitions:
   button:
-    type: DigitalSensor
+    type: AnalogSensor
     port: 10
 connection:
   pi_address: 192.168.178.65
