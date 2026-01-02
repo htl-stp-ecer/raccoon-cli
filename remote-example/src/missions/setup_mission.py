@@ -17,7 +17,7 @@ Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
 
-from libstp_helpers.api.missions import Mission
+from libstp.mission.api import Mission
 
 class SetupMission(Mission):
     pass

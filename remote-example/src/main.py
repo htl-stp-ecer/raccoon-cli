@@ -3,7 +3,7 @@ from .missions.shutdown_mission import ShutdownMission
 """
 ===========================================================
  Project:   remote-example
- Generated: 2026-01-02 15:57:10
+ Generated: 2026-01-02 16:11:22
  Tool:      Raccoon IDE
  Platform:  StpOS – Robotics Operating System
 ===========================================================
@@ -19,13 +19,9 @@ Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
 
-robot = Robot(config="config.yaml")
+from src.hardware.robot import Robot
 
-# --- Missions that will be used in a run ---
-robot.use_missions()
-
-robot.set_setup_mission(SetupMission())
-robot.set_shutdown_mission(ShutdownMission())
+robot = Robot()
 
 if __name__ == "__main__":
-    robot.start()
+   robot.start()

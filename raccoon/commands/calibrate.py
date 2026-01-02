@@ -196,15 +196,15 @@ async def _calibrate_remote(ctx: click.Context, project_root: Path, config: dict
         args.append("--aggressive")
 
     # Start the calibrate command on Pi
-    async with create_api_client(state.pi_address, state.pi_port) as client:
+    async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
         try:
             result = await client.calibrate_project(project_uuid, args=args)
         except Exception as e:
             console.print(f"[red]Failed to start calibration on Pi: {e}[/red]")
             raise SystemExit(1)
 
-        # Stream output via WebSocket
-        ws_url = f"ws://{state.pi_address}:{state.pi_port}{result.websocket_url}"
+        # Stream output via WebSocket (URL includes auth token)
+        ws_url = client.get_websocket_url(result.command_id)
         handler = OutputHandler(ws_url)
 
         console.print(f"[dim]Command ID: {result.command_id}[/dim]")

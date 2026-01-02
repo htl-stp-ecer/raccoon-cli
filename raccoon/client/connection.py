@@ -25,27 +25,23 @@ class ConnectionState:
 
 @dataclass
 class ConnectionConfig:
-    """Connection configuration stored in project or global config."""
+    """Connection configuration stored in project config (no sensitive data)."""
 
     pi_address: Optional[str] = None
     pi_port: int = 8421
     pi_user: str = "pi"
     remote_path: Optional[str] = None
     auto_connect: bool = True
-    api_token: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for YAML serialization."""
-        d = {
+        return {
             "pi_address": self.pi_address,
             "pi_port": self.pi_port,
             "pi_user": self.pi_user,
             "remote_path": self.remote_path,
             "auto_connect": self.auto_connect,
         }
-        if self.api_token:
-            d["api_token"] = self.api_token
-        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "ConnectionConfig":
@@ -56,7 +52,6 @@ class ConnectionConfig:
             pi_user=data.get("pi_user", "pi"),
             remote_path=data.get("remote_path"),
             auto_connect=data.get("auto_connect", True),
-            api_token=data.get("api_token"),
         )
 
 
@@ -224,7 +219,7 @@ class ConnectionManager:
         return self._ssh_client
 
     def save_to_project(self, project_path: Path) -> None:
-        """Save connection config to project's raccoon.project.yml."""
+        """Save connection config to project's raccoon.project.yml (no sensitive data)."""
         config_path = project_path / "raccoon.project.yml"
         if not config_path.exists():
             return
@@ -236,7 +231,6 @@ class ConnectionManager:
             pi_address=self._state.pi_address,
             pi_port=self._state.pi_port,
             pi_user=self._state.pi_user,
-            api_token=self._state.api_token,
         ).to_dict()
 
         with open(config_path, "w") as f:

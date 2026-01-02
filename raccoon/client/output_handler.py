@@ -110,6 +110,7 @@ def stream_command_output(
     port: int,
     command_id: str,
     console: Optional[Console] = None,
+    api_token: Optional[str] = None,
 ) -> dict:
     """
     Convenience function to stream command output.
@@ -119,10 +120,13 @@ def stream_command_output(
         port: Pi port
         command_id: Command ID to stream
         console: Console for output
+        api_token: API token for authentication
 
     Returns:
         Final status dict
     """
     url = f"ws://{address}:{port}/ws/output/{command_id}"
+    if api_token:
+        url += f"?token={api_token}"
     handler = OutputHandler(url)
     return handler.stream_to_console(console)

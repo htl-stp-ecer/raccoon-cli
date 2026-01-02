@@ -30,12 +30,14 @@ def status_command(ctx: click.Context) -> None:
     state = manager.state
 
     if state.connected:
+        auth_status = "[green]authenticated[/green]" if state.api_token else "[yellow]no token[/yellow]"
         console.print(
             Panel(
                 f"[green]Connected[/green] to [cyan]{state.pi_hostname}[/cyan]\n"
                 f"Address: {state.pi_address}:{state.pi_port}\n"
                 f"User: {state.pi_user}\n"
-                f"Version: {state.pi_version or 'unknown'}",
+                f"Version: {state.pi_version or 'unknown'}\n"
+                f"Auth: {auth_status}",
                 title="Pi Connection",
             )
         )
@@ -107,7 +109,7 @@ def status_command(ctx: click.Context) -> None:
 async def _show_remote_status(console: Console, state, project_uuid: str) -> None:
     """Show remote project status on Pi."""
     try:
-        async with create_api_client(state.pi_address, state.pi_port) as client:
+        async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
             # Check health
             health = await client.health()
             projects_dir = health.get("projects_dir", "unknown")

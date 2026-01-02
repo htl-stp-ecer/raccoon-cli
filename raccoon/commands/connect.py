@@ -5,6 +5,7 @@ from typing import Optional
 
 import click
 from rich.console import Console
+from rich.prompt import Confirm
 
 from raccoon.client.connection import get_connection_manager
 from raccoon.client.discovery import check_address
@@ -49,28 +50,65 @@ def connect_command(
     # Connect
     manager = get_connection_manager()
     success = asyncio.run(
-        manager.connect(address=address, port=port, user=user, auto_discover=False)
+        manager.connect(address=address, port=port, user=user)
     )
 
-    if success:
-        state = manager.state
-        console.print(f"[green]Connected to {state.pi_hostname}[/green]")
-        console.print(f"  Address: {state.pi_address}:{state.pi_port}")
-        console.print(f"  Version: {state.pi_version or 'unknown'}")
-
-        # Save connection
-        if save:
-            # Always save to global config
-            manager.save_to_global()
-            console.print(f"  [dim]Saved to ~/.raccoon/config.yml[/dim]")
-
-            # Save to project config if in a project
-            project_root = find_project_root()
-            if project_root:
-                manager.save_to_project(project_root)
-                console.print(f"  [dim]Saved to raccoon.project.yml[/dim]")
-    else:
+    if not success:
         console.print(f"[red]Failed to connect to {address}:{port}[/red]")
+        return
+
+    state = manager.state
+    console.print(f"[green]Connected to {state.pi_hostname}[/green]")
+    console.print(f"  Address: {state.pi_address}:{state.pi_port}")
+    console.print(f"  Version: {state.pi_version or 'unknown'}")
+
+    # Check API token status
+    if state.api_token:
+        console.print(f"  Auth:    [green]API token retrieved via SSH[/green]")
+    else:
+        # SSH key auth failed - offer to set up keys
+        console.print(f"  Auth:    [yellow]SSH key authentication failed[/yellow]")
+        console.print()
+
+        if Confirm.ask("Set up SSH key authentication now?", default=True):
+            _setup_ssh_and_retry(console, manager, address, user)
+        else:
+            console.print()
+            console.print("[yellow]Warning: Without SSH key auth, remote commands will fail.[/yellow]")
+            console.print(f"Run [cyan]raccoon connect {address}[/cyan] again to set up SSH keys.")
+
+    # Save connection
+    if save:
+        # Always save to global config
+        manager.save_to_global()
+        console.print(f"  [dim]Saved to ~/.raccoon/config.yml[/dim]")
+
+        # Save to project config if in a project
+        project_root = find_project_root()
+        if project_root:
+            manager.save_to_project(project_root)
+            console.print(f"  [dim]Saved to raccoon.project.yml[/dim]")
+
+
+def _setup_ssh_and_retry(console: Console, manager, address: str, user: str) -> None:
+    """Set up SSH key authentication and retry fetching the API token."""
+    from raccoon.client.ssh_keys import setup_ssh_key_interactive
+
+    console.print()
+    key = setup_ssh_key_interactive(address, user, console)
+
+    if key:
+        # Retry fetching the API token
+        console.print()
+        console.print("[dim]Fetching API token...[/dim]")
+
+        token = manager._fetch_api_token_via_ssh(address, user)
+        if token:
+            manager._state.api_token = token
+            console.print(f"  Auth:    [green]API token retrieved via SSH[/green]")
+        else:
+            console.print("[yellow]SSH key works but couldn't fetch API token.[/yellow]")
+            console.print("[dim]The raccoon-server may not be fully configured on the Pi.[/dim]")
 
 
 @click.command(name="disconnect")

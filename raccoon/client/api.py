@@ -94,7 +94,7 @@ class RaccoonApiClient:
         """Get details for a specific project."""
         client = self._get_client()
         try:
-            response = await client.get(f"{self.base_url}/api/v1/projects/{project_id}")
+            response = await client.get(f"{self.base_url}/api/v1/projects/{project_id}", headers=self._auth_headers())
             response.raise_for_status()
             p = response.json()
             return ProjectInfo(
@@ -121,6 +121,7 @@ class RaccoonApiClient:
         response = await client.post(
             f"{self.base_url}/api/v1/run/{project_id}",
             json={"args": args or [], "env": env or {}},
+            headers=self._auth_headers(),
         )
         response.raise_for_status()
         data = response.json()
@@ -145,6 +146,7 @@ class RaccoonApiClient:
         response = await client.post(
             f"{self.base_url}/api/v1/calibrate/{project_id}",
             json={"args": args or [], "env": env or {}},
+            headers=self._auth_headers(),
         )
         response.raise_for_status()
         data = response.json()
@@ -161,7 +163,8 @@ class RaccoonApiClient:
         """Get the status of a running command."""
         client = self._get_client()
         response = await client.get(
-            f"{self.base_url}/api/v1/commands/{command_id}/status"
+            f"{self.base_url}/api/v1/commands/{command_id}/status",
+            headers=self._auth_headers(),
         )
         response.raise_for_status()
         return response.json()
@@ -170,17 +173,21 @@ class RaccoonApiClient:
         """Cancel a running command."""
         client = self._get_client()
         response = await client.post(
-            f"{self.base_url}/api/v1/commands/{command_id}/cancel"
+            f"{self.base_url}/api/v1/commands/{command_id}/cancel",
+            headers=self._auth_headers(),
         )
         response.raise_for_status()
         return response.json()
 
     def get_websocket_url(self, command_id: str) -> str:
-        """Get the WebSocket URL for streaming command output."""
+        """Get the WebSocket URL for streaming command output (includes auth token)."""
         ws_base = self.base_url.replace("http://", "ws://").replace("https://", "wss://")
-        return f"{ws_base}/ws/output/{command_id}"
+        url = f"{ws_base}/ws/output/{command_id}"
+        if self.api_token:
+            url += f"?token={self.api_token}"
+        return url
 
 
-def create_api_client(address: str, port: int = 8421) -> RaccoonApiClient:
+def create_api_client(address: str, port: int = 8421, api_token: Optional[str] = None) -> RaccoonApiClient:
     """Create an API client for the given Pi address."""
-    return RaccoonApiClient(f"http://{address}:{port}")
+    return RaccoonApiClient(f"http://{address}:{port}", api_token=api_token)
