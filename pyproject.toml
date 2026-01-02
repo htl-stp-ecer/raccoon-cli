@@ -32,7 +32,7 @@ raccoon-server = "raccoon.server.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["raccoon*"]
+include = ["raccoon*", "raccoon.exlcm"]
 
 [tool.setuptools.package-data]
 raccoon = [

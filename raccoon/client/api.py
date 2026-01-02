@@ -212,6 +212,157 @@ class RaccoonApiClient:
             url += f"?token={self.api_token}"
         return url
 
+    # LCM Spy/Debug Methods
+
+    async def start_lcm_spy(
+        self,
+        channel_patterns: Optional[list[str]] = None,
+        record_to: Optional[str] = None,
+    ) -> dict:
+        """
+        Start LCM spy session on Pi.
+
+        Args:
+            channel_patterns: List of channel patterns to filter (fnmatch style)
+            record_to: Optional filename for recording
+
+        Returns:
+            Dict with status, channel_patterns, recording_file, websocket_url
+        """
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/v1/lcm/spy/start",
+            json={
+                "channel_patterns": channel_patterns or [],
+                "record_to": record_to,
+            },
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def stop_lcm_spy(self) -> dict:
+        """Stop LCM spy session."""
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/v1/lcm/spy/stop",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_lcm_spy_status(self) -> dict:
+        """Get LCM spy session status."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/lcm/spy/status",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def list_lcm_recordings(self) -> list[dict]:
+        """List available LCM recordings on the Pi."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/lcm/recordings",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_lcm_recording(self, filename: str) -> dict:
+        """Delete an LCM recording."""
+        client = self._get_client()
+        response = await client.delete(
+            f"{self.base_url}/api/v1/lcm/recordings/{filename}",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def start_lcm_playback(
+        self,
+        filename: str,
+        speed: float = 1.0,
+        loop: bool = False,
+        channel_filter: Optional[list[str]] = None,
+    ) -> dict:
+        """
+        Start LCM playback of a recording.
+
+        Args:
+            filename: Recording filename
+            speed: Playback speed multiplier (1.0 = realtime)
+            loop: Whether to loop playback
+            channel_filter: Optional channel patterns to filter
+
+        Returns:
+            Dict with status, filename, speed, loop
+        """
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/v1/lcm/playback/start",
+            json={
+                "filename": filename,
+                "speed": speed,
+                "loop": loop,
+                "channel_filter": channel_filter or [],
+            },
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def stop_lcm_playback(self) -> dict:
+        """Stop LCM playback."""
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/v1/lcm/playback/stop",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_lcm_playback_status(self) -> dict:
+        """Get LCM playback status and progress."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/lcm/playback/status",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_lcm_websocket_url(self) -> str:
+        """Get WebSocket URL for LCM message streaming (includes auth token)."""
+        ws_base = self.base_url.replace("http://", "ws://").replace("https://", "wss://")
+        url = f"{ws_base}/ws/lcm"
+        if self.api_token:
+            url += f"?token={self.api_token}"
+        return url
+
+    async def get_lcm_info(self) -> dict:
+        """Get LCM spy capabilities info."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/lcm/info",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def control_service(self, service_name: str, action: str) -> dict:
+        """Control a systemd service on the Pi (start/stop/restart/status)."""
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/v1/lcm/service/control",
+            json={"service_name": service_name, "action": action},
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
 
 def create_api_client(address: str, port: int = 8421, api_token: Optional[str] = None) -> RaccoonApiClient:
     """Create an API client for the given Pi address."""

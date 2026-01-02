@@ -10,6 +10,7 @@ from .remove_cmd import remove_command
 from .connect import connect_command, disconnect_command
 from .status import status_command
 from .sync_cmd import sync_command
+from .lcm import lcm_group
 
 __all__ = [
     "calibrate_command",
@@ -23,4 +24,5 @@ __all__ = [
     "disconnect_command",
     "status_command",
     "sync_command",
+    "lcm_group",
 ]

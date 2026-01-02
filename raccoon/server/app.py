@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from raccoon.server.config import ServerConfig, load_config
 from raccoon.server.routes import health_router, commands_router, projects_router
+from raccoon.server.routes.lcm import router as lcm_router
 from raccoon.server.websocket import setup_websocket_routes
+from raccoon.server.websocket.lcm_stream import setup_lcm_websocket
 
 # Global config instance
 _config: Optional[ServerConfig] = None
@@ -74,9 +76,11 @@ def create_app(config: Optional[ServerConfig] = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(projects_router)
     app.include_router(commands_router)
+    app.include_router(lcm_router)
 
     # Setup WebSocket routes
     setup_websocket_routes(app)
+    setup_lcm_websocket(app)
 
     return app
 

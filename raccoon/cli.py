@@ -17,6 +17,7 @@ from raccoon.commands import (
     disconnect_command,
     status_command,
     sync_command,
+    lcm_group,
 )
 from raccoon.logging_utils import configure_logging, render_banner, render_summary
 
@@ -79,6 +80,7 @@ main.add_command(connect_command)
 main.add_command(disconnect_command)
 main.add_command(status_command)
 main.add_command(sync_command)
+main.add_command(lcm_group)
 
 
 if __name__ == "__main__":
