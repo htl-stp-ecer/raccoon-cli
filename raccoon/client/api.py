@@ -29,6 +29,16 @@ class CommandResult:
     websocket_url: str
 
 
+@dataclass
+class EncoderReading:
+    """Result of reading encoder position."""
+
+    port: int
+    position: int
+    success: bool
+    error: Optional[str] = None
+
+
 class RaccoonApiClient:
     """HTTP client for the Raccoon Pi server API."""
 
@@ -203,6 +213,32 @@ class RaccoonApiClient:
         )
         response.raise_for_status()
         return response.json()
+
+    async def read_encoder(self, port: int, inverted: bool = False) -> EncoderReading:
+        """
+        Read the current encoder position for a motor.
+
+        Args:
+            port: Motor port number
+            inverted: Whether the motor is inverted
+
+        Returns:
+            EncoderReading with the current position
+        """
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/v1/hardware/encoder/read",
+            json={"port": port, "inverted": inverted},
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        data = response.json()
+        return EncoderReading(
+            port=data["port"],
+            position=data["position"],
+            success=data["success"],
+            error=data.get("error"),
+        )
 
     def get_websocket_url(self, command_id: str) -> str:
         """Get the WebSocket URL for streaming command output (includes auth token)."""

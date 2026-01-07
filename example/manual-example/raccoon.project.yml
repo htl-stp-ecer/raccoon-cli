@@ -1,0 +1,147 @@
+name: Example Project
+uuid: ee396516-2bdb-4b01-8380-f7853273c125
+robot:
+  button: button
+  drive:
+    kinematics:
+      type: mecanum
+      front_left_motor: front_left_motor
+      back_left_motor: rear_left_motor
+      front_right_motor: front_right_motor
+      back_right_motor: rear_right_motor
+      max_acceleration: 240.0
+      max_velocity: 40.0
+      track_width: 0.19
+      wheel_radius: 0.03
+      wheelbase: 0.12
+    limits:
+      max_v: 2.0
+      max_omega: 10.0
+  odometry:
+    type: FusedOdometry
+    invert_x: false
+    invert_y: false
+    invert_z: true
+    invert_w: false
+  motion_pid:
+    distance:
+      kp: 2.0
+      ki: 0.0
+      kd: 0.0
+    heading:
+      kp: 3.0
+      ki: 0.0
+      kd: 0.0
+    lateral:
+      kp: 2.0
+      ki: 0.0
+      kd: 0.0
+    profile:
+      max_linear_acceleration: 1.0
+      max_angular_acceleration: 3.0
+    integral_max: 10.0
+    integral_deadband: 0.01
+    derivative_lpf_alpha: 0.1
+    output_min: -10.0
+    output_max: 10.0
+    saturation:
+      derating_factor: 0.85
+      min_scale: 0.1
+      recovery_rate: 0.02
+    heading_saturation:
+      derating_factor: 0.85
+      min_scale: 0.25
+      recovery_rate: 0.05
+    tolerances:
+      distance_m: 0.01
+      angle_rad: 0.02
+    rate_limits:
+      max_heading_rate: 3.0
+      min_angular_rate: 0.1
+    lateral_drift:
+      heading_bias_gain: 0.5
+      reorient_threshold_m: 0.15
+      heading_saturation_error_rad: 0.01
+      heading_recovery_error_rad: 0.005
+    min_speed_mps: 0.05
+missions:
+- DriveToPotatoMission
+definitions:
+  front_left_motor:
+    type: Motor
+    port: 0
+    inverted: false
+    calibration:
+      ff:
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
+      pid:
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 0.00418879
+      vel_lpf_alpha: 0.8
+  rear_left_motor:
+    type: Motor
+    port: 2
+    inverted: false
+    calibration:
+      ff:
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
+      pid:
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 0.00418879
+      vel_lpf_alpha: 0.8
+  front_right_motor:
+    type: Motor
+    port: 1
+    inverted: false
+    calibration:
+      ff:
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
+      pid:
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 0.00418879
+      vel_lpf_alpha: 0.8
+  rear_right_motor:
+    type: Motor
+    port: 3
+    inverted: false
+    calibration:
+      ff:
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
+      pid:
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 0.00418879
+      vel_lpf_alpha: 0.8
+  button:
+    type: DigitalSensor
+    port: 10
+  potato_server:
+    type: Servo
+    port: 0
+  front_left_ir:
+    type: IRSensor
+    port: 0
+  front_right_ir:
+    type: IRSensor
+    port: 1
+connection:
+  pi_address: 192.168.178.65
+  pi_port: 8421
+  pi_user: pi
+  remote_path: null
+  auto_connect: true

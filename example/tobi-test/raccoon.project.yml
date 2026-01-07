@@ -1,0 +1,99 @@
+name: tobi-test
+uuid: 21e5bb71-a37d-4a2f-99ed-ad10963fe875
+robot:
+  drive:
+    kinematics:
+      type: mecanum
+      wheel_radius: 0.0295
+      track_width: 0.19
+      max_velocity: 50.847
+      max_acceleration: 40.678
+      wheelbase: 0.12
+      front_left_motor: front_left_motor
+      front_right_motor: front_right_motor
+      back_left_motor: rear_left_motor
+      back_right_motor: rear_right_motor
+    limits:
+      max_v: 1.5
+      max_omega: 15.789
+  odometry:
+    type: FusedOdometry
+    invert_x: false
+    invert_y: false
+    invert_z: true
+    invert_w: false
+missions:
+- SetupMission: setup
+- ShutdownMission: shutdown
+definitions:
+  button:
+    type: DigitalSensor
+    port: 10
+  front_left_motor:
+    type: Motor
+    port: 0
+    inverted: false
+    calibration:
+      ff:
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
+      pid:
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 0.0010157
+      vel_lpf_alpha: 0.8
+  front_right_motor:
+    type: Motor
+    port: 1
+    inverted: true
+    calibration:
+      ff:
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
+      pid:
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 0.0010157
+      vel_lpf_alpha: 0.8
+  rear_left_motor:
+    type: Motor
+    port: 2
+    inverted: false
+    calibration:
+      ff:
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
+      pid:
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 0.0010157
+      vel_lpf_alpha: 0.8
+  rear_right_motor:
+    type: Motor
+    port: 3
+    inverted: true
+    calibration:
+      ff:
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
+      pid:
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 0.0010157
+      vel_lpf_alpha: 0.8
+  imu:
+    type: IMU
+connection:
+  pi_address: 10.236.125.215
+  pi_port: 8421
+  pi_user: pi
+  remote_path: null
+  auto_connect: true

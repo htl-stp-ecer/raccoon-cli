@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 import shutil
 import uuid as uuid_module
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import click
 import yaml
@@ -18,6 +19,65 @@ from rich.console import Console
 from raccoon.project import ProjectError, load_project_config, find_project_root
 
 logger = logging.getLogger("raccoon")
+
+
+def _prompt_and_connect_to_pi(console: Console, project_root: Path) -> Optional["RaccoonApiClient"]:
+    """
+    Prompt the user for Pi connection details and establish connection.
+
+    Returns an API client if connection is successful, None otherwise.
+    """
+    from raccoon.client.api import create_api_client
+    from raccoon.client.connection import get_connection_manager
+    from raccoon.client.discovery import check_address
+
+    console.print("\n[bold cyan]Pi Connection Setup[/bold cyan]")
+    console.print("To calibrate encoders, the wizard needs to connect to your Pi.\n")
+
+    if not click.confirm("Connect to a Pi for encoder calibration?", default=True):
+        console.print("[yellow]Skipping Pi connection. Encoder calibration will use manual entry.[/yellow]")
+        return None
+
+    # Get Pi address
+    address = click.prompt("Pi address (IP or hostname)", default="192.168.4.1")
+    port = click.prompt("Pi server port", default=8421, type=int)
+    user = click.prompt("SSH username", default="pi")
+
+    # Check if the Pi is reachable
+    console.print(f"\n[cyan]Checking connection to {address}:{port}...[/cyan]")
+    result = asyncio.run(check_address(address, port))
+
+    if not result:
+        console.print(f"[red]Failed to connect to {address}:{port}[/red]")
+        console.print("Make sure the Pi is running and raccoon-server is started.")
+        console.print("[yellow]Continuing without Pi connection. Encoder calibration will use manual entry.[/yellow]")
+        return None
+
+    # Connect using connection manager
+    manager = get_connection_manager()
+    success = asyncio.run(manager.connect(address=address, port=port, user=user))
+
+    if not success:
+        console.print(f"[red]Failed to connect to {address}:{port}[/red]")
+        console.print("[yellow]Continuing without Pi connection. Encoder calibration will use manual entry.[/yellow]")
+        return None
+
+    state = manager.state
+    console.print(f"[green]Connected to {state.pi_hostname}[/green]")
+
+    # Check API token
+    if not state.api_token:
+        console.print("[yellow]SSH key authentication failed. Cannot access hardware.[/yellow]")
+        console.print("[yellow]Continuing without Pi connection. Encoder calibration will use manual entry.[/yellow]")
+        return None
+
+    # Save connection to project config
+    manager.save_to_project(project_root)
+    manager.save_to_global()
+    console.print(f"[dim]Connection saved to project config[/dim]")
+
+    # Create and return API client
+    return create_api_client(address, port, state.api_token)
 
 
 def _to_snake_case(name: str) -> str:
@@ -204,32 +264,32 @@ def create_command() -> None:
 @create_command.command(name="project")
 @click.argument("name")
 @click.option("--path", type=click.Path(), default=".", help="Directory to create project in")
-@click.option("--wizard", is_flag=True, help="Run the setup wizard after project creation")
+@click.option("--no-wizard", is_flag=True, help="Skip the setup wizard (not recommended)")
 @click.pass_context
-def create_project_command(ctx: click.Context, name: str, path: str, wizard: bool) -> None:
+def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: bool) -> None:
     """Create a new raccoon project with the given NAME."""
     console: Console = ctx.obj["console"]
-    
+
     # Resolve the target directory
     target_dir = Path(path).resolve() / name
-    
+
     if target_dir.exists():
         logger.error(f"Directory {target_dir} already exists")
         raise SystemExit(1)
-    
+
     console.print(f"[cyan]Creating new project '{name}' at {target_dir}...[/cyan]")
-    
+
     # Create target directory
     target_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Get templates directory
     templates_dir = _get_templates_dir()
     project_template = templates_dir / "project_scaffold"
-    
+
     if not project_template.exists():
         logger.error(f"Project template not found at {project_template}")
         raise SystemExit(1)
-    
+
     # Generate UUID for project
     project_uuid = str(uuid_module.uuid4())
 
@@ -245,25 +305,37 @@ def create_project_command(ctx: click.Context, name: str, path: str, wizard: boo
     # Copy and render templates (includes raccoon.project.yml)
     _copy_template_dir(project_template, target_dir, context)
 
-    console.print(f"[green]✓ Project '{name}' created successfully at {target_dir}[/green]")
+    console.print(f"[green]✓ Project '{name}' scaffolded at {target_dir}[/green]")
     console.print(f"[cyan]Project UUID: {project_uuid}[/cyan]")
 
-    # Open PyCharm and show setup instructions
-    _open_pycharm_with_instructions(console, target_dir)
+    # Run wizard before finalizing (unless explicitly skipped)
+    if not no_wizard:
+        # Prompt for Pi connection before running wizard
+        api_client = _prompt_and_connect_to_pi(console, target_dir)
 
-    # Run wizard if requested
-    if wizard:
-        console.print("\n[cyan]Launching setup wizard...[/cyan]\n")
+        console.print("\n[cyan]Launching setup wizard to finalize project configuration...[/cyan]\n")
+
+        # Set up the API client for remote encoder reading
+        from raccoon.commands.wizard import wizard_command, set_api_client, clear_api_client
+
+        if api_client:
+            set_api_client(api_client)
+
         # Change to project directory and run wizard
         original_cwd = os.getcwd()
         try:
             os.chdir(target_dir)
-            from raccoon.commands.wizard import wizard_command
             ctx.invoke(wizard_command, dry_run=False)
         finally:
             os.chdir(original_cwd)
+            clear_api_client()
+
+        console.print(f"\n[green]✓ Project '{name}' finalized successfully![/green]")
     else:
-        console.print(f"\n[yellow]Run 'cd {target_dir} && raccoon wizard' to configure your project.[/yellow]")
+        console.print(f"\n[yellow]Wizard skipped. Run 'cd {target_dir} && raccoon wizard' to configure your project.[/yellow]")
+
+    # Open PyCharm and show setup instructions
+    _open_pycharm_with_instructions(console, target_dir)
 
 
 @create_command.command(name="mission")

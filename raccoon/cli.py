@@ -18,6 +18,8 @@ from raccoon.commands import (
     status_command,
     sync_command,
     lcm_group,
+    completion_group,
+    prompt_completion_setup,
 )
 from raccoon.logging_utils import configure_logging, render_banner, render_summary
 
@@ -37,6 +39,8 @@ def _setup_context(ctx: click.Context) -> None:
         ctx.obj["log_summary"] = summary
         ctx.obj["initialized"] = True
         render_banner(console)
+        # Offer shell completion setup on first run
+        prompt_completion_setup()
     else:
         summary = ctx.obj["log_summary"]
 
@@ -81,6 +85,7 @@ main.add_command(disconnect_command)
 main.add_command(status_command)
 main.add_command(sync_command)
 main.add_command(lcm_group)
+main.add_command(completion_group)
 
 
 if __name__ == "__main__":

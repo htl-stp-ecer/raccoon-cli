@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import click
 import yaml
@@ -17,6 +18,22 @@ from rich.table import Table
 from raccoon.project import ProjectError, load_project_config, require_project
 
 logger = logging.getLogger("raccoon")
+
+
+# Module-level reference to API client for remote calibration
+_api_client: Optional["RaccoonApiClient"] = None
+
+
+def set_api_client(client: "RaccoonApiClient") -> None:
+    """Set the API client for remote encoder reading."""
+    global _api_client
+    _api_client = client
+
+
+def clear_api_client() -> None:
+    """Clear the API client reference."""
+    global _api_client
+    _api_client = None
 
 
 def _prompt_measurements() -> Dict[str, float]:
@@ -199,93 +216,195 @@ def _render_summary(console: Console, config: Dict[str, object]) -> None:
     console.print(Panel(table, border_style="green"))
 
 
-def _run_motor_cycle(motor, inverted: bool, duration: float = 1.0, speed: float = 0.15) -> None:
-    """Spin the motor gently for a fixed time to aid calibration."""
-    try:
-        target_speed = speed if not inverted else -speed
-        motor.set_speed(target_speed)
-        time.sleep(duration)
-    finally:
-        motor.set_speed(0.0)
+def _read_encoder_position_remote(port: int, inverted: bool) -> int:
+    """Read encoder position from remote Pi via API."""
+    global _api_client
+    if _api_client is None:
+        raise RuntimeError("No API client configured for remote encoder reading")
+
+    async def _read():
+        async with _api_client:
+            reading = await _api_client.read_encoder(port, inverted)
+            if not reading.success:
+                raise RuntimeError(f"Failed to read encoder: {reading.error}")
+            return reading.position
+
+    return asyncio.run(_read())
+
+
+def _calibrate_single_wheel_remote(
+    console: Console, port: int, inverted: bool, motor_name: str, num_trials: int = 3
+) -> float:
+    """
+    Calibrate a single wheel by having the user rotate it manually (remote mode).
+
+    Records the encoder position before and after one full rotation via API,
+    averaging across multiple trials.
+    """
+    measurements = []
+
+    for trial in range(1, num_trials + 1):
+        console.print(f"\n[bold cyan]Trial {trial}/{num_trials} for {motor_name}[/bold cyan]")
+
+        # Record starting position via remote API
+        start_pos = _read_encoder_position_remote(port, inverted)
+        console.print(f"[dim]Starting encoder position: {start_pos}[/dim]")
+
+        console.print(
+            "[green]→ Mark the wheel position, then rotate it exactly ONE full turn "
+            "(360°) by hand.[/green]"
+        )
+        click.prompt("Press Enter when you have completed the rotation", default="", show_default=False)
+
+        # Record ending position via remote API
+        end_pos = _read_encoder_position_remote(port, inverted)
+        ticks = abs(end_pos - start_pos)
+
+        console.print(f"[dim]Ending encoder position: {end_pos}[/dim]")
+        console.print(f"[cyan]Measured: {ticks} ticks for this rotation[/cyan]")
+
+        measurements.append(ticks)
+
+    avg_ticks = sum(measurements) / len(measurements)
+    console.print(f"\n[bold green]{motor_name} average: {avg_ticks:.1f} ticks/revolution[/bold green]")
+    console.print(f"[dim]Individual measurements: {measurements}[/dim]")
+
+    return avg_ticks
+
+
+def _calibrate_single_wheel_local(
+    console: Console, motor, motor_name: str, num_trials: int = 3
+) -> float:
+    """
+    Calibrate a single wheel by having the user rotate it manually (local mode).
+
+    Records the encoder position before and after one full rotation,
+    averaging across multiple trials.
+    """
+    measurements = []
+
+    for trial in range(1, num_trials + 1):
+        console.print(f"\n[bold cyan]Trial {trial}/{num_trials} for {motor_name}[/bold cyan]")
+
+        # Record starting position
+        start_pos = motor.get_position()
+        console.print(f"[dim]Starting encoder position: {start_pos}[/dim]")
+
+        console.print(
+            "[green]→ Mark the wheel position, then rotate it exactly ONE full turn "
+            "(360°) by hand.[/green]"
+        )
+        click.prompt("Press Enter when you have completed the rotation", default="", show_default=False)
+
+        # Record ending position
+        end_pos = motor.get_position()
+        ticks = abs(end_pos - start_pos)
+
+        console.print(f"[dim]Ending encoder position: {end_pos}[/dim]")
+        console.print(f"[cyan]Measured: {ticks} ticks for this rotation[/cyan]")
+
+        measurements.append(ticks)
+
+    avg_ticks = sum(measurements) / len(measurements)
+    console.print(f"\n[bold green]{motor_name} average: {avg_ticks:.1f} ticks/revolution[/bold green]")
+    console.print(f"[dim]Individual measurements: {measurements}[/dim]")
+
+    return avg_ticks
 
 
 def _calibrate_ticks_per_rev(console: Console, motor_defs: Dict[str, Tuple[int, bool]]) -> int:
     """
-    Interactive helper to tune encoder ticks per wheel revolution.
+    Interactive helper to measure encoder ticks per wheel revolution.
 
-    Starts from a baseline guess and lets the user iteratively adjust it after
-    testing on hardware.
+    For each wheel, the user manually rotates the wheel one full turn
+    while the wizard measures the encoder tick difference. Each wheel
+    is measured 3 times and averaged.
+
+    Uses remote API if an API client is configured, otherwise tries local hardware.
     """
-    baseline = 1500.0
+    global _api_client
+    num_trials = 3
     available_motors = list(motor_defs.keys())
-    default_choice = available_motors[0]
-    ref_choice = click.prompt(
-        "Which motor should the wizard drive for calibration?",
-        type=click.Choice(available_motors),
-        default=default_choice,
-    )
-    port, inverted = motor_defs[ref_choice]
 
+    # Try remote calibration first if API client is configured
+    if _api_client is not None:
+        console.print(
+            "\n[bold cyan]Encoder Calibration (Remote)[/bold cyan]\n"
+            f"For each wheel, you will rotate it exactly ONE full turn {num_trials} times.\n"
+            "The wizard will record the encoder ticks via the Pi and average the results.\n"
+        )
+
+        all_averages = []
+
+        for motor_name in available_motors:
+            port, inverted = motor_defs[motor_name]
+
+            console.print(f"\n[bold]Calibrating: {motor_name} (port {port})[/bold]")
+            console.print("[yellow]Make sure the wheel can spin freely.[/yellow]")
+
+            if not click.confirm(f"Ready to calibrate {motor_name}?", default=True):
+                console.print(f"[yellow]Skipping {motor_name}[/yellow]")
+                continue
+
+            try:
+                avg = _calibrate_single_wheel_remote(console, port, inverted, motor_name, num_trials)
+                all_averages.append(avg)
+            except Exception as exc:
+                console.print(f"[red]Error calibrating {motor_name}: {exc}[/red]")
+                continue
+
+        if not all_averages:
+            console.print("[yellow]No wheels calibrated. Using default value.[/yellow]")
+            return 1536
+
+        # Average across all calibrated wheels
+        final_avg = sum(all_averages) / len(all_averages)
+        console.print(f"\n[bold green]Final average across all wheels: {final_avg:.1f} ticks/revolution[/bold green]")
+
+        return int(round(final_avg))
+
+    # Fall back to local calibration
     try:
         from libstp.hal import Motor as HalMotor  # type: ignore
 
-        motor = HalMotor(port=port, inverted=inverted)
         console.print(
-            f"[cyan]Driving motor '{ref_choice}' on port {port}. "
-            "Make sure the wheel can spin freely.[/cyan]"
+            "\n[bold cyan]Encoder Calibration (Local)[/bold cyan]\n"
+            f"For each wheel, you will rotate it exactly ONE full turn {num_trials} times.\n"
+            "The wizard will record the encoder ticks and average the results.\n"
         )
-        hardware_motor = motor
+
+        all_averages = []
+
+        for motor_name in available_motors:
+            port, inverted = motor_defs[motor_name]
+            motor = HalMotor(port=port, inverted=inverted)
+
+            console.print(f"\n[bold]Calibrating: {motor_name} (port {port})[/bold]")
+            console.print("[yellow]Make sure the wheel can spin freely.[/yellow]")
+
+            if not click.confirm(f"Ready to calibrate {motor_name}?", default=True):
+                console.print(f"[yellow]Skipping {motor_name}[/yellow]")
+                continue
+
+            avg = _calibrate_single_wheel_local(console, motor, motor_name, num_trials)
+            all_averages.append(avg)
+
+        if not all_averages:
+            console.print("[yellow]No wheels calibrated. Using default value.[/yellow]")
+            return 1536
+
+        # Average across all calibrated wheels
+        final_avg = sum(all_averages) / len(all_averages)
+        console.print(f"\n[bold green]Final average across all wheels: {final_avg:.1f} ticks/revolution[/bold green]")
+
+        return int(round(final_avg))
+
     except Exception as exc:  # pylint: disable=broad-except
         console.print(
-            f"[yellow]Could not control motors automatically ({exc}). "
-            "Falling back to manual calibration.[/yellow]"
+            f"[yellow]Could not access motor hardware ({exc}).[/yellow]\n"
+            "[cyan]Falling back to manual entry.[/cyan]"
         )
-        console.print(
-            "[cyan]Use the helper snippets in example/src/main.py to jog the wheel "
-            "between each feedback step if needed.[/cyan]"
-        )
-        hardware_motor = None
-
-    guess = baseline
-    while True:
-        console.print(f"\nCurrent estimate: [bold]{round(guess, 2)}[/bold] ticks / revolution")
-        if hardware_motor:
-            console.print(
-                "[green]→ Gently marking the wheel, then we will spin it for ~1s. "
-                "Observe whether it exceeds one revolution.[/green]"
-            )
-            _run_motor_cycle(hardware_motor, inverted)
-
-        action = click.prompt(
-            "Result (accept / more / less / set)",
-            type=click.Choice(["accept", "more", "less", "set"], case_sensitive=False),
-            default="accept",
-        ).lower()
-
-        if action == "accept":
-            return int(round(guess))
-
-        if action == "set":
-            guess = float(click.prompt("Enter measured ticks for one exact revolution", type=float))
-            continue
-
-        adjustment = click.prompt(
-            "Approximate error percentage (e.g., 5 for 5%)",
-            default=5.0,
-            type=float,
-        )
-        delta = guess * (adjustment / 100.0)
-
-        if action == "more":
-            # Wheel went beyond one revolution -> guess too high
-            guess -= delta
-        elif action == "less":
-            # Wheel stopped short -> guess too low
-            guess += delta
-
-        if guess <= 0:
-            console.print("[yellow]Estimate dropped below zero; resetting to 100 ticks.[/yellow]")
-            guess = 100.0
+        return click.prompt("Encoder ticks per wheel revolution", default=1536, type=int)
 
 
 def _prompt_ticks_per_rev(console: Console, motor_defs: Dict[str, Tuple[int, bool]]) -> int:
