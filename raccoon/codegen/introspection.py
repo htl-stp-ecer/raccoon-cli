@@ -34,7 +34,8 @@ def parse_pybind11_signature(cls: type) -> Dict[str, inspect.Parameter]:
         return {}
 
     # Example: __init__(self: libstp.hal.Motor, port: int, inverted: bool = False, calibration: MotorCalibration = ...) -> None
-    match = re.search(r'__init__\(self[^,]*, ([^)]+)\)', doc)
+    # Note: Can't use [^)]+ because default values may contain nested parens like MotorCalibration(ff=Feedforward(...))
+    match = re.search(r'__init__\(self[^,]*, (.+)\) -> None', doc)
     if not match:
         return {}
 

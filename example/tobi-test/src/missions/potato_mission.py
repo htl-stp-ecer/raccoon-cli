@@ -1,10 +1,7 @@
-from .missions.setup_mission import SetupMission
-from .missions.shutdown_mission import ShutdownMission
-from .missions.potato_mission import PotatoMission
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-01-07 13:29:44
+ Generated: 2026-01-08 10:26:41
  Tool:      Raccoon IDE
  Platform:  StpOS – Robotics Operating System
 ===========================================================
@@ -19,10 +16,7 @@ Authors:
 Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
+from libstp.mission.api import Mission
 
-from src.hardware.robot import Robot
-
-robot = Robot()
-
-if __name__ == "__main__":
-   robot.start()
+class PotatoMission(Mission):
+    pass

@@ -123,19 +123,24 @@ def _get_shell() -> str | None:
     return None
 
 
+def _is_valid_completion_script(output: str, shell: str) -> bool:
+    """Check if the output looks like a valid completion script."""
+    if not output:
+        return False
+    # Check for shell-specific completion script markers
+    markers = {
+        "bash": "_raccoon_completion",
+        "zsh": "#compdef raccoon",
+        "fish": "complete -c raccoon",
+        "powershell": "Register-ArgumentCompleter",
+    }
+    marker = markers.get(shell)
+    return marker is not None and marker in output
+
+
 def _get_completion_script(shell: str) -> str:
     """Generate the completion script for the given shell."""
-    env_var = f"_RACCOON_COMPLETE={shell}_source"
-    result = subprocess.run(
-        [sys.executable, "-m", "raccoon.cli"],
-        env={**os.environ, "_RACCOON_COMPLETE": f"{shell}_source"},
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0 and result.stdout:
-        return result.stdout
-
-    # Fallback: try running raccoon directly
+    # Try running raccoon directly first (most reliable)
     raccoon_path = Path(sys.executable).parent / "raccoon"
     if raccoon_path.exists():
         result = subprocess.run(
@@ -144,8 +149,18 @@ def _get_completion_script(shell: str) -> str:
             capture_output=True,
             text=True,
         )
-        if result.returncode == 0 and result.stdout:
+        if result.returncode == 0 and _is_valid_completion_script(result.stdout, shell):
             return result.stdout
+
+    # Fallback: try python -m raccoon.cli
+    result = subprocess.run(
+        [sys.executable, "-m", "raccoon.cli"],
+        env={**os.environ, "_RACCOON_COMPLETE": f"{shell}_source"},
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and _is_valid_completion_script(result.stdout, shell):
+        return result.stdout
 
     raise click.ClickException(f"Failed to generate completion script for {shell}")
 

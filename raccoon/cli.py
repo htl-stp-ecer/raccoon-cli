@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import click
 from rich.console import Console
 
@@ -30,6 +32,11 @@ CONTEXT_SETTINGS = {
 
 def _setup_context(ctx: click.Context) -> None:
     """Ensure console and logging are ready for a command invocation."""
+    # Skip all output when generating shell completions
+    if os.environ.get("_RACCOON_COMPLETE"):
+        ctx.ensure_object(dict)
+        return
+
     ctx.ensure_object(dict)
 
     if not ctx.obj.get("initialized"):

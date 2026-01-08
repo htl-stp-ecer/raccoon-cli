@@ -18,13 +18,10 @@ robot:
       max_omega: 15.789
   odometry:
     type: FusedOdometry
-    invert_x: false
-    invert_y: false
-    invert_z: true
-    invert_w: false
 missions:
 - SetupMission: setup
 - ShutdownMission: shutdown
+- PotatoMission
 definitions:
   button:
     type: DigitalSensor
@@ -92,7 +89,7 @@ definitions:
   imu:
     type: IMU
 connection:
-  pi_address: 10.236.125.215
+  pi_address: 10.70.146.215
   pi_port: 8421
   pi_user: pi
   remote_path: null

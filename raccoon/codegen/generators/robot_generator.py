@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .base import BaseGenerator
@@ -129,6 +130,15 @@ class RobotGenerator(BaseGenerator):
 
         # Call parent generate
         return super().generate(config)
+
+    def write(self, config: Dict[str, Any], output_dir: Path, format_code: bool = True) -> Path:
+        """
+        Generate and write file to disk.
+
+        Overridden to store full config for hardware reference validation.
+        """
+        self._full_config = config
+        return super().write(config, output_dir, format_code)
 
     def generate_body(self, data: Dict[str, Any]) -> str:
         """
