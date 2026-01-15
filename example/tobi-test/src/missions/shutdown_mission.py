@@ -17,7 +17,8 @@ Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
 
-from libstp.mission.api import Mission
+from libstp import Mission, Sequential, seq
 
 class ShutdownMission(Mission):
-    pass
+    def sequence(self) -> Sequential:
+        return seq([])

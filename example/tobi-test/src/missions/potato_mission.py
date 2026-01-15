@@ -16,9 +16,13 @@ Authors:
 Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
-from libstp.mission.api import Mission
+from libstp import seq, Mission
+from libstp.step.drive import drive_forward
+
 
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
-        pass
+        return seq([
+            drive_forward(cm=20)
+        ])
 

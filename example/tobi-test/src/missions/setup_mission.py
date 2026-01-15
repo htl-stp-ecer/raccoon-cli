@@ -22,5 +22,5 @@ from libstp import Mission, Sequential, seq, calibrate_sensors
 class SetupMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
-            calibrate_sensors()
+            #calibrate_sensors()
         ])

@@ -164,12 +164,9 @@ async def _codegen_remote(
 
         exit_code = final_status.get("exit_code", -1)
 
-        if exit_code != 0:
-            console.print()
-            console.print(f"[red]Codegen failed with exit code {exit_code}[/red]")
-            raise SystemExit(exit_code)
-
-    # Step 4: Sync generated files back from Pi
+    # Step 4: Sync generated files back from Pi (do this even if exit code non-zero,
+    # since codegen may have succeeded but cleanup crashed)
+    sync_failed = False
     console.print()
     console.print("[cyan]Syncing generated files back from Pi...[/cyan]")
 
@@ -202,8 +199,22 @@ async def _codegen_remote(
         console.print("[green]Sync complete![/green]")
 
     except Exception as e:
+        sync_failed = True
         console.print(f"[yellow]Warning: Could not sync files back: {e}[/yellow]")
         console.print("[dim]Generated files are on the Pi but not synced locally.[/dim]")
+
+    # Now check exit code after sync attempt
+    if exit_code != 0:
+        if exit_code == -11:
+            # SIGSEGV in cleanup - codegen likely succeeded but shutdown crashed
+            console.print()
+            console.print(f"[yellow]Warning: Process crashed during cleanup (exit code {exit_code})[/yellow]")
+            if not sync_failed:
+                console.print("[dim]Files were synced successfully despite the crash.[/dim]")
+        else:
+            console.print()
+            console.print(f"[red]Codegen failed with exit code {exit_code}[/red]")
+            raise SystemExit(exit_code)
 
 
 @click.command(name="codegen")

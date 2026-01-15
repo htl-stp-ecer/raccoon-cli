@@ -6,7 +6,7 @@ import click
 from rich.console import Console
 
 from raccoon.client.connection import get_connection_manager
-from raccoon.client.sftp_sync import SftpSync, SyncOptions
+from raccoon.client.sftp_sync import SftpSync, SyncOptions, load_raccoonignore
 from raccoon.project import find_project_root, load_project_config
 
 
@@ -77,7 +77,11 @@ def sync_command(ctx: click.Context, force: bool, no_delete: bool) -> None:
         ssh_client = manager.get_ssh_client()
         sync = SftpSync(ssh_client)
 
+        # Load .raccoonignore patterns and merge with defaults
+        ignore_patterns = load_raccoonignore(project_root)
         options = SyncOptions(delete_remote=not no_delete)
+        if ignore_patterns:
+            options.exclude_patterns = options.exclude_patterns + ignore_patterns
 
         result = sync.sync_with_progress(
             local_path=project_root,
@@ -142,9 +146,17 @@ def sync_project_to_pi(project_root, console: Console = None) -> bool:
     try:
         ssh_client = manager.get_ssh_client()
         sync = SftpSync(ssh_client)
+
+        # Load .raccoonignore patterns and merge with defaults
+        ignore_patterns = load_raccoonignore(project_root)
+        options = SyncOptions()
+        if ignore_patterns:
+            options.exclude_patterns = options.exclude_patterns + ignore_patterns
+
         result = sync.sync_with_progress(
             local_path=project_root,
             remote_path=remote_path,
+            options=options,
         )
         return result.success
     except Exception:

@@ -1,0 +1,18 @@
+# .raccoonignore - Files to exclude from syncing to the Wombat
+#
+# This file controls which files are NOT synced to the device during
+# `raccoon sync`, `raccoon run`, `raccoon calibrate`, etc.
+#
+# Note: Files listed here will still be PULLED from the device during
+# codegen, so generated hardware definitions stay in sync.
+#
+# Syntax:
+#   - One pattern per line
+#   - Lines starting with # are comments
+#   - Patterns use fnmatch/glob syntax (*.pyc, __pycache__, etc.)
+#   - Directory names match anywhere in the path
+
+# Hardware definitions (generated on device, pulled during codegen)
+# Don't overwrite device-specific calibration with local files
+defs.py
+robot.py

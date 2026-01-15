@@ -11,6 +11,44 @@ import paramiko
 from rich.progress import Progress, TaskID
 
 
+def load_raccoonignore(project_root: Path) -> list[str]:
+    """
+    Load ignore patterns from .raccoonignore file.
+
+    The .raccoonignore file supports:
+    - One pattern per line
+    - Lines starting with # are comments
+    - Empty lines are ignored
+    - Patterns use fnmatch/glob syntax (e.g., *.pyc, __pycache__, defs/)
+
+    Args:
+        project_root: Path to the project root directory
+
+    Returns:
+        List of additional exclude patterns from .raccoonignore
+    """
+    ignore_file = project_root / ".raccoonignore"
+    patterns = []
+
+    if not ignore_file.exists():
+        return patterns
+
+    try:
+        with open(ignore_file, "r") as f:
+            for line in f:
+                line = line.strip()
+                # Skip empty lines and comments
+                if not line or line.startswith("#"):
+                    continue
+                # Strip trailing slashes for directory patterns
+                patterns.append(line.rstrip("/"))
+    except Exception:
+        # If we can't read the file, just return empty list
+        pass
+
+    return patterns
+
+
 @dataclass
 class SyncResult:
     """Result of a sync operation."""
