@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-01-07 14:09:00
+ Generated: 2026-01-14 21:21:23
 ===========================================================
 
 Authors:
@@ -12,9 +12,15 @@ Authors:
    You are free to modify it as needed. Regeneration may overwrite changes.
 """
 
-from libstp.foundation import Feedforward, MotorCalibration, PidGains
-from libstp.hal import DigitalSensor, Motor
-from libstp.hal import IMU as Imu
+from libstp import (
+    DigitalSensor,
+    Feedforward,
+    IRSensor,
+    Motor,
+    MotorCalibration,
+    PidGains,
+)
+from libstp import IMU as Imu
 
 
 class Defs:
@@ -60,6 +66,9 @@ class Defs:
             vel_lpf_alpha=0.8,
         ),
     )
+    front_left_ir_sensor = IRSensor(port=0)
+    front_right_ir_sensor = IRSensor(port=1)
+    analog_sensors = [front_left_ir_sensor, front_right_ir_sensor]
 
 
 __all__ = ["Defs"]

@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-01-07 14:09:03
+ Generated: 2026-01-14 21:21:27
 ===========================================================
 
 Authors:
@@ -12,13 +12,16 @@ Authors:
    You are free to modify it as needed. Regeneration may overwrite changes.
 """
 
-from libstp.drive import Drive, MotionLimits
-from libstp.kinematics_mecanum import MecanumKinematics
-from libstp.odometry_fused import FusedOdometry
+from libstp import Drive, FusedOdometry, MecanumKinematics, MotionLimits
 
-from libstp.robot.api import GenericRobot
+from libstp import GenericRobot
 
 from src.hardware.defs import Defs
+
+
+from src.missions.setup_mission import SetupMission
+from src.missions.shutdown_mission import ShutdownMission
+from src.missions.potato_mission import PotatoMission
 
 
 class Robot(GenericRobot):
@@ -37,14 +40,10 @@ class Robot(GenericRobot):
     drive = Drive(
         kinematics=kinematics, chassis_lim=MotionLimits(max_omega=15.789, max_v=1.5)
     )
-    odometry = FusedOdometry(
-        imu=defs.imu,
-        kinematics=kinematics,
-        invert_x=False,
-        invert_y=False,
-        invert_z=True,
-        invert_w=False,
-    )
+    odometry = FusedOdometry(imu=defs.imu, kinematics=kinematics)
+    missions = [PotatoMission()]
+    setup_mission = SetupMission()
+    shutdown_mission = ShutdownMission()
 
 
 __all__ = ["Robot"]

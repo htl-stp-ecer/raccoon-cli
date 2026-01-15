@@ -88,6 +88,12 @@ definitions:
       vel_lpf_alpha: 0.8
   imu:
     type: IMU
+  front_left_ir_sensor:
+    type: IRSensor
+    port: 0
+  front_right_ir_sensor:
+    type: IRSensor
+    port: 1
 connection:
   pi_address: 10.70.146.215
   pi_port: 8421

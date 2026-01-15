@@ -138,7 +138,7 @@ class YamlResolver:
 
 def create_hardware_resolver() -> YamlResolver:
     """Create a resolver configured for hardware types."""
-    resolver = YamlResolver(default_namespaces=["libstp.hal", "libstp.foundation", "libstp.imu"])
+    resolver = YamlResolver(default_namespaces=["libstp", "libstp.hal", "libstp.foundation", "libstp.imu"])
     return resolver
 
 

@@ -19,4 +19,6 @@ claimed over the generated code itself.
 from libstp.mission.api import Mission
 
 class PotatoMission(Mission):
-    pass
+    def sequence(self) -> "Step":
+        pass
+

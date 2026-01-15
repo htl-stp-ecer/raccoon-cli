@@ -38,15 +38,34 @@ class ImportSet:
         self._entries.add((cls.__module__, cls.__name__))
 
     def render(self) -> str:
-        """Render the imports as Python import statements."""
-        # group by module
+        """Render the imports as Python import statements.
+
+        All libstp.* submodule imports are consolidated into a single
+        'from libstp import ...' statement for cleaner generated code.
+        """
+        # Consolidate libstp.* imports into a single 'from libstp import ...'
+        libstp_names: Set[str] = set()
         by_mod: Dict[str, Set[str]] = {}
+
         for mod, name in self._entries:
-            by_mod.setdefault(mod, set()).add(name)
+            if mod.startswith("libstp.") or mod == "libstp":
+                # Consolidate all libstp submodule imports
+                libstp_names.add(name)
+            else:
+                by_mod.setdefault(mod, set()).add(name)
+
         lines = []
+
+        # Add consolidated libstp import first
+        if libstp_names:
+            names = ", ".join(sorted(libstp_names))
+            lines.append(f"from libstp import {names}")
+
+        # Add other imports
         for mod in sorted(by_mod.keys()):
             names = ", ".join(sorted(by_mod[mod]))
             lines.append(f"from {mod} import {names}")
+
         return "\n".join(lines)
 
 

@@ -958,7 +958,7 @@ class RobotGenerator(BaseGenerator):
         base_imports = super().generate_imports()
 
         # Add GenericRobot import
-        generic_robot_import = "from libstp.robot.api import GenericRobot"
+        generic_robot_import = "from libstp import GenericRobot"
 
         # Add Defs import - always use src.hardware.defs
         defs_import = "from src.hardware.defs import Defs"
