@@ -1,7 +1,7 @@
 """SFTP-based file synchronization using paramiko."""
 
 import hashlib
-import os
+import posixpath
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,7 +153,7 @@ class SftpSync:
 
                 try:
                     # Ensure parent directory exists
-                    remote_dir = os.path.dirname(remote_file)
+                    remote_dir = posixpath.dirname(remote_file)
                     self._mkdir_p(remote_dir)
 
                     # Upload file
@@ -233,7 +233,7 @@ class SftpSync:
                     remote_file = f"{remote_path}/{rel_path}"
 
                     try:
-                        remote_dir = os.path.dirname(remote_file)
+                        remote_dir = posixpath.dirname(remote_file)
                         self._mkdir_p(remote_dir)
                         self.sftp.put(str(local_file), remote_file)
                         progress.update(task, advance=info["size"])
@@ -275,15 +275,18 @@ class SftpSync:
                 continue
 
             rel_path = path.relative_to(root)
+            # Always use POSIX-style paths (forward slashes) for remote compatibility
+            # This ensures Windows backslashes don't become literal characters in Linux filenames
+            rel_path_posix = rel_path.as_posix()
 
             # Check exclusions
-            if self._should_exclude(str(rel_path), exclude_patterns):
+            if self._should_exclude(rel_path_posix, exclude_patterns):
                 continue
 
             # Calculate file hash
             file_hash = self._hash_file(path)
 
-            files[str(rel_path)] = {
+            files[rel_path_posix] = {
                 "path": path,
                 "hash": file_hash,
                 "size": path.stat().st_size,
@@ -327,10 +330,16 @@ class SftpSync:
             pass
 
     def _should_exclude(self, path: str, patterns: list[str]) -> bool:
-        """Check if path matches any exclusion pattern."""
+        """Check if path matches any exclusion pattern.
+
+        Args:
+            path: POSIX-style path (forward slashes) to check
+            patterns: List of glob patterns to match against
+        """
         import fnmatch
 
-        parts = path.split(os.sep)
+        # Always use forward slash for splitting since paths are POSIX-style
+        parts = path.split("/")
         for pattern in patterns:
             # Check if any path component matches
             for part in parts:
@@ -358,7 +367,7 @@ class SftpSync:
             self.sftp.stat(remote_path)
         except IOError:
             # Directory doesn't exist, create parent first
-            parent = os.path.dirname(remote_path)
+            parent = posixpath.dirname(remote_path)
             if parent:
                 self._mkdir_p(parent)
             try:
