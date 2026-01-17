@@ -39,12 +39,12 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 0.0010157
+      ticks_to_rad: 0.0040906
       vel_lpf_alpha: 0.8
   front_right_motor:
     type: Motor
     port: 1
-    inverted: true
+    inverted: false
     calibration:
       ff:
         kS: 0.08
@@ -54,7 +54,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 0.0010157
+      ticks_to_rad: 0.0040906
       vel_lpf_alpha: 0.8
   rear_left_motor:
     type: Motor
@@ -69,12 +69,12 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 0.0010157
+      ticks_to_rad: 0.0040906
       vel_lpf_alpha: 0.8
   rear_right_motor:
     type: Motor
     port: 3
-    inverted: true
+    inverted: false
     calibration:
       ff:
         kS: 0.08
@@ -84,7 +84,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 0.0010157
+      ticks_to_rad: 0.0040906
       vel_lpf_alpha: 0.8
   imu:
     type: IMU

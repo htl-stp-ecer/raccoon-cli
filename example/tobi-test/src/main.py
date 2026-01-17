@@ -1,3 +1,5 @@
+from libstp.button import set_digital
+
 from .missions.setup_mission import SetupMission
 from .missions.shutdown_mission import ShutdownMission
 from .missions.potato_mission import PotatoMission
@@ -25,4 +27,5 @@ from src.hardware.robot import Robot
 robot = Robot()
 
 if __name__ == "__main__":
+   set_digital(10)
    robot.start()

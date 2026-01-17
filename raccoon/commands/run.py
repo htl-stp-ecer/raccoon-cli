@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -85,9 +86,25 @@ async def _run_remote(ctx: click.Context, project_root: Path, config: dict, args
         handler = OutputHandler(ws_url)
 
         console.print(f"[dim]Command ID: {result.command_id}[/dim]")
+        console.print("[dim]Press Ctrl+C to stop[/dim]")
         console.print()
 
-        final_status = handler.stream_to_console(console)
+        # Handle Ctrl+C to cancel the remote command
+        cancel_requested = False
+
+        def signal_handler(sig, frame):
+            nonlocal cancel_requested
+            if not cancel_requested:
+                cancel_requested = True
+                console.print("\n[yellow]Cancelling...[/yellow]")
+                handler.cancel()
+
+        original_handler = signal.signal(signal.SIGINT, signal_handler)
+
+        try:
+            final_status = handler.stream_to_console(console)
+        finally:
+            signal.signal(signal.SIGINT, original_handler)
 
         # Display final status
         exit_code = final_status.get("exit_code", -1)
