@@ -72,7 +72,13 @@ def list_missions_command(ctx: click.Context) -> None:
     
     missions_dir = project_root / "src" / "missions"
     
-    for idx, mission in enumerate(missions, 1):
+    for idx, mission_entry in enumerate(missions, 1):
+        # Handle both dict format (SetupMission: setup) and string format (SetupMission)
+        if isinstance(mission_entry, dict):
+            mission = list(mission_entry.keys())[0]
+        else:
+            mission = mission_entry
+
         # Convert mission class name to file name
         # Remove 'Mission' suffix if present
         mission_base = mission
