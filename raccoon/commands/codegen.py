@@ -117,8 +117,13 @@ async def _codegen_remote(
     from raccoon.client.connection import get_connection_manager
     from raccoon.client.api import create_api_client
     from raccoon.client.output_handler import OutputHandler
-    from raccoon.commands.sync_cmd import sync_project_to_pi
-    from raccoon.client.sftp_sync import SftpSync
+    from raccoon.commands.sync_cmd import sync_project_interactive
+
+    # Sync project first (with interactive conflict resolution)
+    if not sync_project_interactive(project_root, console):
+        console.print("[red]Cannot run codegen with unresolved conflicts[/red]")
+        raise SystemExit(1)
+    console.print()
 
     manager = get_connection_manager()
     state = manager.state
@@ -126,14 +131,6 @@ async def _codegen_remote(
     project_name = config.get("name", project_root.name)
 
     console.print(f"[cyan]Running codegen for '{project_name}' on {state.pi_hostname}...[/cyan]")
-
-    # Step 1: Sync project to Pi
-    console.print("[dim]Syncing project to Pi...[/dim]")
-    if not sync_project_to_pi(project_root, console):
-        console.print("[red]Failed to sync project to Pi[/red]")
-        raise SystemExit(1)
-    console.print("[dim]Sync complete[/dim]")
-    console.print()
 
     # Step 2: Build args for remote codegen
     args = []
@@ -164,44 +161,13 @@ async def _codegen_remote(
 
         exit_code = final_status.get("exit_code", -1)
 
-    # Step 4: Sync generated files back from Pi (do this even if exit code non-zero,
+    # Sync generated files back from Pi (do this even if exit code non-zero,
     # since codegen may have succeeded but cleanup crashed)
-    sync_failed = False
     console.print()
-    console.print("[cyan]Syncing generated files back from Pi...[/cyan]")
-
-    try:
-        ssh_client = manager.get_ssh_client()
-        remote_path = f"/home/{state.pi_user}/programs/{project_uuid}"
-
-        # Use SFTP to pull the generated files
-        sftp = ssh_client.open_sftp()
-
-        # Determine which files to sync back
-        local_hardware_dir = project_root / "src" / "hardware"
-        remote_hardware_dir = f"{remote_path}/src/hardware"
-
-        local_hardware_dir.mkdir(parents=True, exist_ok=True)
-
-        # List and download generated files
-        try:
-            remote_files = sftp.listdir(remote_hardware_dir)
-            for filename in remote_files:
-                if filename.endswith(".py"):
-                    remote_file = f"{remote_hardware_dir}/{filename}"
-                    local_file = local_hardware_dir / filename
-                    sftp.get(remote_file, str(local_file))
-                    console.print(f"  [dim]← {filename}[/dim]")
-        except FileNotFoundError:
-            console.print("[yellow]No generated files found on Pi[/yellow]")
-
-        sftp.close()
-        console.print("[green]Sync complete![/green]")
-
-    except Exception as e:
-        sync_failed = True
-        console.print(f"[yellow]Warning: Could not sync files back: {e}[/yellow]")
-        console.print("[dim]Generated files are on the Pi but not synced locally.[/dim]")
+    console.print("[cyan]Syncing generated files from Pi...[/cyan]")
+    sync_failed = not sync_project_interactive(project_root, console)
+    if sync_failed:
+        console.print("[yellow]Warning: Could not sync files back[/yellow]")
 
     # Now check exit code after sync attempt
     if exit_code != 0:

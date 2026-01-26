@@ -36,16 +36,46 @@ def clear_api_client() -> None:
     _api_client = None
 
 
-def _prompt_measurements() -> Dict[str, float]:
-    """Collect measurement data from the user."""
-    wheel_diameter_mm = click.prompt("Wheel diameter (mm)", default=75.0, type=float)
-    track_width_cm = click.prompt("Track width (cm, left ↔ right wheel centers)", default=20.0, type=float)
-    wheelbase_cm = click.prompt("Wheelbase (cm, front ↔ rear axle centers)", default=15.0, type=float)
-    desired_max_v = click.prompt("Desired max chassis speed (m/s)", default=1.5, type=float)
+def _prompt_measurements(existing_config: Dict[str, object]) -> Dict[str, float]:
+    """Collect measurement data from the user, using existing config values as defaults."""
+    # Extract existing values from config if available
+    robot = existing_config.get("robot", {})
+    drive = robot.get("drive", {}) if isinstance(robot, dict) else {}
+    kinematics = drive.get("kinematics", {}) if isinstance(drive, dict) else {}
+    limits = drive.get("limits", {}) if isinstance(drive, dict) else {}
+    definitions = existing_config.get("definitions", {})
+
+    # Calculate defaults from existing config
+    existing_wheel_radius = kinematics.get("wheel_radius") if isinstance(kinematics, dict) else None
+    default_wheel_diameter_mm = round(existing_wheel_radius * 2 * 1000, 1) if existing_wheel_radius else 75.0
+
+    existing_track_width = kinematics.get("track_width") if isinstance(kinematics, dict) else None
+    default_track_width_cm = round(existing_track_width * 100, 1) if existing_track_width else 20.0
+
+    existing_wheelbase = kinematics.get("wheelbase") if isinstance(kinematics, dict) else None
+    default_wheelbase_cm = round(existing_wheelbase * 100, 1) if existing_wheelbase else 15.0
+
+    existing_max_v = limits.get("max_v") if isinstance(limits, dict) else None
+    default_max_v = existing_max_v if existing_max_v else 1.5
+
+    # Try to get vel_lpf_alpha from any motor definition
+    default_vel_filter_alpha = 0.8
+    if isinstance(definitions, dict):
+        for defn in definitions.values():
+            if isinstance(defn, dict) and defn.get("type") == "Motor":
+                calib = defn.get("calibration", {})
+                if isinstance(calib, dict) and "vel_lpf_alpha" in calib:
+                    default_vel_filter_alpha = calib["vel_lpf_alpha"]
+                    break
+
+    wheel_diameter_mm = click.prompt("Wheel diameter (mm)", default=default_wheel_diameter_mm, type=float)
+    track_width_cm = click.prompt("Track width (cm, left ↔ right wheel centers)", default=default_track_width_cm, type=float)
+    wheelbase_cm = click.prompt("Wheelbase (cm, front ↔ rear axle centers)", default=default_wheelbase_cm, type=float)
+    desired_max_v = click.prompt("Desired max chassis speed (m/s)", default=default_max_v, type=float)
     accel_linear = click.prompt(
         "Desired linear acceleration limit (m/s²)", default=round(desired_max_v * 0.8, 2), type=float
     )
-    vel_filter_alpha = click.prompt("Velocity low-pass alpha (0-1)", default=0.8, type=float)
+    vel_filter_alpha = click.prompt("Velocity low-pass alpha (0-1)", default=default_vel_filter_alpha, type=float)
 
     return {
         "wheel_diameter_mm": wheel_diameter_mm,
@@ -67,12 +97,17 @@ def _prompt_drive_type(existing: str | None) -> str:
     return choice.lower()
 
 
-def _collect_motor_data(drivetrain: str) -> Dict[str, Tuple[int, bool]]:
+def _collect_motor_data(drivetrain: str, existing_config: Dict[str, object]) -> Dict[str, Tuple[int, bool]]:
     """
     Collect motor connection details.
 
     Returns a dict mapping definition keys to (port, inverted) pairs.
+    Uses existing definitions as defaults if available.
     """
+    definitions = existing_config.get("definitions", {})
+    if not isinstance(definitions, dict):
+        definitions = {}
+
     if drivetrain == "mecanum":
         order = [
             ("front_left_motor", "Front-left"),
@@ -89,8 +124,17 @@ def _collect_motor_data(drivetrain: str) -> Dict[str, Tuple[int, bool]]:
     motors: Dict[str, Tuple[int, bool]] = {}
     default_port = 0
     for key, label in order:
-        port = click.prompt(f"{label} motor port", type=int, default=default_port)
-        inverted = click.confirm(f"Is the {label.lower()} motor inverted?", default=key.endswith("right_motor"))
+        # Get defaults from existing definition if available
+        existing_def = definitions.get(key, {})
+        if isinstance(existing_def, dict) and existing_def.get("type") == "Motor":
+            existing_port = existing_def.get("port", default_port)
+            existing_inverted = existing_def.get("inverted", key.endswith("right_motor"))
+        else:
+            existing_port = default_port
+            existing_inverted = key.endswith("right_motor")
+
+        port = click.prompt(f"{label} motor port", type=int, default=existing_port)
+        inverted = click.confirm(f"Is the {label.lower()} motor inverted?", default=existing_inverted)
         motors[key] = (port, inverted)
         default_port += 1
 
@@ -114,12 +158,12 @@ def _build_motor_definition(port: int, inverted: bool, ticks_to_rad: float, vel_
 
 def _create_definitions(
     motors: Dict[str, Tuple[int, bool]],
-    ticks_to_rad: float,
+    ticks_to_rad: Dict[str, float],
     vel_lpf_alpha: float,
 ) -> Dict[str, object]:
     """Create the definitions section."""
     definitions = {
-        name: _build_motor_definition(port, inverted, ticks_to_rad, vel_lpf_alpha)
+        name: _build_motor_definition(port, inverted, ticks_to_rad[name], vel_lpf_alpha)
         for name, (port, inverted) in motors.items()
     }
     definitions.setdefault("imu", {"type": "IMU"})
@@ -312,19 +356,40 @@ def _calibrate_single_wheel_local(
     return avg_ticks
 
 
-def _calibrate_ticks_per_rev(console: Console, motor_defs: Dict[str, Tuple[int, bool]]) -> int:
+def _print_calibration_summary(console: Console, results: Dict[str, int]) -> None:
+    """Print a summary table of calibration results per motor."""
+    console.print("\n[bold green]Calibration Results:[/bold green]")
+    table = Table()
+    table.add_column("Motor", style="cyan")
+    table.add_column("Ticks/Rev", justify="right")
+    table.add_column("Rad/Tick", justify="right")
+
+    for motor_name, ticks in results.items():
+        rad_per_tick = (2 * math.pi) / ticks
+        table.add_row(motor_name, str(ticks), f"{rad_per_tick:.7f}")
+
+    console.print(table)
+
+
+def _calibrate_ticks_per_rev(
+    console: Console, motor_defs: Dict[str, Tuple[int, bool]]
+) -> Dict[str, int]:
     """
     Interactive helper to measure encoder ticks per wheel revolution.
 
     For each wheel, the user manually rotates the wheel one full turn
     while the wizard measures the encoder tick difference. Each wheel
-    is measured 3 times and averaged.
+    is measured 3 times and averaged individually.
 
     Uses remote API if an API client is configured, otherwise tries local hardware.
+
+    Returns:
+        Dict mapping motor name to its calibrated ticks per revolution.
     """
     global _api_client
     num_trials = 3
     available_motors = list(motor_defs.keys())
+    results: Dict[str, int] = {}
 
     # Try remote calibration first if API client is configured
     if _api_client is not None:
@@ -334,8 +399,6 @@ def _calibrate_ticks_per_rev(console: Console, motor_defs: Dict[str, Tuple[int, 
             "The wizard will record the encoder ticks via the Pi and average the results.\n"
         )
 
-        all_averages = []
-
         for motor_name in available_motors:
             port, inverted = motor_defs[motor_name]
 
@@ -343,25 +406,19 @@ def _calibrate_ticks_per_rev(console: Console, motor_defs: Dict[str, Tuple[int, 
             console.print("[yellow]Make sure the wheel can spin freely.[/yellow]")
 
             if not click.confirm(f"Ready to calibrate {motor_name}?", default=True):
-                console.print(f"[yellow]Skipping {motor_name}[/yellow]")
+                console.print(f"[yellow]Skipping {motor_name} - using default[/yellow]")
+                results[motor_name] = 1536
                 continue
 
             try:
                 avg = _calibrate_single_wheel_remote(console, port, inverted, motor_name, num_trials)
-                all_averages.append(avg)
+                results[motor_name] = int(round(avg))
             except Exception as exc:
                 console.print(f"[red]Error calibrating {motor_name}: {exc}[/red]")
-                continue
+                results[motor_name] = 1536
 
-        if not all_averages:
-            console.print("[yellow]No wheels calibrated. Using default value.[/yellow]")
-            return 1536
-
-        # Average across all calibrated wheels
-        final_avg = sum(all_averages) / len(all_averages)
-        console.print(f"\n[bold green]Final average across all wheels: {final_avg:.1f} ticks/revolution[/bold green]")
-
-        return int(round(final_avg))
+        _print_calibration_summary(console, results)
+        return results
 
     # Fall back to local calibration
     try:
@@ -373,8 +430,6 @@ def _calibrate_ticks_per_rev(console: Console, motor_defs: Dict[str, Tuple[int, 
             "The wizard will record the encoder ticks and average the results.\n"
         )
 
-        all_averages = []
-
         for motor_name in available_motors:
             port, inverted = motor_defs[motor_name]
             motor = HalMotor(port=port, inverted=inverted)
@@ -383,35 +438,122 @@ def _calibrate_ticks_per_rev(console: Console, motor_defs: Dict[str, Tuple[int, 
             console.print("[yellow]Make sure the wheel can spin freely.[/yellow]")
 
             if not click.confirm(f"Ready to calibrate {motor_name}?", default=True):
-                console.print(f"[yellow]Skipping {motor_name}[/yellow]")
+                console.print(f"[yellow]Skipping {motor_name} - using default[/yellow]")
+                results[motor_name] = 1536
                 continue
 
             avg = _calibrate_single_wheel_local(console, motor, motor_name, num_trials)
-            all_averages.append(avg)
+            results[motor_name] = int(round(avg))
 
-        if not all_averages:
-            console.print("[yellow]No wheels calibrated. Using default value.[/yellow]")
-            return 1536
-
-        # Average across all calibrated wheels
-        final_avg = sum(all_averages) / len(all_averages)
-        console.print(f"\n[bold green]Final average across all wheels: {final_avg:.1f} ticks/revolution[/bold green]")
-
-        return int(round(final_avg))
+        _print_calibration_summary(console, results)
+        return results
 
     except Exception as exc:  # pylint: disable=broad-except
         console.print(
             f"[yellow]Could not access motor hardware ({exc}).[/yellow]\n"
             "[cyan]Falling back to manual entry.[/cyan]"
         )
-        return click.prompt("Encoder ticks per wheel revolution", default=1536, type=int)
+        default_ticks = click.prompt("Encoder ticks per wheel revolution", default=1536, type=int)
+        return {name: default_ticks for name in available_motors}
 
 
-def _prompt_ticks_per_rev(console: Console, motor_defs: Dict[str, Tuple[int, bool]]) -> int:
-    """Ask whether to calibrate encoder ticks interactively or accept a prompt."""
+def _ensure_remote_connection(console: Console, project_root: Path) -> bool:
+    """
+    Ensure a connection to the Pi is established for remote calibration.
+
+    Returns True if connected (and API client is set), False otherwise.
+    """
+    from raccoon.client.connection import get_connection_manager
+    from raccoon.client.api import create_api_client
+
+    manager = get_connection_manager()
+
+    # Try to auto-connect from project or global config if not connected
+    if not manager.is_connected:
+        # Try project config first
+        project_conn = manager.load_from_project(project_root)
+        if project_conn and project_conn.pi_address:
+            console.print(f"[cyan]Connecting to Pi at {project_conn.pi_address}...[/cyan]")
+            try:
+                manager.connect_sync(project_conn.pi_address, project_conn.pi_port, project_conn.pi_user)
+            except Exception as e:
+                console.print(f"[yellow]Failed to connect: {e}[/yellow]")
+                return False
+        else:
+            # Try global config
+            known_pis = manager.load_known_pis()
+            if known_pis:
+                pi = known_pis[0]
+                console.print(f"[cyan]Connecting to Pi at {pi.get('address')}...[/cyan]")
+                try:
+                    manager.connect_sync(pi.get("address"), pi.get("port", 8421))
+                except Exception as e:
+                    console.print(f"[yellow]Failed to connect: {e}[/yellow]")
+                    return False
+            else:
+                return False
+
+    if not manager.is_connected:
+        return False
+
+    # Create and set the API client
+    state = manager.state
+    client = create_api_client(state.pi_address, state.pi_port, api_token=state.api_token)
+    set_api_client(client)
+
+    console.print(f"[green]Connected to {state.pi_hostname}[/green]")
+    return True
+
+
+def _prompt_ticks_per_rev(
+    console: Console, motor_defs: Dict[str, Tuple[int, bool]], existing_config: Dict[str, object], project_root: Path
+) -> Dict[str, int]:
+    """
+    Ask whether to calibrate encoder ticks interactively or accept a prompt.
+
+    Returns:
+        Dict mapping motor name to its ticks per revolution.
+    """
+    # Calculate defaults from existing ticks_to_rad values per motor
+    definitions = existing_config.get("definitions", {})
+    default_ticks: Dict[str, int] = {}
+
+    if isinstance(definitions, dict):
+        for motor_name in motor_defs:
+            defn = definitions.get(motor_name, {})
+            if isinstance(defn, dict) and defn.get("type") == "Motor":
+                calib = defn.get("calibration", {})
+                if isinstance(calib, dict) and "ticks_to_rad" in calib:
+                    ticks_to_rad = calib["ticks_to_rad"]
+                    if ticks_to_rad > 0:
+                        default_ticks[motor_name] = int(round((2 * math.pi) / ticks_to_rad))
+
+    # Fill in missing defaults
+    for motor_name in motor_defs:
+        if motor_name not in default_ticks:
+            default_ticks[motor_name] = 1536
+
     if not click.confirm("Run the guided encoder tick calibration?", default=False):
-        return click.prompt("Encoder ticks per wheel revolution", default=1536, type=int)
-    return _calibrate_ticks_per_rev(console, motor_defs)
+        # Use same value for all motors when manually entering
+        single_default = next(iter(default_ticks.values()), 1536)
+        ticks = click.prompt("Encoder ticks per wheel revolution", default=single_default, type=int)
+        return {name: ticks for name in motor_defs}
+
+    # Before running calibration, ensure we have a remote connection
+    # (calibration needs to run on the Pi with actual hardware)
+    if not _ensure_remote_connection(console, project_root):
+        console.print("[yellow]No Pi connection available.[/yellow]")
+        console.print("[cyan]To run encoder calibration, connect to the Pi first with 'raccoon connect <pi-address>'[/cyan]")
+        console.print("[cyan]Falling back to manual entry.[/cyan]")
+        single_default = next(iter(default_ticks.values()), 1536)
+        ticks = click.prompt("Encoder ticks per wheel revolution", default=single_default, type=int)
+        return {name: ticks for name in motor_defs}
+
+    try:
+        return _calibrate_ticks_per_rev(console, motor_defs)
+    finally:
+        # Clean up the API client
+        clear_api_client()
 
 
 @click.command(name="wizard")
@@ -438,11 +580,12 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
     )
 
     drivetrain = _prompt_drive_type(existing_config.get("robot", {}).get("drive", {}).get("kinematics", {}).get("type"))
-    motor_defs = _collect_motor_data(drivetrain)
-    measurements = _prompt_measurements()
-    measurements["ticks_per_rev"] = _prompt_ticks_per_rev(console, motor_defs)
+    motor_defs = _collect_motor_data(drivetrain, existing_config)
+    measurements = _prompt_measurements(existing_config)
+    ticks_per_rev = _prompt_ticks_per_rev(console, motor_defs, existing_config, project_root)
 
-    ticks_to_rad = (2 * math.pi) / measurements["ticks_per_rev"]
+    # Convert ticks per revolution to radians per tick for each motor
+    ticks_to_rad = {name: (2 * math.pi) / ticks for name, ticks in ticks_per_rev.items()}
 
     config: Dict[str, object] = dict(existing_config)
     config["name"] = project_name

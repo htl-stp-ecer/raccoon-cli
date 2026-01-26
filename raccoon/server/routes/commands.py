@@ -142,12 +142,13 @@ async def calibrate_project(
 
     # Start the command asynchronously
     # Use --local to force local execution (we're already on the Pi)
+    # Note: --local must come AFTER the subcommand (e.g., "calibrate motors --local")
     asyncio.create_task(
         executor.execute(
             command_id=command_id,
             project_path=project["path"],
             command="raccoon",
-            args=["calibrate", "--local"] + request.args,
+            args=["calibrate"] + request.args + ["--local"],
             env=request.env,
         )
     )

@@ -8,3 +8,4 @@ ssh $USER@$HOST 'cd toolchain && sudo python3 -m pip install . --break-system-pa
 # Configure the systemd service
 ssh $USER@$HOST 'sudo raccoon-server install'
 echo "Deployment to $HOST completed."
+ssh $USER@$HOST 'sudo systemctl restart raccoon.service'

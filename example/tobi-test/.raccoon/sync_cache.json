@@ -1,0 +1,72 @@
+{
+  "upload.sh": {
+    "hash": "0500660bd3793edc5f41e622256029d1f066bec5f3ac0ec05ede96522cd0d998",
+    "mtime": 1769411604.3324466,
+    "size": 747
+  },
+  "raccoon.project.yml": {
+    "hash": "52b1b6390a9a9bb5453469f927dca2f60f76ef5c8c8f0b3d3cafc020d8c91078",
+    "mtime": 1769411607.6464021,
+    "size": 1914
+  },
+  ".raccoonignore": {
+    "hash": "138aaf74cf5c5edb824311b6f4a3c4f03d520b2b81705ca8a6f6de7e037ab717",
+    "mtime": 1769411605.4714313,
+    "size": 668
+  },
+  "run.sh": {
+    "hash": "68baac1fe7ba8f187382c5cb6fc5b4a1ee08445f358846aa735bb830e2cf6a3e",
+    "mtime": 1769411604.7804406,
+    "size": 655
+  },
+  "src/main.py": {
+    "hash": "08c32ca47b3394f1f119f73ee1373180b26067236ee05efc90b2d3d5d058e0ff",
+    "mtime": 1769411604.5094442,
+    "size": 924
+  },
+  "src/__init__.py": {
+    "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
+    "mtime": 1769411604.2104483,
+    "size": 611
+  },
+  "src/hardware/__init__.py": {
+    "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
+    "mtime": 1769411607.3034067,
+    "size": 611
+  },
+  "src/steps/__init__.py": {
+    "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
+    "mtime": 1769411605.035437,
+    "size": 611
+  },
+  "src/missions/potato_mission.py": {
+    "hash": "874f4fba0ecabe6bdf91ebb6b1537d1c1ab13ed58ffdbb56cdbece4cd6bf7115",
+    "mtime": 1769411604.908439,
+    "size": 890
+  },
+  "src/missions/shutdown_mission.py": {
+    "hash": "fd74fb24b1805a7a3404175fa2285b526beda7b07af5c7688179c8d56d82a60a",
+    "mtime": 1769411604.1154494,
+    "size": 759
+  },
+  "src/missions/__init__.py": {
+    "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
+    "mtime": 1769411605.6694286,
+    "size": 611
+  },
+  "src/missions/setup_mission.py": {
+    "hash": "1d11dc748200755fdbc0e38d0363ea8935cd4e53712cf90930b54fe2b02b01fe",
+    "mtime": 1769411603.8684528,
+    "size": 1000
+  },
+  "src/hardware/.raccoon_codegen_cache.json": {
+    "hash": "67e303f2bb7b252881238e7d74305de8986c98d7607e237af92616a7d1aec376",
+    "mtime": 1769411606.5354168,
+    "size": 682
+  },
+  "logs/step_timing.db": {
+    "hash": "a4005647553a81c6cd0f1515f58c8eedfba17a3cd4634cba498c22d6c9ccfabd",
+    "mtime": 1769411606.6474154,
+    "size": 40960
+  }
+}

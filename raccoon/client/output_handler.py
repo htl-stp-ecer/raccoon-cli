@@ -51,9 +51,20 @@ class OutputHandler:
 
         try:
             self.ws = create_connection(self.url)
+            self.ws.settimeout(0.5)  # Allow periodic check for cancellation
 
             while True:
-                message = self.ws.recv()
+                # Check if cancellation was requested
+                if self._cancelled:
+                    return {"status": "cancelled", "exit_code": -1}
+
+                try:
+                    message = self.ws.recv()
+                except Exception:
+                    # Timeout or other recv error - check if cancelled and loop
+                    if self._cancelled:
+                        return {"status": "cancelled", "exit_code": -1}
+                    continue
 
                 if not message:
                     continue

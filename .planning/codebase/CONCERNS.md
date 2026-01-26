@@ -41,11 +41,11 @@
 - Trigger: Exception during SSH operations leaves connection in inconsistent state
 - Workaround: Manually call `disconnect()` in error handlers
 
-**SFTP Sync Missing Remote Hash Comparison:**
-- Symptoms: Files are always re-uploaded even if unchanged on remote
-- Files: `raccoon/client/sftp_sync.py` (lines 326-327, comment: "Note: We don't have hash for remote files")
-- Trigger: Any sync operation to existing project
-- Workaround: None; results in unnecessary file transfers
+**SFTP Sync Missing Remote Hash Comparison:** ✅ FIXED
+- ~~Symptoms: Files are always re-uploaded even if unchanged on remote~~
+- ~~Trigger: Any sync operation to existing project~~
+- Fix: Implemented `RemoteManifest` class that stores file hashes in `.raccoon_manifest.json` on remote
+- Files: `raccoon/client/sftp_sync.py` (RemoteManifest class at lines 199-282)
 
 ## Security Considerations
 
@@ -79,11 +79,11 @@
 
 ## Performance Bottlenecks
 
-**SFTP Hash Computation:**
-- Problem: SHA256 hash computed for every local file on each sync
-- Files: `raccoon/client/sftp_sync.py` (lines 353-359: `_hash_file`)
-- Cause: No caching of file hashes between syncs
-- Improvement path: Implement hash cache using mtime as invalidation key
+**SFTP Hash Computation:** ✅ FIXED
+- ~~Problem: SHA256 hash computed for every local file on each sync~~
+- ~~Cause: No caching of file hashes between syncs~~
+- Fix: Implemented `HashCache` class that stores hashes in `.raccoon/sync_cache.json` with mtime-based invalidation
+- Files: `raccoon/client/sftp_sync.py` (HashCache class at lines 108-196)
 
 **Robot Generator Import Resolution:**
 - Problem: Type resolution attempts multiple import paths sequentially
@@ -150,6 +150,12 @@
 
 ## Missing Critical Features
 
+**Bidirectional Sync Support:** ✅ ADDED
+- Added `SyncDirection` enum: PUSH (local→remote), PULL (remote→local), BIDIRECTIONAL
+- Added `--pull` and `--bidirectional` flags to sync command
+- Bidirectional sync uses mtime comparison and detects conflicts
+- Files: `raccoon/client/sftp_sync.py`, `raccoon/commands/sync_cmd.py`
+
 **No Rollback on Failed Sync:**
 - Problem: SFTP sync with `delete_remote=True` can leave remote in inconsistent state on partial failure
 - Blocks: Safe deployment updates
@@ -191,3 +197,4 @@
 ---
 
 *Concerns audit: 2026-01-18*
+*Last updated: 2026-01-19 - Fixed SFTP sync issues (remote hash comparison, local hash caching, bidirectional sync)*

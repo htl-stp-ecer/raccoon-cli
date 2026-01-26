@@ -12,3 +12,14 @@ from .screen_render_answer_t import screen_render_answer_t as screen_render_answ
 from .screen_render_t import screen_render_t as screen_render_t
 from .string_t import string_t as string_t
 from .vector3f_t import vector3f_t as vector3f_t
+
+__all__ = [
+    "quaternion_t",
+    "scalar_f_t",
+    "scalar_i32_t",
+    "scalar_i8_t",
+    "screen_render_answer_t",
+    "screen_render_t",
+    "string_t",
+    "vector3f_t",
+]

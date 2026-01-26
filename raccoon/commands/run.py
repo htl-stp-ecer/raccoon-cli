@@ -56,7 +56,13 @@ async def _run_remote(ctx: click.Context, project_root: Path, config: dict, args
     from raccoon.client.connection import get_connection_manager
     from raccoon.client.api import create_api_client
     from raccoon.client.output_handler import OutputHandler
-    from raccoon.commands.sync_cmd import sync_project_to_pi
+    from raccoon.commands.sync_cmd import sync_project_interactive
+
+    # Sync project first (with interactive conflict resolution)
+    if not sync_project_interactive(project_root, console):
+        console.print("[red]Cannot run with unresolved conflicts[/red]")
+        raise SystemExit(1)
+    console.print()
 
     manager = get_connection_manager()
     state = manager.state
@@ -64,14 +70,6 @@ async def _run_remote(ctx: click.Context, project_root: Path, config: dict, args
     project_name = config.get("name", project_root.name)
 
     console.print(f"[cyan]Running '{project_name}' on {state.pi_hostname}...[/cyan]")
-
-    # Sync project first
-    console.print("[dim]Syncing project...[/dim]")
-    if not sync_project_to_pi(project_root, console):
-        console.print("[red]Failed to sync project to Pi[/red]")
-        raise SystemExit(1)
-    console.print("[dim]Sync complete[/dim]")
-    console.print()
 
     # Start the run command on Pi
     async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
@@ -105,6 +103,11 @@ async def _run_remote(ctx: click.Context, project_root: Path, config: dict, args
             final_status = handler.stream_to_console(console)
         finally:
             signal.signal(signal.SIGINT, original_handler)
+
+        # Sync changes back from Pi
+        console.print()
+        console.print("[dim]Syncing changes from Pi...[/dim]")
+        sync_project_interactive(project_root, console)
 
         # Display final status
         exit_code = final_status.get("exit_code", -1)

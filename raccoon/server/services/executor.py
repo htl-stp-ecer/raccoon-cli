@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import signal
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -82,6 +83,7 @@ class CommandExecutor:
 
         try:
             # Create subprocess with pipes for stdout/stderr
+            # Use start_new_session to create a new process group for clean termination
             self._process = await asyncio.create_subprocess_exec(
                 command,
                 *args,
@@ -89,6 +91,7 @@ class CommandExecutor:
                 stderr=asyncio.subprocess.STDOUT,  # Merge stderr into stdout
                 cwd=str(project_path),
                 env=cmd_env,
+                start_new_session=True,  # Create new process group
             )
 
             # Read output line by line
@@ -108,11 +111,19 @@ class CommandExecutor:
         except asyncio.CancelledError:
             self.status = CommandStatus.CANCELLED
             if self._process:
-                self._process.terminate()
                 try:
-                    await asyncio.wait_for(self._process.wait(), timeout=5.0)
+                    pgid = os.getpgid(self._process.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    self._process.terminate()
+                try:
+                    await asyncio.wait_for(self._process.wait(), timeout=2.0)
                 except asyncio.TimeoutError:
-                    self._process.kill()
+                    try:
+                        pgid = os.getpgid(self._process.pid)
+                        os.killpg(pgid, signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        self._process.kill()
             raise
 
         except Exception as e:
@@ -174,11 +185,24 @@ class CommandExecutor:
     async def cancel(self) -> None:
         """Cancel the running command."""
         if self._process and self.status == CommandStatus.RUNNING:
-            self._process.terminate()
             try:
-                await asyncio.wait_for(self._process.wait(), timeout=5.0)
+                # Kill the entire process group (process + children)
+                pgid = os.getpgid(self._process.pid)
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                # Process already dead or can't get pgid, try direct terminate
+                self._process.terminate()
+
+            try:
+                await asyncio.wait_for(self._process.wait(), timeout=2.0)
             except asyncio.TimeoutError:
-                self._process.kill()
+                # SIGTERM didn't work, use SIGKILL
+                try:
+                    pgid = os.getpgid(self._process.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    self._process.kill()
+
             self.status = CommandStatus.CANCELLED
 
     def get_buffered_output(self) -> list[str]:

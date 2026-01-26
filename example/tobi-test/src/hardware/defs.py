@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-01-15 09:53:40
+ Generated: 2026-01-24 15:28:51
 ===========================================================
 
 Authors:
@@ -12,37 +12,29 @@ Authors:
    You are free to modify it as needed. Regeneration may overwrite changes.
 """
 
-from libstp import (
-    DigitalSensor,
-    Feedforward,
-    IRSensor,
-    Motor,
-    MotorCalibration,
-    PidGains,
-)
+from libstp import Feedforward, IRSensor, Motor, MotorCalibration, PidGains
 from libstp import IMU as Imu
 
 
 class Defs:
     imu = Imu()
-    button = DigitalSensor(port=10)
     front_left_motor = Motor(
         port=0,
         inverted=False,
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=0.0010157,
+            ticks_to_rad=0.0040906,
             vel_lpf_alpha=0.8,
         ),
     )
     front_right_motor = Motor(
         port=1,
-        inverted=True,
+        inverted=False,
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=0.0010157,
+            ticks_to_rad=0.0040906,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -52,17 +44,17 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=0.0010157,
+            ticks_to_rad=0.0040906,
             vel_lpf_alpha=0.8,
         ),
     )
     rear_right_motor = Motor(
         port=3,
-        inverted=True,
+        inverted=False,
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=0.0010157,
+            ticks_to_rad=0.0040906,
             vel_lpf_alpha=0.8,
         ),
     )

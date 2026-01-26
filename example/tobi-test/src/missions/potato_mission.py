@@ -24,7 +24,7 @@ from libstp.step.turn import turn_cw
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            # drive_forward(cm=20),
-            # turn_cw(degrees=90)
+            drive_forward(cm=20),
+            turn_cw(degrees=90)
         ])
 

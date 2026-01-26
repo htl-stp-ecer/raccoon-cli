@@ -39,7 +39,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 0.0040906
+      ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   front_right_motor:
     type: Motor
@@ -54,7 +54,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 0.0040906
+      ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   rear_left_motor:
     type: Motor
@@ -69,7 +69,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 0.0040906
+      ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   rear_right_motor:
     type: Motor
@@ -84,7 +84,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 0.0040906
+      ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   imu:
     type: IMU
@@ -95,7 +95,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 192.168.100.129
+  pi_address: 10.70.146.215
   pi_port: 8421
   pi_user: pi
   remote_path: null

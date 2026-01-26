@@ -87,6 +87,22 @@ class DefsGenerator(BaseGenerator):
                     f"definitions.{field_name}: missing required 'type' field"
                 )
 
+        # Require button definition
+        if "button" not in data:
+            raise ValueError(
+                "definitions.button is required. Add a DigitalSensor definition:\n"
+                "  definitions:\n"
+                "    button:\n"
+                "      type: DigitalSensor\n"
+                "      port: <port_number>"
+            )
+
+        button_cfg = data.get("button", {})
+        if button_cfg.get("type") != "DigitalSensor":
+            raise ValueError(
+                f"definitions.button must be of type 'DigitalSensor', got '{button_cfg.get('type')}'"
+            )
+
     def generate_body(self, data: Dict[str, Any]) -> str:
         """
         Generate the Defs class body.

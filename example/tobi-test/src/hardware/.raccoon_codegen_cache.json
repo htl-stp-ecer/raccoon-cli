@@ -1,0 +1,17 @@
+{
+  "entries": {
+    "defs.py": {
+      "config_hash": "f69eb1169366bf0fc19fdc698d521531d82a62ce33958a7cf1339d18befbd22a",
+      "fingerprint": "c7d02a14c615b3fb4c2bf5a3370de15d7439648981ad7d9a9d1e75a3dffea47f",
+      "format_code": true,
+      "generator_source": "6b4454ea4f2c179dd093606039d35cf09f3628e5833f5674b66b16758bd47aac"
+    },
+    "robot.py": {
+      "config_hash": "3990708d8282c1449dcb9d77e899467e54ef15cf2a5c13bcd6807db8cf684cd0",
+      "fingerprint": "81ffd08ce4159ada17b76f5baf253fb204b859cfd2661d3e8fee98f18c28110c",
+      "format_code": true,
+      "generator_source": "a5c824f8072e8627036cebccb5cad026960ce5d342f8ebe55e96f1375e6a8eb8"
+    }
+  },
+  "version": 1
+}

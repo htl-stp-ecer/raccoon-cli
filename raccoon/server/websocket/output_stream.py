@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 
 from raccoon.server.config import get_or_create_api_token
+from raccoon.server.services.executor import CommandStatus
 
 # Reference to active commands (shared with commands router)
 from raccoon.server.routes.commands import _active_commands
@@ -84,7 +85,9 @@ def setup_websocket_routes(app: FastAPI) -> None:
                     pass
 
         except WebSocketDisconnect:
-            pass
+            # Client disconnected - cancel the running process
+            if executor.status == CommandStatus.RUNNING:
+                await executor.cancel()
 
         finally:
             executor.unsubscribe(output_queue)
