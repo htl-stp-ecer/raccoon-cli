@@ -1,8 +1,5 @@
-"""Web command - serve the web IDE."""
+"""Web command - serve the web IDE with full backend support."""
 
-import http.server
-import os
-import socketserver
 import threading
 import webbrowser
 from pathlib import Path
@@ -17,58 +14,18 @@ def get_web_ide_dist_path() -> Path:
     return Path(__file__).parent.parent / "web-ide-dist"
 
 
-class QuietHandler(http.server.SimpleHTTPRequestHandler):
-    """HTTP handler that serves files quietly and handles SPA routing."""
-
-    def __init__(self, *args, directory: str, **kwargs):
-        self.base_directory = directory
-        super().__init__(*args, directory=directory, **kwargs)
-
-    def log_message(self, format, *args):
-        """Suppress default logging."""
-        pass
-
-    def do_GET(self):
-        """Handle GET requests with SPA fallback."""
-        # Remove /WebIDE prefix if present (matches Angular baseHref)
-        path = self.path
-        if path.startswith("/WebIDE"):
-            path = path[7:] or "/"
-
-        # Check if file exists
-        file_path = Path(self.base_directory) / path.lstrip("/")
-
-        if file_path.exists() and file_path.is_file():
-            self.path = path
-            return super().do_GET()
-
-        # For non-file paths, serve index.html (SPA routing)
-        if not path.split("?")[0].split("#")[0].rsplit(".", 1)[-1] in [
-            "js",
-            "css",
-            "ico",
-            "png",
-            "jpg",
-            "svg",
-            "woff",
-            "woff2",
-            "ttf",
-            "map",
-            "json",
-        ]:
-            self.path = "/index.html"
-
-        return super().do_GET()
-
-
 @click.command(name="web")
 @click.option("--port", "-p", type=int, default=4200, help="Port to serve on")
 @click.option("--no-open", is_flag=True, help="Don't open browser automatically")
 @click.pass_context
 def web_command(ctx: click.Context, port: int, no_open: bool) -> None:
-    """Start and serve the web IDE.
+    """Start the Web IDE with full backend support.
 
-    Serves the pre-built web IDE on a local port.
+    Serves the web IDE with a full API backend on a local port.
+    The project root is the current working directory.
+
+    Projects will be stored in and loaded from the current directory.
+
     Automatically opens the browser unless --no-open is specified.
 
     Examples:
@@ -96,42 +53,59 @@ def web_command(ctx: click.Context, port: int, no_open: bool) -> None:
         )
         raise SystemExit(1)
 
-    # Start the server
-    os.chdir(dist_path)
+    # Import uvicorn and create app
+    try:
+        import uvicorn
+    except ImportError:
+        console.print(
+            Panel(
+                "[red]uvicorn is not installed.[/red]\n\n"
+                "Install it with:\n"
+                "  [cyan]pip install uvicorn[standard][/cyan]",
+                title="Error",
+            )
+        )
+        raise SystemExit(1)
 
-    handler = lambda *args, **kwargs: QuietHandler(
-        *args, directory=str(dist_path), **kwargs
+    # Create the FastAPI app with current directory as project root
+    from raccoon.ide.app import create_app
+
+    project_root = Path.cwd()
+    app = create_app(project_root=project_root)
+
+    url = f"http://localhost:{port}/WebIDE/"
+
+    console.print(
+        Panel(
+            f"[green]Web IDE is running at:[/green]\n\n"
+            f"  [cyan bold]{url}[/cyan bold]\n\n"
+            f"[dim]Project root: {project_root}[/dim]\n"
+            f"[dim]Press Ctrl+C to stop[/dim]",
+            title="Raccoon Web IDE",
+        )
     )
 
+    # Open browser if not disabled
+    if not no_open:
+        def open_browser():
+            import time
+            time.sleep(0.5)
+            webbrowser.open(url)
+
+        threading.Thread(target=open_browser, daemon=True).start()
+
+    # Run the server
     try:
-        with socketserver.TCPServer(("", port), handler) as httpd:
-            url = f"http://localhost:{port}/WebIDE/"
-            console.print(
-                Panel(
-                    f"[green]Web IDE is running at:[/green]\n\n"
-                    f"  [cyan bold]{url}[/cyan bold]\n\n"
-                    f"[dim]Press Ctrl+C to stop[/dim]",
-                    title="Raccoon Web IDE",
-                )
-            )
-
-            # Open browser if not disabled
-            if not no_open:
-                def open_browser():
-                    import time
-                    time.sleep(0.5)
-                    webbrowser.open(url)
-
-                threading.Thread(target=open_browser, daemon=True).start()
-
-            # Serve forever
-            try:
-                httpd.serve_forever()
-            except KeyboardInterrupt:
-                console.print("\n[yellow]Shutting down server...[/yellow]")
-
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=port,
+            log_level="warning",
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Shutting down server...[/yellow]")
     except OSError as e:
-        if "Address already in use" in str(e):
+        if "Address already in use" in str(e) or "address already in use" in str(e).lower():
             console.print(
                 f"[red]Port {port} is already in use. Try a different port with -p.[/red]"
             )

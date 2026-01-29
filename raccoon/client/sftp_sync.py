@@ -674,9 +674,21 @@ class SftpSync:
                 # Check if remote actually changed by comparing content hash to manifest
                 # (mtime-based detection can have false positives)
                 manifest_entry = remote_manifest_files.get(rel_path)
+                if not manifest_entry:
+                    import logging
+                    logging.getLogger("raccoon").info(f"No manifest entry for {rel_path} - cannot verify if remote changed")
                 if manifest_entry:
                     remote_hash = self._hash_cache.compute_hash_from_bytes(remote_content, rel_path)
                     manifest_hash = manifest_entry.get("hash")
+                    local_hash = local_info["hash"]
+
+                    # Debug: show what hashes we're comparing
+                    import logging
+                    logger = logging.getLogger("raccoon")
+                    logger.info(f"Merge check for {rel_path}:")
+                    logger.info(f"  local_hash:    {local_hash[:16]}...")
+                    logger.info(f"  remote_hash:   {remote_hash[:16]}...")
+                    logger.info(f"  manifest_hash: {manifest_hash[:16] if manifest_hash else 'None'}...")
 
                     if remote_hash == manifest_hash:
                         # Remote didn't actually change - just upload local version
