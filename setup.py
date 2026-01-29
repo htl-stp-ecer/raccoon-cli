@@ -1,4 +1,8 @@
-"""Custom setup to build web IDE during pip install."""
+"""Custom setup to build web IDE during pip install.
+
+Environment variables:
+    RACCOON_SKIP_WEBIDE: Set to skip web-ide build entirely (e.g., for server-only installs on Pi)
+"""
 
 import os
 import shutil
@@ -10,13 +14,19 @@ from setuptools import setup
 from setuptools.command.build_py import build_py
 
 
+class WebIDEBuildError(Exception):
+    """Raised when web-ide build fails."""
+
+    pass
+
+
 class BuildWebIDE(build_py):
     """Custom build command that builds the web IDE first."""
 
     def run(self):
-        # Skip web IDE build on Pi (server-only install)
-        if os.environ.get("RACCOON_SERVER_ONLY"):
-            print("RACCOON_SERVER_ONLY set, skipping web IDE build")
+        # Skip web IDE build if explicitly requested (e.g., server-only install on Pi)
+        if os.environ.get("RACCOON_SKIP_WEBIDE"):
+            print("RACCOON_SKIP_WEBIDE set, skipping web IDE build")
             super().run()
             return
 
@@ -27,17 +37,18 @@ class BuildWebIDE(build_py):
 
         # Check if web-ide directory exists
         if not web_ide_dir.exists():
-            print("Warning: web-ide directory not found, skipping web IDE build")
-            super().run()
-            return
+            raise WebIDEBuildError(
+                f"web-ide directory not found at {web_ide_dir}\n"
+                "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
+            )
 
         # Check for npm
         npm_cmd = shutil.which("npm")
         if not npm_cmd:
-            print("Warning: npm not found, skipping web IDE build")
-            print("Install Node.js to enable web IDE support")
-            super().run()
-            return
+            raise WebIDEBuildError(
+                "npm not found. Install Node.js to build web-ide.\n"
+                "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
+            )
 
         # Install npm dependencies if needed
         node_modules = web_ide_dir / "node_modules"
@@ -50,9 +61,10 @@ class BuildWebIDE(build_py):
                 text=True,
             )
             if result.returncode != 0:
-                print(f"Warning: npm install failed: {result.stderr}")
-                super().run()
-                return
+                raise WebIDEBuildError(
+                    f"npm install failed:\n{result.stderr}\n"
+                    "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
+                )
 
         # Build Angular app
         print("Building web IDE...")
@@ -64,11 +76,13 @@ class BuildWebIDE(build_py):
             text=True,
         )
         if result.returncode != 0:
-            print(f"Warning: ng build failed: {result.stderr}")
+            error_output = result.stderr
             if result.stdout:
-                print(result.stdout)
-            super().run()
-            return
+                error_output += f"\n{result.stdout}"
+            raise WebIDEBuildError(
+                f"ng build failed:\n{error_output}\n"
+                "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
+            )
 
         # Copy built files to package
         if dist_src.exists():
@@ -77,7 +91,11 @@ class BuildWebIDE(build_py):
                 shutil.rmtree(dist_dest)
             shutil.copytree(dist_src, dist_dest)
         else:
-            print(f"Warning: Build output not found at {dist_src}")
+            raise WebIDEBuildError(
+                f"Build output not found at {dist_src}\n"
+                "The Angular build may have failed silently.\n"
+                "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
+            )
 
         # Continue with normal build
         super().run()
