@@ -6,16 +6,16 @@ robot:
       type: mecanum
       wheel_radius: 0.0295
       track_width: 0.19
-      max_velocity: 50.847
-      max_acceleration: 40.678
+      max_velocity: 99999
+      max_acceleration: 99999
       wheelbase: 0.12
       front_left_motor: front_left_motor
       front_right_motor: front_right_motor
       back_left_motor: rear_left_motor
       back_right_motor: rear_right_motor
     limits:
-      max_v: 1.5
-      max_omega: 15.789
+      max_v: 99999
+      max_omega: 99999
   odometry:
     type: FusedOdometry
 missions:
@@ -32,13 +32,13 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
+        kS: 0.11901609598441584
+        kV: 0.1644807457316206
+        kA: 0.01873290440882621
       pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
+        kp: 10.0
+        ki: 8.592738338475437
+        kd: 0.5894105399145476
       ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   front_right_motor:
@@ -47,13 +47,13 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
+        kS: 0.17716539850672264
+        kV: 0.15955894753992386
+        kA: 0.014141602912576457
       pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
+        kp: 10.0
+        ki: 10.0
+        kd: 0.7907963306377619
       ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   rear_left_motor:
@@ -62,13 +62,13 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
+        kS: 0.14969162525686092
+        kV: 0.18623375995061522
+        kA: 0.01674973923928998
       pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
+        kp: 10.0
+        ki: 10.0
+        kd: 0.7561736861335161
       ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   rear_right_motor:
@@ -77,13 +77,13 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.08
-        kV: 0.12
-        kA: 0.1
+        kS: 0.12376695366865965
+        kV: 0.19143857331191252
+        kA: 0.02
       pid:
-        kp: 2.4
-        ki: 0.3
-        kd: 0.08
+        kp: 10.0
+        ki: 10.0
+        kd: 1.1190760074843162
       ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   imu:
@@ -95,7 +95,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 10.70.146.215
+  pi_address: 10.70.146.134
   pi_port: 8421
   pi_user: pi
   remote_path: null

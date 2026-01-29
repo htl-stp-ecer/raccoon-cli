@@ -1,72 +1,87 @@
 {
   "upload.sh": {
     "hash": "0500660bd3793edc5f41e622256029d1f066bec5f3ac0ec05ede96522cd0d998",
-    "mtime": 1769411604.3324466,
+    "mtime": 1769678277.3828194,
     "size": 747
   },
   "raccoon.project.yml": {
-    "hash": "52b1b6390a9a9bb5453469f927dca2f60f76ef5c8c8f0b3d3cafc020d8c91078",
-    "mtime": 1769411607.6464021,
-    "size": 1914
+    "hash": "7b455ffec0dce5742edf92301b2c8cf3356735ef9211424231e090dc969ec4ee",
+    "mtime": 1769678276.4037802,
+    "size": 2159
   },
   ".raccoonignore": {
     "hash": "138aaf74cf5c5edb824311b6f4a3c4f03d520b2b81705ca8a6f6de7e037ab717",
-    "mtime": 1769411605.4714313,
+    "mtime": 1769678276.6527903,
     "size": 668
   },
   "run.sh": {
     "hash": "68baac1fe7ba8f187382c5cb6fc5b4a1ee08445f358846aa735bb830e2cf6a3e",
-    "mtime": 1769411604.7804406,
+    "mtime": 1769678276.6177888,
     "size": 655
   },
   "src/main.py": {
     "hash": "08c32ca47b3394f1f119f73ee1373180b26067236ee05efc90b2d3d5d058e0ff",
-    "mtime": 1769411604.5094442,
+    "mtime": 1769678277.550826,
     "size": 924
   },
   "src/__init__.py": {
     "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
-    "mtime": 1769411604.2104483,
+    "mtime": 1769678277.3348174,
     "size": 611
   },
   "src/hardware/__init__.py": {
     "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
-    "mtime": 1769411607.3034067,
+    "mtime": 1769678277.520825,
     "size": 611
   },
   "src/steps/__init__.py": {
     "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
-    "mtime": 1769411605.035437,
+    "mtime": 1769678277.277815,
     "size": 611
   },
   "src/missions/potato_mission.py": {
-    "hash": "874f4fba0ecabe6bdf91ebb6b1537d1c1ab13ed58ffdbb56cdbece4cd6bf7115",
-    "mtime": 1769411604.908439,
-    "size": 890
+    "hash": "1ded32e5bfd0af950411d71bb772db21622b50a69f7adf3a64c17910dbc94c6c",
+    "mtime": 1769678277.123809,
+    "size": 854
   },
   "src/missions/shutdown_mission.py": {
     "hash": "fd74fb24b1805a7a3404175fa2285b526beda7b07af5c7688179c8d56d82a60a",
-    "mtime": 1769411604.1154494,
+    "mtime": 1769678276.8517983,
     "size": 759
   },
   "src/missions/__init__.py": {
     "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
-    "mtime": 1769411605.6694286,
+    "mtime": 1769678277.4638226,
     "size": 611
   },
   "src/missions/setup_mission.py": {
-    "hash": "1d11dc748200755fdbc0e38d0363ea8935cd4e53712cf90930b54fe2b02b01fe",
-    "mtime": 1769411603.8684528,
-    "size": 1000
+    "hash": "a44967fff71bca6c04834249ddff1479810f440395bd143327516bda6c1f4b23",
+    "mtime": 1769678276.4557824,
+    "size": 1017
   },
   "src/hardware/.raccoon_codegen_cache.json": {
-    "hash": "67e303f2bb7b252881238e7d74305de8986c98d7607e237af92616a7d1aec376",
-    "mtime": 1769411606.5354168,
+    "hash": "f8c0ab63390ee95b21a97be90cf5508ad0367b0921e0b9eff298278571bd23c6",
+    "mtime": 1769678277.6428297,
     "size": 682
   },
   "logs/step_timing.db": {
-    "hash": "a4005647553a81c6cd0f1515f58c8eedfba17a3cd4634cba498c22d6c9ccfabd",
-    "mtime": 1769411606.6474154,
-    "size": 40960
+    "hash": "86c7cccd734c51c4aa9313d9d946e2d07dc6ae2ae7b85682e72df708e8afd93b",
+    "mtime": 1769678276.5437858,
+    "size": 53248
+  },
+  "mission_layouts.json": {
+    "hash": "f70ff643732be02f64b4fff4311ad5b21cf6b6ea84d17680463600ce1aa8d35e",
+    "mtime": 1769678276.7307935,
+    "size": 74
+  },
+  ".mission_snapshots/potato.json": {
+    "hash": "d6260188f5fd7dcce9fa5a36fe5cfc91fb890a4e08577fc02888b92f4fc4d094",
+    "mtime": 1769678276.766795,
+    "size": 108
+  },
+  "src/steps/wait_for_button.py": {
+    "hash": "25bd6392b9fb5faada80cf01517664726444451e3cfa6bfaf38bc53f7febdd74",
+    "mtime": 1769678277.172811,
+    "size": 515
   }
 }

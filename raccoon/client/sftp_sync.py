@@ -218,6 +218,27 @@ class HashCache:
             return ""
         return hasher.hexdigest()
 
+    def compute_hash_from_bytes(self, content: bytes, rel_path: str) -> str:
+        """
+        Compute SHA256 hash from bytes content.
+
+        For text files (based on rel_path extension), normalizes line endings.
+
+        Args:
+            content: File content as bytes
+            rel_path: Relative path (used to determine if text file)
+
+        Returns:
+            SHA256 hash as hex string
+        """
+        suffix = Path(rel_path).suffix.lower()
+        is_text = suffix in self.TEXT_EXTENSIONS
+
+        if is_text:
+            content = content.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+
+        return hashlib.sha256(content).hexdigest()
+
     def invalidate(self, rel_path: str) -> None:
         """Remove a file from the cache."""
         self._cache.pop(rel_path, None)
@@ -649,6 +670,38 @@ class SftpSync:
                 local_content = local_file.read_bytes()
                 with self.sftp.open(remote_file, "rb") as f:
                     remote_content = f.read()
+
+                # Check if remote actually changed by comparing content hash to manifest
+                # (mtime-based detection can have false positives)
+                manifest_entry = remote_manifest_files.get(rel_path)
+                if manifest_entry:
+                    remote_hash = self._hash_cache.compute_hash_from_bytes(remote_content, rel_path)
+                    manifest_hash = manifest_entry.get("hash")
+
+                    if remote_hash == manifest_hash:
+                        # Remote didn't actually change - just upload local version
+                        remote_dir = posixpath.dirname(remote_file)
+                        self._mkdir_p(remote_dir)
+                        self.sftp.put(str(local_file), remote_file)
+
+                        file_stat = local_file.stat()
+                        self._remote_manifest.set(rel_path, local_info["hash"], file_stat.st_mtime, file_stat.st_size)
+
+                        result.files_uploaded += 1
+                        result.bytes_transferred += local_info["size"]
+                        continue
+
+                    if local_info["hash"] == remote_hash:
+                        # Local didn't actually change (hash matches remote) - just download
+                        local_file.write_bytes(remote_content)
+                        self._hash_cache.invalidate(rel_path)
+                        new_hash = self._hash_cache.get_hash(rel_path, local_file)
+                        file_stat = local_file.stat()
+                        self._remote_manifest.set(rel_path, new_hash, file_stat.st_mtime, file_stat.st_size)
+
+                        result.files_downloaded += 1
+                        result.bytes_transferred += len(remote_content)
+                        continue
 
                 # Attempt auto-merge
                 merge_result = attempt_auto_merge(local_content, remote_content, rel_path)

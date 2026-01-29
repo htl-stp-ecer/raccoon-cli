@@ -4,3 +4,9 @@ build
 .claude
 __pycache__
 .idea
+
+# Web IDE build artifacts
+raccoon/web-ide-dist
+web-ide/node_modules
+web-ide/dist
+web-ide/.angular

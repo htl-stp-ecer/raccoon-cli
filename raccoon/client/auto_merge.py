@@ -235,15 +235,13 @@ def _try_line_merge(local_gap: list[str], remote_gap: list[str]) -> tuple[list[s
     local_only = [l for l in local_gap if l not in remote_set]
     remote_only = [l for l in remote_gap if l not in local_set]
 
-    # If there are modifications to same lines (not just additions), conflict
-    if local_only and remote_only:
-        # Check if these look like modifications to the same content
-        # Simple heuristic: if both have similar line counts, likely conflict
-        if len(local_only) > 0 and len(remote_only) > 0:
-            # Both modified the same region differently
-            return [], True
+    # If no common lines and both have unique content, it's a true modification conflict
+    # (both sides changed the same content differently, not just adding)
+    if not common and local_only and remote_only:
+        # Both modified the same region with no common ground
+        return [], True
 
-    # Merge: common lines + local additions + remote additions
+    # Try to merge: interleave based on ordering
     # This is a simplistic merge that may not preserve order perfectly
     # but it's better than conflicting on every difference
 

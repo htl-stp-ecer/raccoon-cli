@@ -16,15 +16,12 @@ Authors:
 Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
-from libstp import seq, Mission
-from libstp.step.drive import drive_forward
-from libstp.step.turn import turn_cw
+from libstp import Sequential, seq, Mission, drive_forward, turn_right
 
 
 class PotatoMission(Mission):
-    def sequence(self) -> "Step":
+    def sequence(self) -> Sequential:
         return seq([
             drive_forward(cm=20),
-            turn_cw(degrees=90)
+            turn_right(degrees=90)
         ])
-

@@ -401,3 +401,103 @@ class TestAutoMerge:
         result = attempt_auto_merge(local, remote, "test.py")
 
         assert result.status == MergeStatus.BINARY
+
+    def test_both_sides_add_to_different_areas_merges(self):
+        """When both sides add content to different areas, should merge successfully."""
+        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
+
+        # Both sides start with the same base and add in different places
+        # Local: adds at the end
+        local = b"line1\nline2\nline3\nlocal_addition\n"
+        # Remote: adds at the beginning
+        remote = b"remote_addition\nline1\nline2\nline3\n"
+
+        result = attempt_auto_merge(local, remote, "test.py")
+
+        assert result.status == MergeStatus.SUCCESS
+        merged = result.merged_content.decode('utf-8')
+        assert "remote_addition" in merged
+        assert "local_addition" in merged
+        assert "line1" in merged
+        assert "line2" in merged
+        assert "line3" in merged
+
+    def test_both_sides_add_different_lines_with_common_context(self):
+        """When both sides add different lines with common lines in between, should merge."""
+        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
+
+        # Local adds local_new, remote adds remote_new, but they share common context
+        local = b"common1\nlocal_new\ncommon2\n"
+        remote = b"common1\nremote_new\ncommon2\n"
+
+        result = attempt_auto_merge(local, remote, "test.py")
+
+        # This is still a conflict because both modified the same region
+        # (the gap between common1 and common2) with no overlap
+        assert result.status == MergeStatus.CONFLICT
+
+    def test_interleaved_additions_merge(self):
+        """When additions can be interleaved based on context, should merge."""
+        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
+
+        # Local: has extra line after common
+        local = b"common\nlocal_extra\n"
+        # Remote: has extra line before common
+        remote = b"remote_extra\ncommon\n"
+
+        result = attempt_auto_merge(local, remote, "test.py")
+
+        assert result.status == MergeStatus.SUCCESS
+        merged = result.merged_content.decode('utf-8')
+        # Both additions should be present
+        assert "local_extra" in merged
+        assert "remote_extra" in merged
+        assert "common" in merged
+
+
+class TestHashFromBytes:
+    """Test hash computation from bytes content."""
+
+    def test_compute_hash_from_bytes_normalizes_text(self, tmp_path: Path):
+        """Hash from bytes should normalize line endings for text files."""
+        from raccoon.client.sftp_sync import HashCache
+
+        cache = HashCache(tmp_path)
+
+        content_lf = b"line1\nline2\n"
+        content_crlf = b"line1\r\nline2\r\n"
+
+        hash_lf = cache.compute_hash_from_bytes(content_lf, "test.py")
+        hash_crlf = cache.compute_hash_from_bytes(content_crlf, "test.py")
+
+        assert hash_lf == hash_crlf
+
+    def test_compute_hash_from_bytes_no_normalize_binary(self, tmp_path: Path):
+        """Hash from bytes should NOT normalize binary files."""
+        from raccoon.client.sftp_sync import HashCache
+
+        cache = HashCache(tmp_path)
+
+        content_lf = b"\x00\n\x01"
+        content_crlf = b"\x00\r\n\x01"
+
+        hash_lf = cache.compute_hash_from_bytes(content_lf, "test.bin")
+        hash_crlf = cache.compute_hash_from_bytes(content_crlf, "test.bin")
+
+        # Binary files should NOT be normalized
+        assert hash_lf != hash_crlf
+
+    def test_compute_hash_from_bytes_matches_file_hash(self, tmp_path: Path):
+        """Hash from bytes should match hash computed from file."""
+        from raccoon.client.sftp_sync import HashCache
+
+        cache = HashCache(tmp_path)
+
+        content = b"test content\nwith newlines\n"
+        test_file = tmp_path / "test.py"
+        test_file.write_bytes(content)
+
+        hash_from_bytes = cache.compute_hash_from_bytes(content, "test.py")
+        hash_from_file = cache.get_hash("test.py", test_file)
+
+        assert hash_from_bytes == hash_from_file

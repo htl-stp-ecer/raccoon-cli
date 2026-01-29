@@ -41,4 +41,5 @@ raccoon = [
     "templates/**/*.py",
     "templates/**/*.sh",
     "templates/**/*.gitignore",
+    "web-ide-dist/**/*",
 ]

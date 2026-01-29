@@ -17,15 +17,16 @@ Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
 
-from libstp import Mission, Sequential, seq, calibrate_sensors, calibrate_wait_for_light, calibrate_distance
+from libstp import Mission, Sequential, seq
 
-from src.hardware.defs import Defs
+from src.steps.wait_for_button import wait_for_button
 
 
 class SetupMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
-            #calibrate_sensors(),
-            calibrate_distance(),
-            #calibrate_wait_for_light(Defs.front_left_ir_sensor)
+            # calibrate_sensors(),
+            # calibrate_distance(calibrate_light_sensors=True),
+            # calibrate_wait_for_light(Defs.front_left_ir_sensor),
+            wait_for_button()
         ])

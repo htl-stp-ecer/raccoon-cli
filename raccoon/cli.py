@@ -22,6 +22,7 @@ from raccoon.commands import (
     lcm_group,
     completion_group,
     prompt_completion_setup,
+    web_command,
 )
 from raccoon.logging_utils import configure_logging, render_banner, render_summary
 
@@ -93,6 +94,7 @@ main.add_command(status_command)
 main.add_command(sync_command)
 main.add_command(lcm_group)
 main.add_command(completion_group)
+main.add_command(web_command)
 
 
 if __name__ == "__main__":
