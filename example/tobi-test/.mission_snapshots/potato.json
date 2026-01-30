@@ -1,1 +1,1 @@
-{"name":"PotatoMission","is_setup":false,"is_shutdown":false,"order":0,"steps":[],"comments":[],"groups":[]}
+{"name":"PotatoMission","is_setup":false,"is_shutdown":false,"order":0,"steps":[{"step_type":"drive_forward","function_name":"drive_forward","arguments":[{"name":"cm","value":null,"type":"keyword"},{"name":"velocity","value":null,"type":"keyword"}],"position":{"x":251,"y":152},"children":null}],"comments":[],"groups":[]}

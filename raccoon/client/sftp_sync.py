@@ -1,16 +1,22 @@
-"""SFTP-based file synchronization using paramiko."""
+"""SFTP-based file synchronization using pyftpsync.
 
-import hashlib
-import json
-import posixpath
-import stat
+This module provides bidirectional synchronization between local project folders
+and remote Pi folders over SFTP, with proper conflict detection and resolution.
+"""
+
+import fnmatch
+import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import quote
 
-import paramiko
-from rich.progress import Progress, TaskID
+from rich.progress import Progress
+
+# Configure pyftpsync logging
+logging.getLogger("ftpsync").setLevel(logging.WARNING)
 
 
 # Constants
@@ -24,7 +30,7 @@ class SyncDirection(Enum):
 
     PUSH = "push"  # Local -> Remote
     PULL = "pull"  # Remote -> Local
-    BIDIRECTIONAL = "bidirectional"  # Two-way sync based on mtime
+    BIDIRECTIONAL = "bidirectional"  # Two-way sync
 
 
 def load_raccoonignore(project_root: Path) -> list[str]:
@@ -106,250 +112,52 @@ class SyncOptions:
     )
 
 
-class HashCache:
-    """
-    Local hash cache with mtime-based invalidation.
+class RaccoonMatcher:
+    """Custom matcher for pyftpsync that respects .raccoonignore patterns."""
 
-    Stores computed file hashes locally to avoid re-hashing unchanged files.
-    Cache entries are invalidated when file mtime changes.
-    """
+    def __init__(self, exclude_patterns: list[str]):
+        self.exclude_patterns = exclude_patterns
 
-    def __init__(self, project_root: Path):
+    def __call__(self, entry_name: str, entry_type: str) -> bool:
         """
-        Initialize the hash cache.
+        Determine if an entry should be included in sync.
 
         Args:
-            project_root: Path to the project root directory
-        """
-        self.project_root = project_root
-        self.cache_dir = project_root / LOCAL_CACHE_DIR
-        self.cache_file = self.cache_dir / LOCAL_CACHE_FILENAME
-        self._cache: dict[str, dict] = {}
-        self._load_cache()
-
-    def _load_cache(self) -> None:
-        """Load cache from disk if it exists."""
-        if self.cache_file.exists():
-            try:
-                with open(self.cache_file, "r") as f:
-                    self._cache = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                self._cache = {}
-
-    def save_cache(self) -> None:
-        """Save cache to disk."""
-        try:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            with open(self.cache_file, "w") as f:
-                json.dump(self._cache, f, indent=2)
-        except IOError:
-            pass  # Cache save failure is non-fatal
-
-    def get_hash(self, rel_path: str, file_path: Path) -> str:
-        """
-        Get hash for a file, using cache if mtime matches.
-
-        Args:
-            rel_path: Relative path (used as cache key)
-            file_path: Absolute path to the file
+            entry_name: Name of the file or directory
+            entry_type: 'file' or 'directory'
 
         Returns:
-            SHA256 hash of the file
+            True if entry should be included, False to exclude
         """
-        try:
-            file_stat = file_path.stat()
-            current_mtime = file_stat.st_mtime
-            current_size = file_stat.st_size
-        except OSError:
-            # File doesn't exist or can't be accessed, compute hash directly
-            return self._compute_hash(file_path)
+        # Always exclude pyftpsync metadata
+        if entry_name == ".pyftpsync-meta.json":
+            return False
+        if entry_name == REMOTE_MANIFEST_FILENAME:
+            return False
 
-        cached = self._cache.get(rel_path)
-        if cached and cached.get("mtime") == current_mtime and cached.get("size") == current_size:
-            return cached["hash"]
-
-        # Cache miss or invalidated - compute fresh hash
-        file_hash = self._compute_hash(file_path)
-        self._cache[rel_path] = {
-            "hash": file_hash,
-            "mtime": current_mtime,
-            "size": current_size,
-        }
-        return file_hash
-
-    # Text file extensions for line ending normalization
-    TEXT_EXTENSIONS = {
-        '.py', '.yml', '.yaml', '.json', '.txt', '.md', '.rst',
-        '.cfg', '.ini', '.toml', '.sh', '.bash', '.zsh',
-        '.html', '.css', '.js', '.ts', '.jsx', '.tsx',
-        '.xml', '.csv', '.env', '.gitignore', '.dockerignore',
-    }
-
-    def _compute_hash(self, file_path: Path, normalize_line_endings: bool = True) -> str:
-        """
-        Compute SHA256 hash of a file.
-
-        For text files, normalizes line endings (CRLF -> LF, CR -> LF) to ensure
-        consistent hashes across Windows/Linux platforms.
-
-        Args:
-            file_path: Path to the file to hash
-            normalize_line_endings: Whether to normalize line endings for text files
-
-        Returns:
-            SHA256 hash as hex string, or empty string on error
-        """
-        hasher = hashlib.sha256()
-        try:
-            # Check if it's a text file by extension
-            is_text = file_path.suffix.lower() in self.TEXT_EXTENSIONS
-
-            if is_text and normalize_line_endings:
-                with open(file_path, "rb") as f:
-                    content = f.read()
-                # Normalize CRLF -> LF and CR -> LF
-                content = content.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
-                hasher.update(content)
-            else:
-                with open(file_path, "rb") as f:
-                    for chunk in iter(lambda: f.read(8192), b""):
-                        hasher.update(chunk)
-        except IOError:
-            return ""
-        return hasher.hexdigest()
-
-    def compute_hash_from_bytes(self, content: bytes, rel_path: str) -> str:
-        """
-        Compute SHA256 hash from bytes content.
-
-        For text files (based on rel_path extension), normalizes line endings.
-
-        Args:
-            content: File content as bytes
-            rel_path: Relative path (used to determine if text file)
-
-        Returns:
-            SHA256 hash as hex string
-        """
-        suffix = Path(rel_path).suffix.lower()
-        is_text = suffix in self.TEXT_EXTENSIONS
-
-        if is_text:
-            content = content.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
-
-        return hashlib.sha256(content).hexdigest()
-
-    def invalidate(self, rel_path: str) -> None:
-        """Remove a file from the cache."""
-        self._cache.pop(rel_path, None)
-
-    def clear(self) -> None:
-        """Clear all cached entries."""
-        self._cache.clear()
-
-
-class RemoteManifest:
-    """
-    Manages the remote manifest file for tracking synced file hashes.
-
-    The manifest stores {filename: {hash, mtime, size}} for all synced files,
-    allowing hash comparison without re-downloading files.
-    """
-
-    def __init__(self, sftp: paramiko.SFTPClient, remote_path: str):
-        """
-        Initialize the remote manifest manager.
-
-        Args:
-            sftp: Active SFTP client
-            remote_path: Base remote path for the project
-        """
-        self.sftp = sftp
-        self.remote_path = remote_path
-        self.manifest_path = posixpath.join(remote_path, REMOTE_MANIFEST_FILENAME)
-        self._manifest: dict[str, dict] = {}
-        self._dirty = False
-
-    def load(self) -> None:
-        """Load manifest from remote if it exists."""
-        try:
-            with self.sftp.open(self.manifest_path, "r") as f:
-                self._manifest = json.load(f)
-        except (IOError, json.JSONDecodeError):
-            self._manifest = {}
-
-    def save(self) -> None:
-        """Save manifest to remote."""
-        if not self._dirty:
-            return
-        try:
-            with self.sftp.open(self.manifest_path, "w") as f:
-                f.write(json.dumps(self._manifest, indent=2))
-            self._dirty = False
-        except IOError:
-            pass  # Manifest save failure is non-fatal
-
-    def get(self, rel_path: str) -> Optional[dict]:
-        """
-        Get manifest entry for a file.
-
-        Args:
-            rel_path: Relative path of the file
-
-        Returns:
-            Dict with hash, mtime, size or None if not found
-        """
-        return self._manifest.get(rel_path)
-
-    def set(self, rel_path: str, file_hash: str, mtime: float, size: int) -> None:
-        """
-        Set manifest entry for a file.
-
-        Args:
-            rel_path: Relative path of the file
-            file_hash: SHA256 hash of the file
-            mtime: Modification time
-            size: File size in bytes
-        """
-        self._manifest[rel_path] = {
-            "hash": file_hash,
-            "mtime": mtime,
-            "size": size,
-        }
-        self._dirty = True
-
-    def remove(self, rel_path: str) -> None:
-        """Remove a file from the manifest."""
-        if rel_path in self._manifest:
-            del self._manifest[rel_path]
-            self._dirty = True
-
-    def get_all_files(self) -> dict[str, dict]:
-        """Get all files in the manifest."""
-        return self._manifest.copy()
-
-    def clear(self) -> None:
-        """Clear all manifest entries."""
-        self._manifest.clear()
-        self._dirty = True
+        for pattern in self.exclude_patterns:
+            if fnmatch.fnmatch(entry_name, pattern):
+                return False
+            # Also check if it's a path pattern
+            if "/" in pattern and fnmatch.fnmatch(entry_name, pattern.split("/")[-1]):
+                return False
+        return True
 
 
 class SftpSync:
     """
-    Smart file synchronization using SFTP.
+    Smart file synchronization using SFTP via pyftpsync.
 
     Features:
-    - Hash-based change detection (only upload changed files)
-    - Local hash caching with mtime-based invalidation
-    - Remote manifest for tracking synced file hashes
-    - Bidirectional sync support (PUSH, PULL, BIDIRECTIONAL)
+    - Bidirectional sync with proper conflict detection
+    - Metadata tracking for accurate change detection
     - Exclusion patterns for ignoring files
     - Optional remote/local file deletion
     - Progress reporting
-    - Conflict detection in bidirectional mode
+    - Conflict detection with resolution support
     """
 
-    def __init__(self, ssh_client: paramiko.SSHClient):
+    def __init__(self, ssh_client):
         """
         Initialize the sync client.
 
@@ -357,9 +165,7 @@ class SftpSync:
             ssh_client: Connected paramiko SSHClient
         """
         self.ssh = ssh_client
-        self.sftp: Optional[paramiko.SFTPClient] = None
-        self._hash_cache: Optional[HashCache] = None
-        self._remote_manifest: Optional[RemoteManifest] = None
+        self._transport = None
 
     def sync(
         self,
@@ -384,421 +190,80 @@ class SftpSync:
         result = SyncResult(success=True)
 
         try:
-            self.sftp = self.ssh.open_sftp()
-            self._hash_cache = HashCache(local_path)
-            self._remote_manifest = RemoteManifest(self.sftp, remote_path)
+            from ftpsync.targets import FsTarget
+            from ftpsync.sftp_target import SFTPTarget
+            from ftpsync.synchronizers import BiDirSynchronizer, UploadSynchronizer, DownloadSynchronizer
 
-            # Ensure remote directory exists
-            self._mkdir_p(remote_path)
+            # Get SSH transport info for SFTP connection
+            transport = self.ssh.get_transport()
+            hostname = transport.getpeername()[0]
 
-            # Load remote manifest
-            self._remote_manifest.load()
+            # Create targets
+            local_target = FsTarget(str(local_path))
 
-            # Build exclude patterns including manifest file
-            exclude_patterns = options.exclude_patterns + [REMOTE_MANIFEST_FILENAME]
+            # Build SFTP URL - pyftpsync needs sftp:// URL format
+            # We'll pass the existing SSH transport through extra_opts
+            remote_target = SFTPTarget(
+                remote_path,
+                hostname,
+                port=22,
+                username=transport.get_username(),
+                password=None,  # Use key-based auth from existing connection
+                timeout=30,
+                extra_opts={
+                    "ssh_client": self.ssh,  # Reuse existing SSH connection
+                },
+            )
 
+            # Build exclude patterns
+            exclude_patterns = options.exclude_patterns + [REMOTE_MANIFEST_FILENAME, ".pyftpsync-meta.json"]
+
+            # Configure sync options
+            sync_opts = {
+                "verbose": 1,
+                "dry_run": False,
+                "match": None,  # No inclusion filter
+                "exclude": ",".join(exclude_patterns),
+            }
+
+            # Select synchronizer based on direction
             if options.direction == SyncDirection.PUSH:
-                self._sync_push(local_path, remote_path, options, exclude_patterns, result, progress_callback)
+                sync_opts["delete"] = options.delete_remote
+                sync_opts["force"] = False
+                synchronizer = UploadSynchronizer(local_target, remote_target, sync_opts)
+
             elif options.direction == SyncDirection.PULL:
-                self._sync_pull(local_path, remote_path, options, exclude_patterns, result, progress_callback)
-            elif options.direction == SyncDirection.BIDIRECTIONAL:
-                self._sync_bidirectional(local_path, remote_path, options, exclude_patterns, result, progress_callback)
+                sync_opts["delete"] = options.delete_local
+                sync_opts["force"] = False
+                synchronizer = DownloadSynchronizer(local_target, remote_target, sync_opts)
 
-            # Save caches
-            self._hash_cache.save_cache()
-            self._remote_manifest.save()
+            else:  # BIDIRECTIONAL
+                sync_opts["delete"] = False  # Don't auto-delete in bidirectional
+                sync_opts["resolve"] = "newer"  # Prefer newer files, but report conflicts
+                synchronizer = BiDirSynchronizer(local_target, remote_target, sync_opts)
 
+            # Run the sync
+            stats = synchronizer.run()
+
+            # Extract stats from pyftpsync result
+            result.files_uploaded = getattr(stats, 'files_written', 0) or 0
+            result.files_downloaded = getattr(stats, 'download_files_written', 0) or 0
+            result.files_deleted = getattr(stats, 'files_deleted', 0) or 0
+            result.bytes_transferred = getattr(stats, 'bytes_written', 0) or 0
+
+            # Check for conflicts (pyftpsync tracks these)
+            conflict_files = getattr(stats, 'conflict_files', []) or []
+            if conflict_files:
+                result.conflicts = list(conflict_files)
+
+        except ImportError as e:
+            result.success = False
+            result.errors.append(f"pyftpsync not installed: {e}")
         except Exception as e:
             result.success = False
             result.errors.append(str(e))
 
-        finally:
-            if self.sftp:
-                self.sftp.close()
-                self.sftp = None
-
         return result
-
-    def _sync_push(
-        self,
-        local_path: Path,
-        remote_path: str,
-        options: SyncOptions,
-        exclude_patterns: list[str],
-        result: SyncResult,
-        progress_callback: Optional[Callable[[str, int, int], None]] = None,
-    ) -> None:
-        """
-        Push local files to remote.
-
-        Args:
-            local_path: Local directory path
-            remote_path: Remote directory path
-            options: Sync options
-            exclude_patterns: Patterns to exclude
-            result: SyncResult to update
-            progress_callback: Progress callback function
-        """
-        # Get local files with hashes
-        local_files = self._get_local_files(local_path, exclude_patterns)
-
-        # Get remote files from manifest
-        remote_manifest_files = self._remote_manifest.get_all_files()
-
-        # Calculate what to upload
-        to_upload = []
-        for rel_path, local_info in local_files.items():
-            manifest_entry = remote_manifest_files.get(rel_path)
-            if manifest_entry is None or local_info["hash"] != manifest_entry.get("hash"):
-                to_upload.append((rel_path, local_info))
-
-        # Upload files
-        for rel_path, info in to_upload:
-            local_file = local_path / rel_path
-            remote_file = f"{remote_path}/{rel_path}"
-
-            try:
-                remote_dir = posixpath.dirname(remote_file)
-                self._mkdir_p(remote_dir)
-
-                if progress_callback:
-                    progress_callback(rel_path, 0, info["size"])
-
-                self.sftp.put(str(local_file), remote_file)
-
-                if progress_callback:
-                    progress_callback(rel_path, info["size"], info["size"])
-
-                # Update remote manifest
-                file_stat = local_file.stat()
-                self._remote_manifest.set(rel_path, info["hash"], file_stat.st_mtime, info["size"])
-
-                result.files_uploaded += 1
-                result.bytes_transferred += info["size"]
-            except Exception as e:
-                result.errors.append(f"Failed to upload {rel_path}: {e}")
-
-        # Delete remote files not in local
-        if options.delete_remote:
-            # Get actual remote files (not just manifest)
-            remote_files = self._get_remote_files(remote_path, exclude_patterns)
-            for rel_path in remote_files:
-                if rel_path not in local_files:
-                    remote_file = f"{remote_path}/{rel_path}"
-                    try:
-                        self.sftp.remove(remote_file)
-                        self._remote_manifest.remove(rel_path)
-                        result.files_deleted += 1
-                    except Exception as e:
-                        result.errors.append(f"Failed to delete {rel_path}: {e}")
-
-            self._cleanup_empty_dirs(remote_path)
-
-    def _sync_pull(
-        self,
-        local_path: Path,
-        remote_path: str,
-        options: SyncOptions,
-        exclude_patterns: list[str],
-        result: SyncResult,
-        progress_callback: Optional[Callable[[str, int, int], None]] = None,
-    ) -> None:
-        """
-        Pull remote files to local.
-
-        Args:
-            local_path: Local directory path
-            remote_path: Remote directory path
-            options: Sync options
-            exclude_patterns: Patterns to exclude
-            result: SyncResult to update
-            progress_callback: Progress callback function
-        """
-        # Get remote files
-        remote_files = self._get_remote_files(remote_path, exclude_patterns)
-
-        # Get local files
-        local_files = self._get_local_files(local_path, exclude_patterns)
-
-        # Get remote manifest for hash comparison
-        remote_manifest_files = self._remote_manifest.get_all_files()
-
-        # Calculate what to download
-        to_download = []
-        for rel_path, remote_info in remote_files.items():
-            local_info = local_files.get(rel_path)
-            manifest_entry = remote_manifest_files.get(rel_path)
-
-            if local_info is None:
-                # File doesn't exist locally
-                to_download.append((rel_path, remote_info))
-            elif manifest_entry and local_info["hash"] != manifest_entry.get("hash"):
-                # Local hash differs from manifest hash
-                to_download.append((rel_path, remote_info))
-            elif not manifest_entry:
-                # No manifest entry, compare by mtime/size
-                if remote_info.get("mtime", 0) > local_info.get("mtime", 0):
-                    to_download.append((rel_path, remote_info))
-
-        # Download files
-        for rel_path, info in to_download:
-            local_file = local_path / rel_path
-            remote_file = f"{remote_path}/{rel_path}"
-
-            try:
-                local_file.parent.mkdir(parents=True, exist_ok=True)
-
-                if progress_callback:
-                    progress_callback(rel_path, 0, info.get("size", 0))
-
-                self.sftp.get(remote_file, str(local_file))
-
-                if progress_callback:
-                    progress_callback(rel_path, info.get("size", 0), info.get("size", 0))
-
-                # Invalidate local cache for this file
-                self._hash_cache.invalidate(rel_path)
-
-                result.files_downloaded += 1
-                result.bytes_transferred += info.get("size", 0)
-            except Exception as e:
-                result.errors.append(f"Failed to download {rel_path}: {e}")
-
-        # Delete local files not in remote
-        if options.delete_local:
-            for rel_path in local_files:
-                if rel_path not in remote_files:
-                    local_file = local_path / rel_path
-                    try:
-                        local_file.unlink()
-                        self._hash_cache.invalidate(rel_path)
-                        result.files_deleted += 1
-                    except Exception as e:
-                        result.errors.append(f"Failed to delete {rel_path}: {e}")
-
-            self._cleanup_empty_local_dirs(local_path)
-
-    def _sync_bidirectional(
-        self,
-        local_path: Path,
-        remote_path: str,
-        options: SyncOptions,
-        exclude_patterns: list[str],
-        result: SyncResult,
-        progress_callback: Optional[Callable[[str, int, int], None]] = None,
-    ) -> None:
-        """
-        Bidirectional sync using mtime to determine direction.
-
-        Attempts auto-merge when both local and remote have changed.
-        Only reports conflicts when auto-merge fails.
-
-        Args:
-            local_path: Local directory path
-            remote_path: Remote directory path
-            options: Sync options
-            exclude_patterns: Patterns to exclude
-            result: SyncResult to update
-            progress_callback: Progress callback function
-        """
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        # Get local and remote files
-        local_files = self._get_local_files(local_path, exclude_patterns)
-        remote_files = self._get_remote_files(remote_path, exclude_patterns)
-        remote_manifest_files = self._remote_manifest.get_all_files()
-
-        # All unique paths
-        all_paths = set(local_files.keys()) | set(remote_files.keys())
-
-        to_upload = []
-        to_download = []
-        to_merge = []  # (rel_path, local_info, remote_info) for files needing merge
-
-        for rel_path in all_paths:
-            local_info = local_files.get(rel_path)
-            remote_info = remote_files.get(rel_path)
-            manifest_entry = remote_manifest_files.get(rel_path)
-
-            if local_info and not remote_info:
-                # Only local has the file - upload it
-                to_upload.append((rel_path, local_info))
-            elif remote_info and not local_info:
-                # Only remote has the file - download it
-                to_download.append((rel_path, remote_info))
-            elif local_info and remote_info:
-                # Both have the file - compare
-                local_hash = local_info["hash"]
-                manifest_hash = manifest_entry.get("hash") if manifest_entry else None
-
-                if manifest_hash:
-                    local_changed = local_hash != manifest_hash
-                    # For remote, check if mtime or size changed since manifest
-                    remote_changed = (
-                        remote_info.get("mtime", 0) != manifest_entry.get("mtime", 0)
-                        or remote_info.get("size", 0) != manifest_entry.get("size", 0)
-                    )
-
-                    if local_changed and remote_changed:
-                        # Both changed - try to auto-merge
-                        to_merge.append((rel_path, local_info, remote_info))
-                    elif local_changed:
-                        # Only local changed - upload
-                        to_upload.append((rel_path, local_info))
-                    elif remote_changed:
-                        # Only remote changed - download
-                        to_download.append((rel_path, remote_info))
-                    # else: neither changed, skip
-                else:
-                    # No manifest entry - use mtime to decide
-                    local_mtime = local_info.get("mtime", 0)
-                    remote_mtime = remote_info.get("mtime", 0)
-
-                    if local_mtime > remote_mtime:
-                        to_upload.append((rel_path, local_info))
-                    elif remote_mtime > local_mtime:
-                        to_download.append((rel_path, remote_info))
-                    # else: same mtime, skip
-
-        # Attempt auto-merge for files where both sides changed
-        for rel_path, local_info, remote_info in to_merge:
-            local_file = local_path / rel_path
-            remote_file = f"{remote_path}/{rel_path}"
-
-            try:
-                # Read both versions
-                local_content = local_file.read_bytes()
-                with self.sftp.open(remote_file, "rb") as f:
-                    remote_content = f.read()
-
-                # Check if remote actually changed by comparing content hash to manifest
-                # (mtime-based detection can have false positives)
-                manifest_entry = remote_manifest_files.get(rel_path)
-                if not manifest_entry:
-                    import logging
-                    logging.getLogger("raccoon").info(f"No manifest entry for {rel_path} - cannot verify if remote changed")
-                if manifest_entry:
-                    remote_hash = self._hash_cache.compute_hash_from_bytes(remote_content, rel_path)
-                    manifest_hash = manifest_entry.get("hash")
-                    local_hash = local_info["hash"]
-
-                    # Debug: show what hashes we're comparing
-                    import logging
-                    logger = logging.getLogger("raccoon")
-                    logger.info(f"Merge check for {rel_path}:")
-                    logger.info(f"  local_hash:    {local_hash[:16]}...")
-                    logger.info(f"  remote_hash:   {remote_hash[:16]}...")
-                    logger.info(f"  manifest_hash: {manifest_hash[:16] if manifest_hash else 'None'}...")
-
-                    if remote_hash == manifest_hash:
-                        # Remote didn't actually change - just upload local version
-                        remote_dir = posixpath.dirname(remote_file)
-                        self._mkdir_p(remote_dir)
-                        self.sftp.put(str(local_file), remote_file)
-
-                        file_stat = local_file.stat()
-                        self._remote_manifest.set(rel_path, local_info["hash"], file_stat.st_mtime, file_stat.st_size)
-
-                        result.files_uploaded += 1
-                        result.bytes_transferred += local_info["size"]
-                        continue
-
-                    if local_info["hash"] == remote_hash:
-                        # Local didn't actually change (hash matches remote) - just download
-                        local_file.write_bytes(remote_content)
-                        self._hash_cache.invalidate(rel_path)
-                        new_hash = self._hash_cache.get_hash(rel_path, local_file)
-                        file_stat = local_file.stat()
-                        self._remote_manifest.set(rel_path, new_hash, file_stat.st_mtime, file_stat.st_size)
-
-                        result.files_downloaded += 1
-                        result.bytes_transferred += len(remote_content)
-                        continue
-
-                # Attempt auto-merge
-                merge_result = attempt_auto_merge(local_content, remote_content, rel_path)
-
-                if merge_result.status == MergeStatus.SUCCESS:
-                    # Auto-merge succeeded - write merged content locally and upload
-                    local_file.write_bytes(merge_result.merged_content)
-
-                    # Upload merged version to remote
-                    remote_dir = posixpath.dirname(remote_file)
-                    self._mkdir_p(remote_dir)
-                    self.sftp.put(str(local_file), remote_file)
-
-                    # Update caches
-                    self._hash_cache.invalidate(rel_path)
-                    new_hash = self._hash_cache.get_hash(rel_path, local_file)
-                    file_stat = local_file.stat()
-                    self._remote_manifest.set(rel_path, new_hash, file_stat.st_mtime, file_stat.st_size)
-
-                    result.files_auto_merged += 1
-                    result.bytes_transferred += len(merge_result.merged_content)
-
-                elif merge_result.status == MergeStatus.IDENTICAL:
-                    # Files are identical after normalization - just update manifest
-                    file_stat = local_file.stat()
-                    self._remote_manifest.set(rel_path, local_info["hash"], file_stat.st_mtime, file_stat.st_size)
-
-                else:
-                    # CONFLICT or BINARY - cannot auto-merge
-                    result.conflicts.append(rel_path)
-
-            except Exception as e:
-                result.errors.append(f"Failed to merge {rel_path}: {e}")
-                result.conflicts.append(rel_path)
-
-        # Perform uploads
-        for rel_path, info in to_upload:
-            local_file = local_path / rel_path
-            remote_file = f"{remote_path}/{rel_path}"
-
-            try:
-                remote_dir = posixpath.dirname(remote_file)
-                self._mkdir_p(remote_dir)
-
-                if progress_callback:
-                    progress_callback(rel_path, 0, info["size"])
-
-                self.sftp.put(str(local_file), remote_file)
-
-                if progress_callback:
-                    progress_callback(rel_path, info["size"], info["size"])
-
-                file_stat = local_file.stat()
-                self._remote_manifest.set(rel_path, info["hash"], file_stat.st_mtime, info["size"])
-
-                result.files_uploaded += 1
-                result.bytes_transferred += info["size"]
-            except Exception as e:
-                result.errors.append(f"Failed to upload {rel_path}: {e}")
-
-        # Perform downloads
-        for rel_path, info in to_download:
-            local_file = local_path / rel_path
-            remote_file = f"{remote_path}/{rel_path}"
-
-            try:
-                local_file.parent.mkdir(parents=True, exist_ok=True)
-
-                if progress_callback:
-                    progress_callback(rel_path, 0, info.get("size", 0))
-
-                self.sftp.get(remote_file, str(local_file))
-
-                if progress_callback:
-                    progress_callback(rel_path, info.get("size", 0), info.get("size", 0))
-
-                # Re-hash the downloaded file and update manifest
-                new_hash = self._hash_cache.get_hash(rel_path, local_file)
-                file_stat = local_file.stat()
-                self._remote_manifest.set(rel_path, new_hash, file_stat.st_mtime, file_stat.st_size)
-
-                result.files_downloaded += 1
-                result.bytes_transferred += info.get("size", 0)
-            except Exception as e:
-                result.errors.append(f"Failed to download {rel_path}: {e}")
 
     def sync_with_progress(
         self,
@@ -817,325 +282,322 @@ class SftpSync:
         Returns:
             SyncResult with statistics
         """
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
         options = options or SyncOptions()
         result = SyncResult(success=True)
 
         try:
-            self.sftp = self.ssh.open_sftp()
-            self._hash_cache = HashCache(local_path)
-            self._remote_manifest = RemoteManifest(self.sftp, remote_path)
-
-            self._mkdir_p(remote_path)
-            self._remote_manifest.load()
-
-            exclude_patterns = options.exclude_patterns + [REMOTE_MANIFEST_FILENAME]
-
-            # Get file lists based on direction
-            local_files = self._get_local_files(local_path, exclude_patterns)
-            remote_files = self._get_remote_files(remote_path, exclude_patterns)
-            remote_manifest_files = self._remote_manifest.get_all_files()
-
-            to_upload = []
-            to_download = []
-            to_merge = []  # (rel_path, local_info, remote_info) for files needing merge
-
-            if options.direction == SyncDirection.PUSH:
-                for rel_path, local_info in local_files.items():
-                    manifest_entry = remote_manifest_files.get(rel_path)
-                    if manifest_entry is None or local_info["hash"] != manifest_entry.get("hash"):
-                        to_upload.append((rel_path, local_info))
-
-            elif options.direction == SyncDirection.PULL:
-                for rel_path, remote_info in remote_files.items():
-                    local_info = local_files.get(rel_path)
-                    manifest_entry = remote_manifest_files.get(rel_path)
-                    if local_info is None:
-                        to_download.append((rel_path, remote_info))
-                    elif manifest_entry and local_info["hash"] != manifest_entry.get("hash"):
-                        to_download.append((rel_path, remote_info))
-                    elif not manifest_entry and remote_info.get("mtime", 0) > local_info.get("mtime", 0):
-                        to_download.append((rel_path, remote_info))
-
-            elif options.direction == SyncDirection.BIDIRECTIONAL:
-                all_paths = set(local_files.keys()) | set(remote_files.keys())
-                for rel_path in all_paths:
-                    local_info = local_files.get(rel_path)
-                    remote_info = remote_files.get(rel_path)
-                    manifest_entry = remote_manifest_files.get(rel_path)
-
-                    if local_info and not remote_info:
-                        to_upload.append((rel_path, local_info))
-                    elif remote_info and not local_info:
-                        to_download.append((rel_path, remote_info))
-                    elif local_info and remote_info:
-                        local_hash = local_info["hash"]
-                        manifest_hash = manifest_entry.get("hash") if manifest_entry else None
-
-                        if manifest_hash:
-                            local_changed = local_hash != manifest_hash
-                            remote_changed = (
-                                remote_info.get("mtime", 0) != manifest_entry.get("mtime", 0)
-                                or remote_info.get("size", 0) != manifest_entry.get("size", 0)
-                            )
-                            if local_changed and remote_changed:
-                                # Both changed - try to auto-merge
-                                to_merge.append((rel_path, local_info, remote_info))
-                            elif local_changed:
-                                to_upload.append((rel_path, local_info))
-                            elif remote_changed:
-                                to_download.append((rel_path, remote_info))
-                        else:
-                            local_mtime = local_info.get("mtime", 0)
-                            remote_mtime = remote_info.get("mtime", 0)
-                            if local_mtime > remote_mtime:
-                                to_upload.append((rel_path, local_info))
-                            elif remote_mtime > local_mtime:
-                                to_download.append((rel_path, remote_info))
-
-            # Handle auto-merge first (before progress bar to avoid UI issues)
-            for rel_path, local_info, remote_info in to_merge:
-                local_file = local_path / rel_path
-                remote_file = f"{remote_path}/{rel_path}"
-
-                try:
-                    # Read both versions
-                    local_content = local_file.read_bytes()
-                    with self.sftp.open(remote_file, "rb") as f:
-                        remote_content = f.read()
-
-                    # Attempt auto-merge
-                    merge_result = attempt_auto_merge(local_content, remote_content, rel_path)
-
-                    if merge_result.status == MergeStatus.SUCCESS:
-                        # Auto-merge succeeded - write merged content locally and upload
-                        local_file.write_bytes(merge_result.merged_content)
-
-                        # Upload merged version to remote
-                        remote_dir = posixpath.dirname(remote_file)
-                        self._mkdir_p(remote_dir)
-                        self.sftp.put(str(local_file), remote_file)
-
-                        # Update caches
-                        self._hash_cache.invalidate(rel_path)
-                        new_hash = self._hash_cache.get_hash(rel_path, local_file)
-                        file_stat = local_file.stat()
-                        self._remote_manifest.set(rel_path, new_hash, file_stat.st_mtime, file_stat.st_size)
-
-                        result.files_auto_merged += 1
-                        result.bytes_transferred += len(merge_result.merged_content)
-
-                    elif merge_result.status == MergeStatus.IDENTICAL:
-                        # Files are identical after normalization - just update manifest
-                        file_stat = local_file.stat()
-                        self._remote_manifest.set(rel_path, local_info["hash"], file_stat.st_mtime, file_stat.st_size)
-
-                    else:
-                        # CONFLICT or BINARY - cannot auto-merge
-                        result.conflicts.append(rel_path)
-
-                except Exception as e:
-                    result.errors.append(f"Failed to merge {rel_path}: {e}")
-                    result.conflicts.append(rel_path)
-
-            if not to_upload and not to_download:
-                self._hash_cache.save_cache()
-                self._remote_manifest.save()
-                return result
-
-            total_bytes = (
-                sum(info["size"] for _, info in to_upload)
-                + sum(info.get("size", 0) for _, info in to_download)
-            )
-
-            with Progress() as progress:
-                task = progress.add_task("[cyan]Syncing...", total=total_bytes)
-
-                # Upload files
-                for rel_path, info in to_upload:
-                    local_file = local_path / rel_path
-                    remote_file = f"{remote_path}/{rel_path}"
-
-                    try:
-                        remote_dir = posixpath.dirname(remote_file)
-                        self._mkdir_p(remote_dir)
-                        self.sftp.put(str(local_file), remote_file)
-                        progress.update(task, advance=info["size"])
-
-                        file_stat = local_file.stat()
-                        self._remote_manifest.set(rel_path, info["hash"], file_stat.st_mtime, info["size"])
-
-                        result.files_uploaded += 1
-                        result.bytes_transferred += info["size"]
-                    except Exception as e:
-                        result.errors.append(f"Failed to upload {rel_path}: {e}")
-
-                # Download files
-                for rel_path, info in to_download:
-                    local_file = local_path / rel_path
-                    remote_file = f"{remote_path}/{rel_path}"
-
-                    try:
-                        local_file.parent.mkdir(parents=True, exist_ok=True)
-                        self.sftp.get(remote_file, str(local_file))
-                        progress.update(task, advance=info.get("size", 0))
-
-                        # Update cache and manifest
-                        new_hash = self._hash_cache.get_hash(rel_path, local_file)
-                        file_stat = local_file.stat()
-                        self._remote_manifest.set(rel_path, new_hash, file_stat.st_mtime, file_stat.st_size)
-
-                        result.files_downloaded += 1
-                        result.bytes_transferred += info.get("size", 0)
-                    except Exception as e:
-                        result.errors.append(f"Failed to download {rel_path}: {e}")
-
-            # Handle deletions
-            if options.direction == SyncDirection.PUSH and options.delete_remote:
-                for rel_path in remote_files:
-                    if rel_path not in local_files:
-                        remote_file = f"{remote_path}/{rel_path}"
-                        try:
-                            self.sftp.remove(remote_file)
-                            self._remote_manifest.remove(rel_path)
-                            result.files_deleted += 1
-                        except Exception:
-                            pass
-                self._cleanup_empty_dirs(remote_path)
-
-            elif options.direction == SyncDirection.PULL and options.delete_local:
-                for rel_path in local_files:
-                    if rel_path not in remote_files:
-                        local_file = local_path / rel_path
-                        try:
-                            local_file.unlink()
-                            self._hash_cache.invalidate(rel_path)
-                            result.files_deleted += 1
-                        except Exception:
-                            pass
-                self._cleanup_empty_local_dirs(local_path)
-
-            self._hash_cache.save_cache()
-            self._remote_manifest.save()
+            # Use the simpler paramiko-based sync for now with progress
+            # pyftpsync's progress callbacks are complex to integrate with Rich
+            result = self._sync_with_paramiko(local_path, remote_path, options)
 
         except Exception as e:
             result.success = False
             result.errors.append(str(e))
 
+        return result
+
+    def _sync_with_paramiko(
+        self,
+        local_path: Path,
+        remote_path: str,
+        options: SyncOptions,
+    ) -> SyncResult:
+        """
+        Perform sync using paramiko directly with proper bidirectional support.
+
+        This is a refined implementation that properly handles:
+        - Local -> Remote changes (uploads)
+        - Remote -> Local changes (downloads)
+        - Conflict detection when both sides changed
+        - Auto-merge for compatible text changes
+        """
+        import hashlib
+        import json
+        import posixpath
+        import stat
+
+        result = SyncResult(success=True)
+        sftp = None
+
+        try:
+            sftp = self.ssh.open_sftp()
+
+            # Ensure remote directory exists
+            self._mkdir_p(sftp, remote_path)
+
+            # Load/create sync manifest
+            manifest = self._load_manifest(sftp, remote_path)
+
+            # Build exclude patterns
+            exclude_patterns = options.exclude_patterns + [".pyftpsync-meta.json", REMOTE_MANIFEST_FILENAME]
+
+            # Get file listings
+            local_files = self._get_local_files(local_path, exclude_patterns)
+            remote_files = self._get_remote_files(sftp, remote_path, exclude_patterns)
+
+            all_paths = set(local_files.keys()) | set(remote_files.keys())
+
+            to_upload = []
+            to_download = []
+            conflicts = []
+
+            for rel_path in all_paths:
+                local_info = local_files.get(rel_path)
+                remote_info = remote_files.get(rel_path)
+                manifest_entry = manifest.get(rel_path, {})
+
+                if options.direction == SyncDirection.PUSH:
+                    if local_info:
+                        manifest_hash = manifest_entry.get("hash")
+                        if not manifest_hash or local_info["hash"] != manifest_hash:
+                            to_upload.append((rel_path, local_info))
+                    elif options.delete_remote and remote_info:
+                        # File exists on remote but not locally - delete
+                        self._delete_remote_file(sftp, remote_path, rel_path, result)
+
+                elif options.direction == SyncDirection.PULL:
+                    if remote_info:
+                        if not local_info:
+                            to_download.append((rel_path, remote_info))
+                        elif manifest_entry:
+                            manifest_hash = manifest_entry.get("hash")
+                            if manifest_hash and local_info["hash"] == manifest_hash:
+                                # Local unchanged since last sync - check if remote changed
+                                if remote_info.get("mtime", 0) > manifest_entry.get("mtime", 0):
+                                    to_download.append((rel_path, remote_info))
+                    elif options.delete_local and local_info:
+                        # File exists locally but not on remote - delete
+                        self._delete_local_file(local_path, rel_path, result)
+
+                else:  # BIDIRECTIONAL
+                    if local_info and not remote_info:
+                        # Only local has it - upload
+                        to_upload.append((rel_path, local_info))
+                    elif remote_info and not local_info:
+                        # Only remote has it - download
+                        to_download.append((rel_path, remote_info))
+                    elif local_info and remote_info:
+                        # Both have it - check for changes
+                        manifest_hash = manifest_entry.get("hash")
+                        manifest_mtime = manifest_entry.get("mtime", 0)
+
+                        local_changed = not manifest_hash or local_info["hash"] != manifest_hash
+                        remote_changed = remote_info.get("mtime", 0) > manifest_mtime + 1  # 1s tolerance
+
+                        if local_changed and remote_changed:
+                            # Both changed - try auto-merge
+                            merge_result = self._try_auto_merge(
+                                sftp, local_path, remote_path, rel_path, local_info, remote_info, result
+                            )
+                            if merge_result == "conflict":
+                                conflicts.append(rel_path)
+                            elif merge_result == "uploaded":
+                                result.files_uploaded += 1
+                                result.files_auto_merged += 1
+                        elif local_changed:
+                            to_upload.append((rel_path, local_info))
+                        elif remote_changed:
+                            to_download.append((rel_path, remote_info))
+
+            # Perform transfers with progress
+            total_bytes = (
+                sum(info["size"] for _, info in to_upload)
+                + sum(info.get("size", 0) for _, info in to_download)
+            )
+
+            if to_upload or to_download:
+                with Progress() as progress:
+                    task = progress.add_task("[cyan]Syncing...", total=total_bytes or 1)
+
+                    # Upload files
+                    for rel_path, info in to_upload:
+                        local_file = local_path / rel_path
+                        remote_file = f"{remote_path}/{rel_path}"
+
+                        try:
+                            remote_dir = posixpath.dirname(remote_file)
+                            self._mkdir_p(sftp, remote_dir)
+                            sftp.put(str(local_file), remote_file)
+                            progress.update(task, advance=info["size"])
+
+                            # Update manifest
+                            remote_stat = sftp.stat(remote_file)
+                            manifest[rel_path] = {
+                                "hash": info["hash"],
+                                "mtime": remote_stat.st_mtime,
+                                "size": info["size"],
+                            }
+
+                            result.files_uploaded += 1
+                            result.bytes_transferred += info["size"]
+                        except Exception as e:
+                            result.errors.append(f"Failed to upload {rel_path}: {e}")
+
+                    # Download files
+                    for rel_path, info in to_download:
+                        local_file = local_path / rel_path
+                        remote_file = f"{remote_path}/{rel_path}"
+
+                        try:
+                            local_file.parent.mkdir(parents=True, exist_ok=True)
+                            sftp.get(remote_file, str(local_file))
+                            progress.update(task, advance=info.get("size", 0))
+
+                            # Update manifest with local hash
+                            new_hash = self._compute_hash(local_file)
+                            manifest[rel_path] = {
+                                "hash": new_hash,
+                                "mtime": info.get("mtime", 0),
+                                "size": info.get("size", 0),
+                            }
+
+                            result.files_downloaded += 1
+                            result.bytes_transferred += info.get("size", 0)
+                        except Exception as e:
+                            result.errors.append(f"Failed to download {rel_path}: {e}")
+
+            # Save manifest
+            self._save_manifest(sftp, remote_path, manifest)
+
+            # Record conflicts
+            result.conflicts = conflicts
+
+        except Exception as e:
+            result.success = False
+            result.errors.append(str(e))
         finally:
-            if self.sftp:
-                self.sftp.close()
-                self.sftp = None
+            if sftp:
+                sftp.close()
 
         return result
 
-    def _get_local_files(
-        self, root: Path, exclude_patterns: list[str]
-    ) -> dict[str, dict]:
+    def _try_auto_merge(
+        self,
+        sftp,
+        local_path: Path,
+        remote_path: str,
+        rel_path: str,
+        local_info: dict,
+        remote_info: dict,
+        result: SyncResult,
+    ) -> str:
         """
-        Get all local files with their hashes using the cache.
-
-        Args:
-            root: Root directory to scan
-            exclude_patterns: Patterns to exclude
+        Try to auto-merge changes when both sides modified a file.
 
         Returns:
-            Dict mapping relative paths to file info (path, hash, size, mtime)
+            "uploaded" if merged and uploaded
+            "conflict" if couldn't merge
+            "identical" if files are actually the same
         """
+        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
+        import posixpath
+
+        local_file = local_path / rel_path
+        remote_file = f"{remote_path}/{rel_path}"
+
+        try:
+            # Read both versions
+            local_content = local_file.read_bytes()
+            with sftp.open(remote_file, "rb") as f:
+                remote_content = f.read()
+
+            # Attempt merge
+            merge_result = attempt_auto_merge(local_content, remote_content, rel_path)
+
+            if merge_result.status == MergeStatus.SUCCESS:
+                # Write merged content locally and upload
+                local_file.write_bytes(merge_result.merged_content)
+                sftp.put(str(local_file), remote_file)
+                result.bytes_transferred += len(merge_result.merged_content)
+                return "uploaded"
+
+            elif merge_result.status == MergeStatus.IDENTICAL:
+                # Files are the same after normalization
+                return "identical"
+
+            else:
+                # CONFLICT or BINARY - can't auto-merge
+                return "conflict"
+
+        except Exception:
+            return "conflict"
+
+    def _load_manifest(self, sftp, remote_path: str) -> dict:
+        """Load sync manifest from remote."""
+        import json
+        import posixpath
+
+        manifest_path = posixpath.join(remote_path, ".raccoon_manifest.json")
+        try:
+            with sftp.open(manifest_path, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+
+    def _save_manifest(self, sftp, remote_path: str, manifest: dict) -> None:
+        """Save sync manifest to remote."""
+        import json
+        import posixpath
+
+        manifest_path = posixpath.join(remote_path, ".raccoon_manifest.json")
+        try:
+            with sftp.open(manifest_path, "w") as f:
+                f.write(json.dumps(manifest, indent=2))
+        except:
+            pass
+
+    def _get_local_files(self, root: Path, exclude_patterns: list[str]) -> dict[str, dict]:
+        """Get all local files with their hashes."""
         files = {}
 
         for path in root.rglob("*"):
             if not path.is_file():
                 continue
 
-            rel_path = path.relative_to(root)
-            rel_path_posix = rel_path.as_posix()
+            rel_path = path.relative_to(root).as_posix()
 
-            if self._should_exclude(rel_path_posix, exclude_patterns):
+            if self._should_exclude(rel_path, exclude_patterns):
                 continue
 
-            # Use cached hash if available
-            file_hash = self._hash_cache.get_hash(rel_path_posix, path)
             file_stat = path.stat()
-
-            files[rel_path_posix] = {
-                "path": path,
-                "hash": file_hash,
+            files[rel_path] = {
+                "hash": self._compute_hash(path),
                 "size": file_stat.st_size,
                 "mtime": file_stat.st_mtime,
             }
 
         return files
 
-    def _get_remote_files(self, remote_path: str, exclude_patterns: list[str] = None) -> dict[str, dict]:
-        """
-        Get all remote files with their metadata.
-
-        Args:
-            remote_path: Remote directory to scan
-            exclude_patterns: Patterns to exclude (optional)
-
-        Returns:
-            Dict mapping relative paths to file info (size, mtime)
-        """
-        if exclude_patterns is None:
-            exclude_patterns = []
+    def _get_remote_files(self, sftp, remote_path: str, exclude_patterns: list[str]) -> dict[str, dict]:
+        """Get all remote files with metadata."""
+        import stat
 
         files = {}
 
-        try:
-            self._walk_remote(remote_path, "", files, exclude_patterns)
-        except IOError:
-            pass
+        def walk(base: str, rel: str):
+            current = f"{base}/{rel}" if rel else base
+            try:
+                for entry in sftp.listdir_attr(current):
+                    entry_rel = f"{rel}/{entry.filename}" if rel else entry.filename
 
+                    if self._should_exclude(entry_rel, exclude_patterns):
+                        continue
+
+                    if stat.S_ISDIR(entry.st_mode):
+                        walk(base, entry_rel)
+                    else:
+                        files[entry_rel] = {
+                            "size": entry.st_size,
+                            "mtime": entry.st_mtime,
+                        }
+            except IOError:
+                pass
+
+        walk(remote_path, "")
         return files
 
-    def _walk_remote(
-        self, base_path: str, rel_path: str, files: dict[str, dict], exclude_patterns: list[str]
-    ) -> None:
-        """
-        Recursively walk remote directory.
-
-        Args:
-            base_path: Base remote path
-            rel_path: Current relative path
-            files: Dict to populate with file info
-            exclude_patterns: Patterns to exclude
-        """
-        current_path = f"{base_path}/{rel_path}" if rel_path else base_path
-
-        try:
-            for entry in self.sftp.listdir_attr(current_path):
-                entry_rel = f"{rel_path}/{entry.filename}" if rel_path else entry.filename
-
-                # Check exclusions
-                if self._should_exclude(entry_rel, exclude_patterns):
-                    continue
-
-                if stat.S_ISDIR(entry.st_mode):
-                    self._walk_remote(base_path, entry_rel, files, exclude_patterns)
-                else:
-                    files[entry_rel] = {
-                        "size": entry.st_size,
-                        "mtime": entry.st_mtime,
-                    }
-        except IOError:
-            pass
-
     def _should_exclude(self, path: str, patterns: list[str]) -> bool:
-        """
-        Check if path matches any exclusion pattern.
-
-        Args:
-            path: POSIX-style path (forward slashes) to check
-            patterns: List of glob patterns to match against
-
-        Returns:
-            True if path should be excluded
-        """
-        import fnmatch
-
+        """Check if path matches any exclusion pattern."""
         parts = path.split("/")
         for pattern in patterns:
             for part in parts:
@@ -1145,72 +607,220 @@ class SftpSync:
                 return True
         return False
 
-    def _hash_file(self, path: Path) -> str:
-        """
-        Calculate SHA256 hash of a file.
+    def _compute_hash(self, path: Path) -> str:
+        """Compute SHA256 hash of a file with line ending normalization for text."""
+        import hashlib
 
-        Args:
-            path: Path to the file
+        TEXT_EXTENSIONS = {
+            '.py', '.yml', '.yaml', '.json', '.txt', '.md', '.rst',
+            '.cfg', '.ini', '.toml', '.sh', '.bash', '.zsh',
+            '.html', '.css', '.js', '.ts', '.jsx', '.tsx',
+            '.xml', '.csv', '.env', '.gitignore', '.dockerignore',
+        }
 
-        Returns:
-            SHA256 hash as hex string
-        """
         hasher = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                hasher.update(chunk)
+        try:
+            is_text = path.suffix.lower() in TEXT_EXTENSIONS
+
+            if is_text:
+                content = path.read_bytes()
+                content = content.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+                hasher.update(content)
+            else:
+                with open(path, "rb") as f:
+                    for chunk in iter(lambda: f.read(8192), b""):
+                        hasher.update(chunk)
+        except IOError:
+            return ""
+
         return hasher.hexdigest()
 
-    def _mkdir_p(self, remote_path: str) -> None:
-        """
-        Create remote directory and parents if needed.
+    def _mkdir_p(self, sftp, remote_path: str) -> None:
+        """Create remote directory and parents if needed."""
+        import posixpath
 
-        Args:
-            remote_path: Remote directory path to create
-        """
         if not remote_path or remote_path == "/":
             return
 
         try:
-            self.sftp.stat(remote_path)
+            sftp.stat(remote_path)
         except IOError:
             parent = posixpath.dirname(remote_path)
             if parent:
-                self._mkdir_p(parent)
+                self._mkdir_p(sftp, parent)
             try:
-                self.sftp.mkdir(remote_path)
+                sftp.mkdir(remote_path)
             except IOError:
                 pass
 
-    def _cleanup_empty_dirs(self, remote_path: str) -> None:
-        """
-        Remove empty directories on remote.
-
-        Args:
-            remote_path: Remote directory to clean up
-        """
+    def _delete_remote_file(self, sftp, remote_path: str, rel_path: str, result: SyncResult) -> None:
+        """Delete a file from remote."""
         try:
-            for entry in self.sftp.listdir_attr(remote_path):
-                if stat.S_ISDIR(entry.st_mode):
-                    subdir = f"{remote_path}/{entry.filename}"
-                    self._cleanup_empty_dirs(subdir)
-                    try:
-                        self.sftp.rmdir(subdir)
-                    except IOError:
-                        pass
-        except IOError:
+            sftp.remove(f"{remote_path}/{rel_path}")
+            result.files_deleted += 1
+        except:
             pass
 
-    def _cleanup_empty_local_dirs(self, local_path: Path) -> None:
-        """
-        Remove empty directories locally.
+    def _delete_local_file(self, local_path: Path, rel_path: str, result: SyncResult) -> None:
+        """Delete a file locally."""
+        try:
+            (local_path / rel_path).unlink()
+            result.files_deleted += 1
+        except:
+            pass
 
-        Args:
-            local_path: Local directory to clean up
-        """
-        for dirpath in sorted(local_path.rglob("*"), reverse=True):
-            if dirpath.is_dir():
-                try:
-                    dirpath.rmdir()  # Only succeeds if empty
-                except OSError:
-                    pass
+
+# Keep these for backward compatibility with existing code
+class HashCache:
+    """
+    Local hash cache with mtime-based invalidation.
+    Kept for backward compatibility with tests and other modules.
+    """
+
+    TEXT_EXTENSIONS = {
+        '.py', '.yml', '.yaml', '.json', '.txt', '.md', '.rst',
+        '.cfg', '.ini', '.toml', '.sh', '.bash', '.zsh',
+        '.html', '.css', '.js', '.ts', '.jsx', '.tsx',
+        '.xml', '.csv', '.env', '.gitignore', '.dockerignore',
+    }
+
+    def __init__(self, project_root: Path):
+        self.project_root = project_root
+        self.cache_dir = project_root / LOCAL_CACHE_DIR
+        self.cache_file = self.cache_dir / LOCAL_CACHE_FILENAME
+        self._cache: dict[str, dict] = {}
+        self._load_cache()
+
+    def _load_cache(self) -> None:
+        import json
+        if self.cache_file.exists():
+            try:
+                with open(self.cache_file, "r") as f:
+                    self._cache = json.load(f)
+            except:
+                self._cache = {}
+
+    def save_cache(self) -> None:
+        import json
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.cache_file, "w") as f:
+                json.dump(self._cache, f, indent=2)
+        except:
+            pass
+
+    def get_hash(self, rel_path: str, file_path: Path) -> str:
+        import hashlib
+
+        try:
+            file_stat = file_path.stat()
+            current_mtime = file_stat.st_mtime
+            current_size = file_stat.st_size
+        except OSError:
+            return self._compute_hash(file_path)
+
+        cached = self._cache.get(rel_path)
+        if cached and cached.get("mtime") == current_mtime and cached.get("size") == current_size:
+            return cached["hash"]
+
+        file_hash = self._compute_hash(file_path)
+        self._cache[rel_path] = {
+            "hash": file_hash,
+            "mtime": current_mtime,
+            "size": current_size,
+        }
+        return file_hash
+
+    def _compute_hash(self, file_path: Path) -> str:
+        import hashlib
+
+        hasher = hashlib.sha256()
+        try:
+            is_text = file_path.suffix.lower() in self.TEXT_EXTENSIONS
+
+            if is_text:
+                with open(file_path, "rb") as f:
+                    content = f.read()
+                content = content.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+                hasher.update(content)
+            else:
+                with open(file_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(8192), b""):
+                        hasher.update(chunk)
+        except IOError:
+            return ""
+        return hasher.hexdigest()
+
+    def compute_hash_from_bytes(self, content: bytes, rel_path: str) -> str:
+        import hashlib
+
+        suffix = Path(rel_path).suffix.lower()
+        is_text = suffix in self.TEXT_EXTENSIONS
+
+        if is_text:
+            content = content.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+
+        return hashlib.sha256(content).hexdigest()
+
+    def invalidate(self, rel_path: str) -> None:
+        self._cache.pop(rel_path, None)
+
+    def clear(self) -> None:
+        self._cache.clear()
+
+
+class RemoteManifest:
+    """
+    Manages the remote manifest file.
+    Kept for backward compatibility.
+    """
+
+    def __init__(self, sftp, remote_path: str):
+        import posixpath
+        self.sftp = sftp
+        self.remote_path = remote_path
+        self.manifest_path = posixpath.join(remote_path, ".raccoon_manifest.json")
+        self._manifest: dict[str, dict] = {}
+        self._dirty = False
+
+    def load(self) -> None:
+        import json
+        try:
+            with self.sftp.open(self.manifest_path, "r") as f:
+                self._manifest = json.load(f)
+        except:
+            self._manifest = {}
+
+    def save(self) -> None:
+        import json
+        if not self._dirty:
+            return
+        try:
+            with self.sftp.open(self.manifest_path, "w") as f:
+                f.write(json.dumps(self._manifest, indent=2))
+            self._dirty = False
+        except:
+            pass
+
+    def get(self, rel_path: str) -> Optional[dict]:
+        return self._manifest.get(rel_path)
+
+    def set(self, rel_path: str, file_hash: str, mtime: float, size: int) -> None:
+        self._manifest[rel_path] = {
+            "hash": file_hash,
+            "mtime": mtime,
+            "size": size,
+        }
+        self._dirty = True
+
+    def remove(self, rel_path: str) -> None:
+        if rel_path in self._manifest:
+            del self._manifest[rel_path]
+            self._dirty = True
+
+    def get_all_files(self) -> dict[str, dict]:
+        return self._manifest.copy()
+
+    def clear(self) -> None:
+        self._manifest.clear()
+        self._dirty = True

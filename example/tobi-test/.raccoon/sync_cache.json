@@ -1,92 +1,97 @@
 {
   "upload.sh": {
     "hash": "0500660bd3793edc5f41e622256029d1f066bec5f3ac0ec05ede96522cd0d998",
-    "mtime": 1769720583.027559,
+    "mtime": 1769799292.8268225,
     "size": 747
   },
   "raccoon.project.yml": {
-    "hash": "1477586ab333908adbc403d5066a70278dc0d895b15d7ba7bfe20a9f4fbce21d",
-    "mtime": 1769720582.9205601,
+    "hash": "b7dba0f9099a06ec82dc32ddc6c2acd917793397222f1f7d5db250a0fd0ebaca",
+    "mtime": 1769799292.3088317,
     "size": 2160
   },
   ".raccoonignore": {
     "hash": "138aaf74cf5c5edb824311b6f4a3c4f03d520b2b81705ca8a6f6de7e037ab717",
-    "mtime": 1769720582.9965591,
+    "mtime": 1769799292.4368296,
     "size": 668
   },
   "run.sh": {
     "hash": "68baac1fe7ba8f187382c5cb6fc5b4a1ee08445f358846aa735bb830e2cf6a3e",
-    "mtime": 1769720583.311556,
+    "mtime": 1769799293.1258173,
     "size": 655
   },
   "src/main.py": {
     "hash": "08c32ca47b3394f1f119f73ee1373180b26067236ee05efc90b2d3d5d058e0ff",
-    "mtime": 1769720582.9375598,
+    "mtime": 1769799293.8788037,
     "size": 924
   },
   "src/__init__.py": {
     "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
-    "mtime": 1769720582.9595597,
+    "mtime": 1769799292.6768253,
     "size": 611
   },
   "src/hardware/__init__.py": {
     "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
-    "mtime": 1769720583.3515556,
+    "mtime": 1769799292.343831,
     "size": 611
   },
   "src/steps/__init__.py": {
     "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
-    "mtime": 1769720583.2675564,
+    "mtime": 1769799293.6198084,
     "size": 611
   },
   "src/missions/shutdown_mission.py": {
     "hash": "fd74fb24b1805a7a3404175fa2285b526beda7b07af5c7688179c8d56d82a60a",
-    "mtime": 1769720583.3335557,
+    "mtime": 1769799293.0478187,
     "size": 759
   },
   "src/missions/__init__.py": {
     "hash": "a4310844c67df679b362e0467b6e30b8476fe472836bd818ce2586a64a1fe2cf",
-    "mtime": 1769720583.0785584,
+    "mtime": 1769799293.52881,
     "size": 611
   },
   "src/missions/setup_mission.py": {
-    "hash": "7fbeebf673e192d69442f0bac2ffca1e5c17edff51b6705219d000a75e8ba72f",
-    "mtime": 1769720583.2915561,
-    "size": 937
+    "hash": "a0f9c8a8aacfca63f17810c884e76599255deb2bf7b554adc508ee471507f376",
+    "mtime": 1769799293.5678093,
+    "size": 373
   },
   "src/hardware/.raccoon_codegen_cache.json": {
     "hash": "f8c0ab63390ee95b21a97be90cf5508ad0367b0921e0b9eff298278571bd23c6",
-    "mtime": 1769720583.0945582,
+    "mtime": 1769799293.6618078,
     "size": 682
   },
   "logs/step_timing.db": {
-    "hash": "e00485464cfae15114999a1aef20c058de99d0b0f32f341823b04b8a943b89e5",
-    "mtime": 1769720583.223557,
-    "size": 53248
+    "hash": "73371a0eade0f3379584a9ab9ad10999ac23b3a64833a93396fcacea83802dca",
+    "mtime": 1769801241.9112768,
+    "size": 81920
   },
   "mission_layouts.json": {
-    "hash": "f70ff643732be02f64b4fff4311ad5b21cf6b6ea84d17680463600ce1aa8d35e",
-    "mtime": 1769720582.9805593,
-    "size": 74
+    "hash": "2ecae845b7719d8bf31441769bda0e5a440312523126986d2b2e7654aad4682a",
+    "mtime": 1769799293.0078194,
+    "size": 340
   },
   ".mission_snapshots/potato.json": {
-    "hash": "d6260188f5fd7dcce9fa5a36fe5cfc91fb890a4e08577fc02888b92f4fc4d094",
-    "mtime": 1769720582.8985603,
-    "size": 108
+    "hash": "c91e6eba35779fd0a11c00b841695227b05d3436079eb5e41158ec2f47ac7bf4",
+    "mtime": 1769799293.8298047,
+    "size": 322
   },
   "src/steps/wait_for_button.py": {
     "hash": "25bd6392b9fb5faada80cf01517664726444451e3cfa6bfaf38bc53f7febdd74",
-    "mtime": 1769720583.0565586,
+    "mtime": 1769799293.9498026,
     "size": 515
   },
   "racoon.calibration.yml": {
-    "hash": "ea5013971adf16751bfa56fc467d2a57f9c20dd4461e7c733e644394b65b243e",
-    "mtime": 1769720583.2485566,
-    "size": 79
+    "hash": "c54fa5a331a0be267dfcb162ff40eccb6686aab822d189a9fb21205482f45c4b",
+    "mtime": 1769811171.2750955,
+    "size": 80
   },
   "src/missions/potato_mission.py": {
-    "hash": "86acd8cda30ef80421a589e8f5c058ae7f625095b198ea241bada5d33b56c9c9",
-    "mtime": 1769720583.011559,
-    "size": 434
+    "hash": "e5783938b73990813b316c150769f328f93064e7e14d79c6e0342022dc893524",
+    "mtime": 1769801203.468552,
+    "size": 742
+  },
+  ".mission_snapshots/setup.json": {
+    "hash": "cab3685d56f2a60b67cef155d7898d847caa6251d4dd52f14a8c50757b26b07a",
+    "mtime": 1769799292.9618201,
+    "size": 358
   }
 }
