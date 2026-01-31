@@ -370,12 +370,28 @@ class SftpSync:
                         self._delete_local_file(local_path, rel_path, result)
 
                 else:  # BIDIRECTIONAL
+                    was_previously_synced = rel_path in manifest
+
                     if local_info and not remote_info:
-                        # Only local has it - upload
-                        to_upload.append((rel_path, local_info))
+                        if was_previously_synced:
+                            # Was synced before, now missing on remote = deleted remotely
+                            # Delete locally to propagate the deletion
+                            if options.delete_local:
+                                self._delete_local_file(local_path, rel_path, result)
+                                manifest.pop(rel_path, None)
+                        else:
+                            # New local file, upload it
+                            to_upload.append((rel_path, local_info))
                     elif remote_info and not local_info:
-                        # Only remote has it - download
-                        to_download.append((rel_path, remote_info))
+                        if was_previously_synced:
+                            # Was synced before, now missing locally = deleted locally
+                            # Delete on remote to propagate the deletion
+                            if options.delete_remote:
+                                self._delete_remote_file(sftp, remote_path, rel_path, result)
+                                manifest.pop(rel_path, None)
+                        else:
+                            # New remote file, download it
+                            to_download.append((rel_path, remote_info))
                     elif local_info and remote_info:
                         # Both have it - check for changes
                         manifest_hash = manifest_entry.get("hash")

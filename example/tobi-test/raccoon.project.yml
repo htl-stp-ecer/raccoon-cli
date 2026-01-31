@@ -95,7 +95,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 192.168.178.85
+  pi_address: 192.168.100.81
   pi_port: 8421
   pi_user: pi
   remote_path: null
