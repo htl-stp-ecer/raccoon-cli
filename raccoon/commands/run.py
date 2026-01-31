@@ -150,24 +150,37 @@ def run_command(ctx: click.Context, args: tuple, local: bool, no_sync: bool) -> 
 
         # Check if we should run remotely
         if not local:
-            from raccoon.client.connection import get_connection_manager
+            from raccoon.client.connection import (
+                get_connection_manager,
+                VersionMismatchError,
+                print_version_mismatch_error,
+                ParamikoVersionError,
+                print_paramiko_version_error,
+            )
 
             manager = get_connection_manager()
 
             # Try to auto-connect from project or global config if not connected
             if not manager.is_connected:
-                # Try project config first
-                project_config = manager.load_from_project(project_root)
-                if project_config and project_config.pi_address:
-                    logger.info(f"Connecting to Pi from project config: {project_config.pi_address}")
-                    manager.connect_sync(project_config.pi_address, project_config.pi_port, project_config.pi_user)
-                else:
-                    # Try global config
-                    known_pis = manager.load_known_pis()
-                    if known_pis:
-                        pi = known_pis[0]
-                        logger.info(f"Connecting to known Pi: {pi.get('address')}")
-                        manager.connect_sync(pi.get("address"), pi.get("port", 8421))
+                try:
+                    # Try project config first
+                    project_config = manager.load_from_project(project_root)
+                    if project_config and project_config.pi_address:
+                        logger.info(f"Connecting to Pi from project config: {project_config.pi_address}")
+                        manager.connect_sync(project_config.pi_address, project_config.pi_port, project_config.pi_user)
+                    else:
+                        # Try global config
+                        known_pis = manager.load_known_pis()
+                        if known_pis:
+                            pi = known_pis[0]
+                            logger.info(f"Connecting to known Pi: {pi.get('address')}")
+                            manager.connect_sync(pi.get("address"), pi.get("port", 8421))
+                except ParamikoVersionError as e:
+                    print_paramiko_version_error(e, console)
+                    raise SystemExit(1)
+                except VersionMismatchError as e:
+                    print_version_mismatch_error(e, console)
+                    raise SystemExit(1)
 
             if manager.is_connected:
                 # Run remotely

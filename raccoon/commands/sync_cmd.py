@@ -9,7 +9,13 @@ from raccoon.client.conflict_resolver import (
     apply_resolution,
     prepare_conflict_files,
 )
-from raccoon.client.connection import get_connection_manager
+from raccoon.client.connection import (
+    get_connection_manager,
+    VersionMismatchError,
+    print_version_mismatch_error,
+    ParamikoVersionError,
+    print_paramiko_version_error,
+)
 from raccoon.client.sftp_sync import SftpSync, SyncDirection, SyncOptions, load_raccoonignore
 from raccoon.project import find_project_root, load_project_config
 
@@ -48,18 +54,25 @@ def do_sync(
 
     if not manager.is_connected:
         # Try to connect from project or global config
-        project_conn = manager.load_from_project(project_root)
-        if project_conn and project_conn.pi_address:
-            console.print(f"[cyan]Connecting to Pi: {project_conn.pi_address}...[/cyan]")
-            success = manager.connect_sync(project_conn.pi_address, project_conn.pi_port, project_conn.pi_user)
-        else:
-            known_pis = manager.load_known_pis()
-            if known_pis:
-                pi = known_pis[0]
-                console.print(f"[cyan]Connecting to known Pi: {pi.get('address')}...[/cyan]")
-                success = manager.connect_sync(pi.get("address"), pi.get("port", 8421))
+        try:
+            project_conn = manager.load_from_project(project_root)
+            if project_conn and project_conn.pi_address:
+                console.print(f"[cyan]Connecting to Pi: {project_conn.pi_address}...[/cyan]")
+                success = manager.connect_sync(project_conn.pi_address, project_conn.pi_port, project_conn.pi_user)
             else:
-                success = False
+                known_pis = manager.load_known_pis()
+                if known_pis:
+                    pi = known_pis[0]
+                    console.print(f"[cyan]Connecting to known Pi: {pi.get('address')}...[/cyan]")
+                    success = manager.connect_sync(pi.get("address"), pi.get("port", 8421))
+                else:
+                    success = False
+        except ParamikoVersionError as e:
+            print_paramiko_version_error(e, console)
+            raise SystemExit(1)
+        except VersionMismatchError as e:
+            print_version_mismatch_error(e, console)
+            raise SystemExit(1)
 
         if not success:
             console.print("[red]Error: Not connected to a Pi[/red]")

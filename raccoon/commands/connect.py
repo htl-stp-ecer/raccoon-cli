@@ -7,7 +7,13 @@ import click
 from rich.console import Console
 from rich.prompt import Confirm
 
-from raccoon.client.connection import get_connection_manager
+from raccoon.client.connection import (
+    get_connection_manager,
+    VersionMismatchError,
+    print_version_mismatch_error,
+    ParamikoVersionError,
+    print_paramiko_version_error,
+)
 from raccoon.client.discovery import check_address
 from raccoon.project import find_project_root
 
@@ -49,9 +55,16 @@ def connect_command(
 
     # Connect
     manager = get_connection_manager()
-    success = asyncio.run(
-        manager.connect(address=address, port=port, user=user)
-    )
+    try:
+        success = asyncio.run(
+            manager.connect(address=address, port=port, user=user)
+        )
+    except ParamikoVersionError as e:
+        print_paramiko_version_error(e, console)
+        raise SystemExit(1)
+    except VersionMismatchError as e:
+        print_version_mismatch_error(e, console)
+        raise SystemExit(1)
 
     if not success:
         console.print(f"[red]Failed to connect to {address}:{port}[/red]")

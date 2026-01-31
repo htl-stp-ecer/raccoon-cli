@@ -15,6 +15,11 @@ from raccoon.client.connection import (
     ConnectionState,
     ConnectionConfig,
     get_connection_manager,
+    VersionMismatchError,
+    print_version_mismatch_error,
+    ParamikoVersionError,
+    print_paramiko_version_error,
+    check_paramiko_version,
 )
 
 # Discovery
@@ -65,6 +70,11 @@ __all__ = [
     "ConnectionState",
     "ConnectionConfig",
     "get_connection_manager",
+    "VersionMismatchError",
+    "print_version_mismatch_error",
+    "ParamikoVersionError",
+    "print_paramiko_version_error",
+    "check_paramiko_version",
     # Discovery
     "DiscoveredPi",
     "check_address",

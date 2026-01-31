@@ -7,6 +7,67 @@ from typing import Optional
 
 import yaml
 
+from raccoon import __version__ as CLIENT_VERSION
+
+
+# Minimum required paramiko version for proper SSH protocol support
+MIN_PARAMIKO_VERSION = "3.0.0"
+
+
+class VersionMismatchError(Exception):
+    """Raised when client and server versions don't match."""
+
+    def __init__(self, client_version: str, server_version: str):
+        self.client_version = client_version
+        self.server_version = server_version
+        super().__init__(
+            f"Version mismatch: client is {client_version}, server is {server_version}. "
+            f"Please update {'the server (Pi)' if client_version > server_version else 'your client'} "
+            f"to match versions."
+        )
+
+
+class ParamikoVersionError(Exception):
+    """Raised when paramiko version is too old."""
+
+    def __init__(self, installed_version: str, min_version: str):
+        self.installed_version = installed_version
+        self.min_version = min_version
+        super().__init__(
+            f"paramiko version {installed_version} is too old. "
+            f"Minimum required: {min_version}. "
+            f"Run: pip install --upgrade 'paramiko>={min_version}'"
+        )
+
+
+def check_paramiko_version() -> None:
+    """
+    Check that paramiko version meets minimum requirements.
+
+    Raises:
+        ParamikoVersionError: If paramiko is too old
+    """
+    try:
+        import paramiko
+        from packaging import version
+    except ImportError:
+        # If packaging isn't available, try basic comparison
+        import paramiko
+        installed = paramiko.__version__
+        # Simple version check for common cases
+        parts = installed.split(".")
+        min_parts = MIN_PARAMIKO_VERSION.split(".")
+        try:
+            if int(parts[0]) < int(min_parts[0]):
+                raise ParamikoVersionError(installed, MIN_PARAMIKO_VERSION)
+        except (ValueError, IndexError):
+            pass  # Can't parse, skip check
+        return
+
+    installed = paramiko.__version__
+    if version.parse(installed) < version.parse(MIN_PARAMIKO_VERSION):
+        raise ParamikoVersionError(installed, MIN_PARAMIKO_VERSION)
+
 
 @dataclass
 class ConnectionState:
@@ -140,8 +201,15 @@ class ConnectionManager:
 
         Returns:
             True if connection successful
+
+        Raises:
+            ParamikoVersionError: If paramiko version is too old
+            VersionMismatchError: If client/server versions don't match
         """
         import httpx
+
+        # Check paramiko version FIRST to catch SSH protocol issues early
+        check_paramiko_version()
 
         # Verify connection to server (health endpoint is public)
         try:
@@ -152,6 +220,11 @@ class ConnectionManager:
                 data = response.json()
         except Exception:
             return False
+
+        # HARD VERSION CHECK: client and server must match
+        server_version = data.get("version")
+        if server_version != CLIENT_VERSION:
+            raise VersionMismatchError(CLIENT_VERSION, server_version)
 
         # Fetch API token via SSH
         api_token = self._fetch_api_token_via_ssh(address, user)
@@ -309,3 +382,62 @@ def get_connection_manager() -> ConnectionManager:
     if _connection_manager is None:
         _connection_manager = ConnectionManager()
     return _connection_manager
+
+
+def print_version_mismatch_error(error: VersionMismatchError, console=None) -> None:
+    """
+    Print a formatted version mismatch error to the console.
+
+    Args:
+        error: The VersionMismatchError that was raised
+        console: Optional Rich console (will create one if not provided)
+    """
+    if console is None:
+        from rich.console import Console
+        console = Console()
+
+    console.print()
+    console.print("[red bold]VERSION MISMATCH ERROR[/red bold]")
+    console.print()
+    console.print(f"  Client version: [cyan]{error.client_version}[/cyan]")
+    console.print(f"  Server version: [cyan]{error.server_version}[/cyan]")
+    console.print()
+    if error.client_version > error.server_version:
+        console.print("[yellow]The Pi server is running an older version.[/yellow]")
+        console.print("Update the server by running on the Pi:")
+        console.print("  [cyan]pip install --upgrade raccoon[/cyan]")
+        console.print("  [cyan]sudo systemctl restart raccoon-server[/cyan]")
+    else:
+        console.print("[yellow]Your client is running an older version.[/yellow]")
+        console.print("Update your client by running:")
+        console.print("  [cyan]pip install --upgrade raccoon[/cyan]")
+    console.print()
+    console.print("[red]Connection refused due to version mismatch.[/red]")
+
+
+def print_paramiko_version_error(error: ParamikoVersionError, console=None) -> None:
+    """
+    Print a formatted paramiko version error to the console.
+
+    Args:
+        error: The ParamikoVersionError that was raised
+        console: Optional Rich console (will create one if not provided)
+    """
+    if console is None:
+        from rich.console import Console
+        console = Console()
+
+    console.print()
+    console.print("[red bold]PARAMIKO VERSION ERROR[/red bold]")
+    console.print()
+    console.print(f"  Installed version: [cyan]{error.installed_version}[/cyan]")
+    console.print(f"  Minimum required:  [cyan]{error.min_version}[/cyan]")
+    console.print()
+    console.print("[yellow]Your paramiko version is too old for SSH protocol support.[/yellow]")
+    console.print("This causes 'buffer unpacking' and other SSH errors.")
+    console.print()
+    console.print("Update paramiko by running:")
+    console.print(f"  [cyan]pip install --upgrade 'paramiko>={error.min_version}'[/cyan]")
+    console.print()
+    console.print("Or reinstall raccoon to get correct dependencies:")
+    console.print("  [cyan]pip install --upgrade --force-reinstall raccoon[/cyan]")

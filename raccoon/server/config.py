@@ -9,6 +9,8 @@ from typing import Optional
 
 import yaml
 
+from raccoon import __version__
+
 
 # Token file location (readable via SSH by authorized users)
 TOKEN_FILE_PATH = Path.home() / ".raccoon" / "api_token"
@@ -28,8 +30,8 @@ class ServerConfig:
     # API token for authentication
     api_token: Optional[str] = None
 
-    # Server version
-    version: str = "1.0.0"
+    # Server version (from package)
+    version: str = field(default_factory=lambda: __version__)
 
     @classmethod
     def from_file(cls, path: Path) -> "ServerConfig":

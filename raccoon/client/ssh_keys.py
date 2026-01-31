@@ -59,7 +59,7 @@ class SSHKeyManager:
 
     def generate_key(self, key_path: Optional[Path] = None) -> Tuple[Path, paramiko.PKey]:
         """
-        Generate a new Ed25519 SSH key pair.
+        Generate a new SSH key pair (Ed25519 preferred, RSA fallback).
 
         Args:
             key_path: Path for the private key (default: ~/.ssh/id_ed25519)
@@ -67,14 +67,19 @@ class SSHKeyManager:
         Returns:
             Tuple of (private_key_path, key)
         """
-        if key_path is None:
-            key_path = self.get_default_key_path()
-
         # Ensure .ssh directory exists with proper permissions
         self.ssh_dir.mkdir(mode=0o700, exist_ok=True)
 
-        # Generate Ed25519 key
-        key = paramiko.Ed25519Key.generate()
+        # Try Ed25519 first (requires paramiko >= 3.0), fall back to RSA
+        try:
+            key = paramiko.Ed25519Key.generate()
+            if key_path is None:
+                key_path = self.ssh_dir / "id_ed25519"
+        except AttributeError:
+            # paramiko < 3.0 doesn't have Ed25519Key.generate()
+            key = paramiko.RSAKey.generate(4096)
+            if key_path is None:
+                key_path = self.ssh_dir / "id_rsa"
 
         # Save private key
         key.write_private_key_file(str(key_path))
@@ -213,7 +218,7 @@ def setup_ssh_key_interactive(
             return key
     else:
         # Generate new key
-        console.print("[cyan]No SSH key found. Generating new Ed25519 key...[/cyan]")
+        console.print("[cyan]No SSH key found. Generating new SSH key...[/cyan]")
         key_path, key = manager.generate_key()
         console.print(f"[green]Generated new SSH key: {key_path}[/green]")
 
