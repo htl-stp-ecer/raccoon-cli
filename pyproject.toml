@@ -21,7 +21,7 @@ dependencies = [
     "uvicorn[standard]>=0.20",
     "websockets>=10.0",
     # Client dependencies (Laptop-side)
-    "paramiko>=3.0",
+    "paramiko>=4.0",
     "httpx>=0.24",
     "websocket-client>=1.0",
     "pyftpsync>=4.0",

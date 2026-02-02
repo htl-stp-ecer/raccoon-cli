@@ -39,3 +39,6 @@ class ProjectService:
 
     def list_projects(self) -> List[ProjectInDB]:
         return self.project_repository.list_projects()
+
+    def get_project_path(self, project_uuid: UUID):
+        return self.project_repository.get_project_path(project_uuid)

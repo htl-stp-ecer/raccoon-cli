@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-01-22 12:22:19
+ Generated: 2026-02-02 14:37:29
 ===========================================================
 
 Authors:
@@ -12,7 +12,13 @@ Authors:
    You are free to modify it as needed. Regeneration may overwrite changes.
 """
 
-from libstp import Drive, FusedOdometry, MecanumKinematics, MotionLimits
+from libstp import (
+    Drive,
+    FusedOdometry,
+    MecanumKinematics,
+    MotionLimits,
+    UnifiedMotionPidConfig,
+)
 
 from libstp import GenericRobot
 
@@ -31,16 +37,49 @@ class Robot(GenericRobot):
         back_right_motor=defs.rear_right_motor,
         front_left_motor=defs.front_left_motor,
         front_right_motor=defs.front_right_motor,
-        max_acceleration=40.678,
-        max_velocity=50.847,
+        max_acceleration=99999,
+        max_velocity=99999,
         track_width=0.19,
         wheel_radius=0.0295,
         wheelbase=0.12,
     )
     drive = Drive(
-        kinematics=kinematics, chassis_lim=MotionLimits(max_omega=15.789, max_v=1.5)
+        kinematics=kinematics, chassis_lim=MotionLimits(max_omega=99999, max_v=99999)
     )
     odometry = FusedOdometry(imu=defs.imu, kinematics=kinematics)
+    motion_pid_config = UnifiedMotionPidConfig(
+        angle_tolerance_rad=0.02,
+        derivative_lpf_alpha=0.1,
+        distance_kd=0.0,
+        distance_ki=0.0,
+        distance_kp=2.0,
+        distance_tolerance_m=0.01,
+        heading_kd=0.0,
+        heading_ki=0.0,
+        heading_kp=3.0,
+        heading_min_scale=0.25,
+        heading_recovery_error_rad=0.005,
+        heading_saturation_derating_factor=0.85,
+        heading_saturation_error_rad=0.01,
+        heading_saturation_recovery_rate=0.05,
+        integral_deadband=0.01,
+        integral_max=10.0,
+        lateral_heading_bias_gain=0.5,
+        lateral_kd=0.0,
+        lateral_ki=0.0,
+        lateral_kp=2.0,
+        lateral_reorient_threshold_m=0.15,
+        max_angular_acceleration=3.0,
+        max_heading_rate=3.0,
+        max_linear_acceleration=1.0,
+        min_angular_rate=0.1,
+        min_speed_mps=0.05,
+        output_max=10.0,
+        output_min=-10.0,
+        saturation_derating_factor=0.85,
+        saturation_min_scale=0.1,
+        saturation_recovery_rate=0.02,
+    )
     missions = [PotatoMission()]
     setup_mission = SetupMission()
     shutdown_mission = ShutdownMission()

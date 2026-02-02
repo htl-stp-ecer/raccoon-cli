@@ -93,5 +93,15 @@
     "hash": "cab3685d56f2a60b67cef155d7898d847caa6251d4dd52f14a8c50757b26b07a",
     "mtime": 1769799292.9618201,
     "size": 358
+  },
+  "src/hardware/defs.py": {
+    "hash": "6edb87d66a46b49f8a3d6852472a128dd392a3692854a043e4b4b90e8d7cb1b8",
+    "mtime": 1770040697.1022499,
+    "size": 2339
+  },
+  "src/hardware/robot.py": {
+    "hash": "2c62bbe3ace33d8acd0d41b52e4dec128f9cb98271874a7ccbfd1fcc7a4cb21b",
+    "mtime": 1770040697.102474,
+    "size": 2691
   }
 }

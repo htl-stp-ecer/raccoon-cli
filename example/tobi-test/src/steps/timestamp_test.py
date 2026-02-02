@@ -2,7 +2,7 @@ import asyncio
 import math
 import time
 
-from libstp import Sequential, seq, Turn
+from libstp import Sequential, seq, Turn, dsl
 from libstp.foundation import ChassisVelocity, info
 from libstp.motion import TurnConfig
 from libstp.sensor_ir import IRSensor
@@ -19,6 +19,7 @@ class SurfaceColor(Enum):
     WHITE = 1
 
 
+@dsl(hidden=True)
 class TimestampTest(Step):
     def __init__(self, left_sensor: IRSensor, right_sensor: IRSensor,
                  target: SurfaceColor = SurfaceColor.BLACK,
@@ -82,6 +83,8 @@ class TimestampTest(Step):
                     self.distance_between_hits_m = abs(current_distance - first_hit_distance)
                     info(
                         f"Left sensor hit line at t = {dt:.3f}s, distance = {self.distance_between_hits_m * 100:.2f}cm")
+                    robot.drive.hard_stop()
+                    break
 
             if not right_triggered and right_conf >= self.threshold:
                 right_triggered = True
@@ -96,6 +99,7 @@ class TimestampTest(Step):
                     info(
                         f"Right sensor hit line at t = {dt:.3f}s, distance = {self.distance_between_hits_m * 100:.2f}cm")
                     robot.drive.hard_stop()
+                    break
 
             await asyncio.sleep(update_rate)
 
@@ -103,6 +107,7 @@ class TimestampTest(Step):
         info(f"Distance between sensor hits: {self.distance_between_hits_m * 100:.2f}cm")
         self.results = (first_sensor, self.distance_between_hits_m)
 
+@dsl(hidden=True)
 class CrazyTurn(Turn):
     wheeleBase = 0.064 # m
 
@@ -118,6 +123,7 @@ class CrazyTurn(Turn):
         await super()._execute_step(robot)
         info("Finished CrazyTurn!")
 
+@dsl
 def timestamp_test(left_sensor: IRSensor, right_sensor: IRSensor,
                    sensor_distance_m: float) -> Sequential:
     step = TimestampTest(left_sensor, right_sensor)

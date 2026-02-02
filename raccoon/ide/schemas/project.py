@@ -3,6 +3,14 @@ import uuid
 from pydantic import BaseModel, Field
 
 
+class ProjectConnection(BaseModel):
+    pi_address: str | None = None
+    pi_port: int | None = None
+    pi_user: str | None = None
+    remote_path: str | None = None
+    auto_connect: bool | None = None
+
+
 class ProjectBase(BaseModel):
     name: str = Field(
         ...,
@@ -18,6 +26,7 @@ class ProjectCreate(ProjectBase):
 
 class ProjectInDB(ProjectBase):
     uuid: uuid.UUID
+    connection: ProjectConnection | None = None
 
 
 class Project(ProjectInDB):

@@ -100,7 +100,8 @@ def web_command(ctx: click.Context, port: int, no_open: bool) -> None:
             app,
             host="0.0.0.0",
             port=port,
-            log_level="warning",
+            log_level="info",
+            access_log=True,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down server...[/yellow]")

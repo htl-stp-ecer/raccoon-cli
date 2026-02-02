@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Dict, Any
@@ -74,7 +76,372 @@ def render_calibration_results(console: Console, results: list, motor_names: lis
     console.print(Panel(table, border_style="green"))
 
 
-def calibrate_motors_local(ctx: click.Context, project_root: Path, config: dict, aggressive: bool, auto_save: bool = False) -> None:
+def _resolve_validation_dir(project_root: Path, validation_output_dir: str | None) -> Path:
+    if validation_output_dir:
+        validation_path = Path(validation_output_dir)
+        if not validation_path.is_absolute():
+            validation_path = project_root / validation_path
+        return validation_path
+    return project_root / "logs" / "motor_validation"
+
+
+def _select_plot_columns(headers: list[str]) -> tuple[str | None, list[str]]:
+    header_map = {name.lower(): name for name in headers}
+
+    def _find_name(matches: tuple[str, ...]) -> str | None:
+        for key, original in header_map.items():
+            if any(match in key for match in matches):
+                return original
+        return None
+
+    time_col = _find_name(("time", "timestamp", "seconds", "ms"))
+    if time_col:
+        return time_col, [name for name in headers if name != time_col]
+
+    command_col = _find_name(("command", "setpoint", "target", "input", "cmd", "power"))
+    measured_col = _find_name(("measured", "velocity", "speed", "omega", "actual", "rate"))
+    if command_col and measured_col and command_col != measured_col:
+        return command_col, [measured_col]
+
+    if len(headers) >= 2:
+        return headers[0], headers[1:]
+
+    return None, headers
+
+
+def _parse_validation_filename(path: Path) -> tuple[str, float] | None:
+    match = re.match(r"motor_(\d+)_cmd_([0-9.]+)\\.csv$", path.name)
+    if not match:
+        return None
+    return match.group(1), float(match.group(2))
+
+
+def _fit_command_scale(rows: list[dict[str, float]]) -> float:
+    sum_x2 = 0.0
+    sum_xy = 0.0
+    for row in rows:
+        command = row.get("command_percent")
+        velocity = row.get("velocity_rad_s")
+        if command is None or velocity is None:
+            continue
+        sum_x2 += command * command
+        sum_xy += command * velocity
+    if sum_x2 <= 0.0:
+        return 0.0
+    return sum_xy / sum_x2
+
+
+def _build_command_sequence(commands: list[float]) -> list[float]:
+    if not commands:
+        return []
+
+    unique = sorted(set(commands))
+    zero_present = 0.0 in unique
+    nonzero = [value for value in unique if value != 0.0]
+    if not nonzero:
+        return [0.0] if zero_present else []
+
+    max_cmd = max(nonzero)
+    if max_cmd == 0:
+        return unique
+
+    small_threshold = max_cmd * 0.3
+    big_threshold = max_cmd * 0.7
+
+    small_steps = [value for value in nonzero if value <= small_threshold]
+    big_steps = [value for value in nonzero if value >= big_threshold]
+    mid_steps = [value for value in nonzero if value not in small_steps and value not in big_steps]
+
+    if not small_steps:
+        small_steps = nonzero[:2]
+    if not big_steps:
+        big_steps = [max_cmd]
+
+    sequence: list[float] = []
+    sequence.extend(sorted(small_steps))
+
+    if max_cmd not in sequence:
+        sequence.append(max_cmd)
+
+    sequence.extend(sorted(mid_steps, reverse=True))
+    sequence.extend([value for value in sorted(small_steps, reverse=True) if value not in sequence])
+
+    if zero_present:
+        sequence.append(0.0)
+
+    remaining = [value for value in nonzero if value not in sequence]
+    sequence.extend(sorted(remaining))
+
+    return sequence
+
+
+def _aggregate_validation_profiles(
+    console: Console,
+    validation_dir: Path,
+    csv_files: list[Path],
+) -> tuple[set[Path], list[Path]]:
+    grouped: dict[str, dict[float, list[Path]]] = {}
+    for csv_path in csv_files:
+        parsed = _parse_validation_filename(csv_path)
+        if not parsed:
+            continue
+        motor_id, command = parsed
+        grouped.setdefault(motor_id, {}).setdefault(command, []).append(csv_path)
+
+    skip_files: set[Path] = set()
+    combined_paths: list[Path] = []
+    gap_seconds = 0.2
+
+    for motor_id, command_map in grouped.items():
+        commands = list(command_map.keys())
+        sequence = _build_command_sequence(commands)
+        combined_rows: list[dict[str, float]] = []
+        time_offset = 0.0
+
+        for command in sequence:
+            csv_paths = command_map.get(command, [])
+            if not csv_paths:
+                continue
+
+            for csv_path in csv_paths:
+                try:
+                    with open(csv_path, newline="", encoding="utf-8") as handle:
+                        reader = csv.DictReader(handle)
+                        rows = list(reader)
+                except Exception as exc:
+                    console.print(f"[yellow]Warning: Failed to read {csv_path.name}: {exc}[/yellow]")
+                    continue
+
+                if not rows or not reader.fieldnames:
+                    continue
+
+                time_values: list[float] = []
+                for row in rows:
+                    try:
+                        time_value = float(row.get("time_s", ""))
+                        velocity_value = float(row.get("velocity_rad_s", ""))
+                        command_value = float(row.get("command_percent", command))
+                    except (TypeError, ValueError):
+                        continue
+
+                    combined_rows.append(
+                        {
+                            "time_s": time_offset + time_value,
+                            "command_percent": command_value,
+                            "velocity_rad_s": velocity_value,
+                        }
+                    )
+                    time_values.append(time_value)
+
+                if time_values:
+                    time_offset += max(time_values) + gap_seconds
+
+                skip_files.add(csv_path)
+
+        if 0.0 not in commands:
+            placeholder_dt = 0.01
+            placeholder_samples = 10
+            for i in range(placeholder_samples):
+                combined_rows.append(
+                    {
+                        "time_s": time_offset + (i * placeholder_dt),
+                        "command_percent": 0.0,
+                        "velocity_rad_s": 0.0,
+                    }
+                )
+            time_offset += (placeholder_samples - 1) * placeholder_dt + gap_seconds
+
+        if not combined_rows:
+            continue
+
+        scale = _fit_command_scale(combined_rows)
+        for row in combined_rows:
+            row["command_rad_s"] = row["command_percent"] * scale
+
+        combined_path = validation_dir / f"motor_{motor_id}_queued.csv"
+        try:
+            with open(combined_path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["time_s", "command_percent", "command_rad_s", "velocity_rad_s"],
+                )
+                writer.writeheader()
+                writer.writerows(combined_rows)
+            combined_paths.append(combined_path)
+        except Exception as exc:
+            console.print(f"[yellow]Warning: Failed to write {combined_path.name}: {exc}[/yellow]")
+
+    return skip_files, combined_paths
+
+
+def _plot_queued_profile(console: Console, csv_path: Path) -> None:
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+    except Exception as exc:
+        console.print(f"[yellow]Warning: Failed to read {csv_path.name}: {exc}[/yellow]")
+        return
+
+    if not rows or not reader.fieldnames:
+        return
+
+    time_vals: list[float] = []
+    velocity_vals: list[float] = []
+    command_vals: list[float] = []
+
+    for row in rows:
+        try:
+            time_vals.append(float(row.get("time_s", "")))
+            velocity_vals.append(float(row.get("velocity_rad_s", "")))
+            command_vals.append(float(row.get("command_rad_s", "")))
+        except (TypeError, ValueError):
+            continue
+
+    if not time_vals or not velocity_vals:
+        return
+
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(time_vals, velocity_vals, marker="o", markersize=2, linewidth=1, label="velocity_rad_s")
+    if command_vals:
+        plt.plot(time_vals, command_vals, marker="o", markersize=2, linewidth=1, label="command_rad_s")
+
+    plt.title(csv_path.stem)
+    plt.xlabel("time_s")
+    plt.ylabel("rad/s")
+    plt.legend()
+    plt.tight_layout()
+
+    output_path = csv_path.with_suffix(".png")
+    try:
+        plt.savefig(output_path, dpi=160)
+    except Exception as exc:
+        console.print(f"[yellow]Warning: Failed to write plot {output_path.name}: {exc}[/yellow]")
+    finally:
+        plt.close()
+
+
+def _generate_validation_plots(console: Console, validation_dir: Path) -> None:
+    if not validation_dir.exists():
+        return
+
+    csv_files = sorted(validation_dir.glob("*.csv"))
+    if not csv_files:
+        return
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        console.print(
+            f"[yellow]Warning: Could not generate validation plots (matplotlib unavailable: {exc}).[/yellow]"
+        )
+        return
+
+    skip_files, combined_paths = _aggregate_validation_profiles(console, validation_dir, csv_files)
+
+    for combined_path in combined_paths:
+        _plot_queued_profile(console, combined_path)
+
+    for csv_path in csv_files:
+        if csv_path in skip_files:
+            continue
+        try:
+            with open(csv_path, newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+        except Exception as exc:
+            console.print(f"[yellow]Warning: Failed to read {csv_path.name}: {exc}[/yellow]")
+            continue
+
+        if not rows or not reader.fieldnames:
+            continue
+
+        numeric_columns: dict[str, list[float | None]] = {name: [] for name in reader.fieldnames}
+        for row in rows:
+            for name in reader.fieldnames:
+                value = row.get(name, "")
+                try:
+                    numeric_columns[name].append(float(value))
+                except (TypeError, ValueError):
+                    numeric_columns[name].append(None)
+
+        headers = [name for name in reader.fieldnames if any(v is not None for v in numeric_columns[name])]
+        if not headers:
+            continue
+
+        x_name, y_names = _select_plot_columns(headers)
+        x_vals: list[float] | None = None
+        if x_name:
+            x_vals = [v for v in numeric_columns[x_name] if v is not None]
+            if not x_vals:
+                x_name = None
+
+        plt.figure(figsize=(8, 5))
+        plotted = False
+
+        for y_name in y_names:
+            y_raw = numeric_columns.get(y_name, [])
+            if not any(v is not None for v in y_raw):
+                continue
+
+            if x_name and x_vals is not None:
+                points = [
+                    (x_val, y_val)
+                    for x_val, y_val in zip(numeric_columns[x_name], y_raw)
+                    if x_val is not None and y_val is not None
+                ]
+                if not points:
+                    continue
+                xs, ys = zip(*points)
+                if x_name != y_name:
+                    plt.plot(xs, ys, marker="o", markersize=2, linewidth=1, label=y_name)
+                else:
+                    plt.plot(xs, ys, marker="o", markersize=2, linewidth=1)
+            else:
+                ys = [v for v in y_raw if v is not None]
+                if not ys:
+                    continue
+                plt.plot(ys, marker="o", markersize=2, linewidth=1, label=y_name)
+
+            plotted = True
+
+        if not plotted:
+            plt.close()
+            continue
+
+        plt.title(csv_path.stem)
+        if x_name and x_vals is not None:
+            plt.xlabel(x_name)
+        else:
+            plt.xlabel("sample")
+        plt.ylabel("value")
+        if len(y_names) > 1:
+            plt.legend()
+        plt.tight_layout()
+
+        output_path = csv_path.with_suffix(".png")
+        try:
+            plt.savefig(output_path, dpi=160)
+        except Exception as exc:
+            console.print(f"[yellow]Warning: Failed to write plot {output_path.name}: {exc}[/yellow]")
+        finally:
+            plt.close()
+
+
+def calibrate_motors_local(
+    ctx: click.Context,
+    project_root: Path,
+    config: dict,
+    aggressive: bool,
+    auto_save: bool = False,
+    export_validation: bool = True,
+    validation_output_dir: str | None = None,
+) -> None:
     """Run motor PID/FF calibration locally (on the Pi itself)."""
     console: Console = ctx.obj["console"]
 
@@ -109,9 +476,16 @@ def calibrate_motors_local(ctx: click.Context, project_root: Path, config: dict,
     console.print("\n[cyan]Running calibration... This may take a few moments.[/cyan]")
 
     try:
-        if aggressive:
+        calibration_config = None
+        if aggressive or export_validation or validation_output_dir:
             calibration_config = CalibrationConfig()
-            calibration_config.use_relay_feedback = True
+            if aggressive:
+                calibration_config.use_relay_feedback = True
+            if export_validation:
+                calibration_config.export_validation_profiles = True
+            if validation_output_dir:
+                calibration_config.validation_output_dir = str(validation_output_dir)
+        if calibration_config is not None:
             results = robot.kinematics.calibrate_motors(calibration_config)
         else:
             results = robot.kinematics.calibrate_motors()
@@ -163,8 +537,19 @@ def calibrate_motors_local(ctx: click.Context, project_root: Path, config: dict,
         console.print(f"\n[red]Failed to save configuration: {exc}[/red]")
         raise SystemExit(1) from exc
 
+    if export_validation:
+        validation_dir = _resolve_validation_dir(project_root, validation_output_dir)
+        _generate_validation_plots(console, validation_dir)
 
-async def calibrate_motors_remote(ctx: click.Context, project_root: Path, config: dict, aggressive: bool) -> None:
+
+async def calibrate_motors_remote(
+    ctx: click.Context,
+    project_root: Path,
+    config: dict,
+    aggressive: bool,
+    export_validation: bool = True,
+    validation_output_dir: str | None = None,
+) -> None:
     """Run motor PID/FF calibration on the connected Pi."""
     console: Console = ctx.obj["console"]
 
@@ -191,6 +576,10 @@ async def calibrate_motors_remote(ctx: click.Context, project_root: Path, config
     args = ["motors", "--yes"]
     if aggressive:
         args.append("--aggressive")
+    if not export_validation:
+        args.append("--no-export-validation")
+    if validation_output_dir:
+        args.extend(["--validation-output-dir", str(validation_output_dir)])
 
     # Start the calibrate command on Pi
     async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
@@ -212,15 +601,23 @@ async def calibrate_motors_remote(ctx: click.Context, project_root: Path, config
         # Display final status
         exit_code = final_status.get("exit_code", -1)
 
-        if exit_code == 0:
-            console.print()
-            console.print("[green]Calibration completed on Pi![/green]")
-            console.print("[dim]Syncing calibration results...[/dim]")
-            if sync_project_interactive(project_root, console):
-                console.print("[green]✓ Calibration results synced to local project[/green]")
-            else:
-                console.print("[yellow]Warning: Failed to sync results. Run 'raccoon sync' manually.[/yellow]")
-        else:
-            console.print()
-            console.print(f"[red]Calibration failed with exit code {exit_code}[/red]")
-            raise SystemExit(exit_code)
+    console.print()
+    console.print("[dim]Syncing calibration results...[/dim]")
+    sync_ok = sync_project_interactive(project_root, console)
+    if sync_ok:
+        console.print("[green]✓ Calibration results synced to local project[/green]")
+    else:
+        console.print("[yellow]Warning: Failed to sync results. Run 'raccoon sync' manually.[/yellow]")
+
+    if export_validation and sync_ok:
+        validation_dir = _resolve_validation_dir(project_root, validation_output_dir)
+        _generate_validation_plots(console, validation_dir)
+
+    if exit_code == 0:
+        console.print()
+        console.print("[green]Calibration completed on Pi![/green]")
+        return
+
+    console.print()
+    console.print(f"[red]Calibration failed with exit code {exit_code}[/red]")
+    raise SystemExit(exit_code)

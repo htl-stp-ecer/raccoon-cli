@@ -155,7 +155,13 @@ class ConnectionManager:
 
         The token is stored at ~/.raccoon/api_token on the Pi.
         This requires SSH access (key-based auth recommended).
+
+        Raises:
+            ParamikoVersionError: If paramiko version is too old
         """
+        # Check paramiko version before any SSH operations
+        check_paramiko_version()
+
         import paramiko
 
         try:
@@ -175,6 +181,8 @@ class ConnectionManager:
 
             return None
 
+        except ParamikoVersionError:
+            raise  # Let version errors propagate
         except Exception:
             return None
 
@@ -274,11 +282,17 @@ class ConnectionManager:
 
         Returns:
             paramiko.SSHClient instance
+
+        Raises:
+            ParamikoVersionError: If paramiko version is too old
         """
         if not self.is_connected:
             raise RuntimeError("Not connected to a Pi")
 
         if self._ssh_client is None:
+            # Check paramiko version before any SSH operations
+            check_paramiko_version()
+
             import paramiko
 
             self._ssh_client = paramiko.SSHClient()

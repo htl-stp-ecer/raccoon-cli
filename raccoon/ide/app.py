@@ -16,6 +16,7 @@ from raccoon.ide.core.project_code_gen import ProjectCodeGen
 from raccoon.ide.routes import projects as projects_router
 from raccoon.ide.routes import missions as missions_router
 from raccoon.ide.routes import steps as steps_router
+from raccoon.ide.routes import type_definitions as type_definitions_router
 
 
 def create_app(project_root: Path | str = None, settings: Settings = None) -> FastAPI:
@@ -98,6 +99,7 @@ def create_app(project_root: Path | str = None, settings: Settings = None) -> Fa
     app.include_router(projects_router.router, prefix="/api/v1/projects", tags=["projects"])
     app.include_router(missions_router.router, prefix="/api/v1/missions", tags=["missions"])
     app.include_router(steps_router.router, prefix="/api/v1/steps", tags=["steps"])
+    app.include_router(type_definitions_router.router, prefix="/api/v1/type-definitions", tags=["type-definitions"])
 
     # Health check endpoint
     @app.get("/api/v1/health")

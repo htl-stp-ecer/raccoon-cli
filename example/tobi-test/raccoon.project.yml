@@ -18,6 +18,47 @@ robot:
       max_omega: 99999
   odometry:
     type: FusedOdometry
+  motion_pid:
+    distance:
+      kp: 2.0
+      ki: 0.0
+      kd: 0.0
+    heading:
+      kp: 3.0
+      ki: 0.0
+      kd: 0.0
+    lateral:
+      kp: 2.0
+      ki: 0.0
+      kd: 0.0
+    profile:
+      max_linear_acceleration: 1.0
+      max_angular_acceleration: 3.0
+    integral_max: 10.0
+    integral_deadband: 0.01
+    derivative_lpf_alpha: 0.1
+    output_min: -10.0
+    output_max: 10.0
+    saturation:
+      derating_factor: 0.85
+      min_scale: 0.1
+      recovery_rate: 0.02
+    heading_saturation:
+      derating_factor: 0.85
+      min_scale: 0.25
+      recovery_rate: 0.05
+    tolerances:
+      distance_m: 0.01
+      angle_rad: 0.02
+    rate_limits:
+      max_heading_rate: 3.0
+      min_angular_rate: 0.1
+    lateral_drift:
+      heading_bias_gain: 0.5
+      reorient_threshold_m: 0.15
+      heading_saturation_error_rad: 0.01
+      heading_recovery_error_rad: 0.005
+    min_speed_mps: 0.05
 missions:
 - SetupMission: setup
 - ShutdownMission: shutdown
@@ -32,13 +73,13 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.11901609598441584
-        kV: 0.1644807457316206
-        kA: 0.01873290440882621
+        kS: 0.014717944639950216
+        kV: 0.1981503563639978
+        kA: 0.02
       pid:
         kp: 10.0
-        ki: 8.592738338475437
-        kd: 0.5894105399145476
+        ki: 9.814794609326363
+        kd: 0.396417538966332
       ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   front_right_motor:
@@ -47,13 +88,13 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.17716539850672264
-        kV: 0.15955894753992386
-        kA: 0.014141602912576457
+        kS: 0.24995750568338232
+        kV: 0.1350324603642087
+        kA: 0.008225329011787715
       pid:
         kp: 10.0
         ki: 10.0
-        kd: 0.7907963306377619
+        kd: 0.7032264861939415
       ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   rear_left_motor:
@@ -62,13 +103,13 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.14969162525686092
-        kV: 0.18623375995061522
-        kA: 0.01674973923928998
+        kS: 0.07927658167594495
+        kV: 0.18219958232362843
+        kA: 0.02
       pid:
         kp: 10.0
         ki: 10.0
-        kd: 0.7561736861335161
+        kd: 0.6018354462577499
       ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   rear_right_motor:
@@ -77,13 +118,13 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.12376695366865965
-        kV: 0.19143857331191252
-        kA: 0.02
+        kS: 0.12808157687902538
+        kV: 0.15768136518367729
+        kA: 0.017155086054130467
       pid:
         kp: 10.0
         ki: 10.0
-        kd: 1.1190760074843162
+        kd: 0.548293111922021
       ticks_to_rad: 0.0041282
       vel_lpf_alpha: 0.8
   imu:
@@ -95,7 +136,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 192.168.100.81
+  pi_address: 192.168.178.85
   pi_port: 8421
   pi_user: pi
   remote_path: null

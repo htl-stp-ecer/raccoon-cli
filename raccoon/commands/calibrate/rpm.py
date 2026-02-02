@@ -522,16 +522,19 @@ async def calibrate_rpm_remote(
 
         exit_code = final_status.get("exit_code", -1)
 
-        if exit_code == 0:
-            console.print()
-            console.print("[green]RPM calibration completed on Pi![/green]")
-            console.print("[dim]Syncing calibration results...[/dim]")
-            if sync_project_interactive(project_root, console):
-                console.print("[green]✓ Calibration results synced to local project[/green]")
-                console.print(f"[dim]Note: CSV results saved to {output_file} on the Pi.[/dim]")
-            else:
-                console.print("[yellow]Warning: Failed to sync results. Run 'raccoon sync' manually.[/yellow]")
-        else:
-            console.print()
-            console.print(f"[red]RPM calibration failed with exit code {exit_code}[/red]")
-            raise SystemExit(exit_code)
+    console.print()
+    console.print("[dim]Syncing calibration results...[/dim]")
+    if sync_project_interactive(project_root, console):
+        console.print("[green]✓ Calibration results synced to local project[/green]")
+        console.print(f"[dim]Note: CSV results saved to {output_file} on the Pi.[/dim]")
+    else:
+        console.print("[yellow]Warning: Failed to sync results. Run 'raccoon sync' manually.[/yellow]")
+
+    if exit_code == 0:
+        console.print()
+        console.print("[green]RPM calibration completed on Pi![/green]")
+        return
+
+    console.print()
+    console.print(f"[red]RPM calibration failed with exit code {exit_code}[/red]")
+    raise SystemExit(exit_code)

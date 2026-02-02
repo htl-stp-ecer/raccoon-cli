@@ -1,0 +1,1187 @@
+{
+  "steps": [
+    {
+      "name": "wait",
+      "import": "libstp.step.wait_for_seconds.wait",
+      "arguments": [
+        {
+          "name": "seconds",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/wait_for_seconds.py",
+      "tags": [
+        "timing",
+        "wait"
+      ]
+    },
+    {
+      "name": "wait_for_button",
+      "import": "libstp.step.wait_for_button.wait_for_button",
+      "arguments": [],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/wait_for_button.py",
+      "tags": [
+        "timing",
+        "button"
+      ]
+    },
+    {
+      "name": "timeout",
+      "import": "libstp.step.timeout.timeout",
+      "arguments": [
+        {
+          "name": "step",
+          "type": "StepProtocol",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "seconds",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/timeout.py",
+      "tags": [
+        "control",
+        "timeout"
+      ]
+    },
+    {
+      "name": "do_until_checkpoint",
+      "import": "libstp.step.timing.do_until_checkpoint.do_until_checkpoint",
+      "arguments": [
+        {
+          "name": "checkpoint",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "step",
+          "type": "Any",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/timing/do_until_checkpoint.py",
+      "tags": [
+        "timing",
+        "sync"
+      ]
+    },
+    {
+      "name": "wait_for_checkpoint",
+      "import": "libstp.step.timing.wait_for_checkpoint.wait_for_checkpoint",
+      "arguments": [
+        {
+          "name": "checkpoint_seconds",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/timing/wait_for_checkpoint.py",
+      "tags": [
+        "timing",
+        "sync"
+      ]
+    },
+    {
+      "name": "turn_left",
+      "import": "libstp.step.motion.turn.turn_left",
+      "arguments": [
+        {
+          "name": "degrees",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "1.0"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/turn.py",
+      "tags": [
+        "motion",
+        "turn"
+      ]
+    },
+    {
+      "name": "turn_right",
+      "import": "libstp.step.motion.turn.turn_right",
+      "arguments": [
+        {
+          "name": "degrees",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "1.0"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/turn.py",
+      "tags": [
+        "motion",
+        "turn"
+      ]
+    },
+    {
+      "name": "stop",
+      "import": "libstp.step.motion.stop.stop",
+      "arguments": [
+        {
+          "name": "hard",
+          "type": "bool",
+          "import": null,
+          "optional": true,
+          "default": "True"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/stop.py",
+      "tags": [
+        "motion",
+        "stop"
+      ]
+    },
+    {
+      "name": "drive_until_black",
+      "import": "libstp.step.motion.drive_until.drive_until_black",
+      "arguments": [
+        {
+          "name": "sensor",
+          "type": "Union[IRSensor, list[IRSensor]]",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "forward_speed",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/drive_until.py",
+      "tags": [
+        "motion",
+        "sensor"
+      ]
+    },
+    {
+      "name": "drive_until_white",
+      "import": "libstp.step.motion.drive_until.drive_until_white",
+      "arguments": [
+        {
+          "name": "sensor",
+          "type": "Union[IRSensor, list[IRSensor]]",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "forward_speed",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/drive_until.py",
+      "tags": [
+        "motion",
+        "sensor"
+      ]
+    },
+    {
+      "name": "turn_until_black",
+      "import": "libstp.step.motion.drive_until.turn_until_black",
+      "arguments": [
+        {
+          "name": "sensor",
+          "type": "Union[IRSensor, list[IRSensor]]",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "angular_speed",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/drive_until.py",
+      "tags": [
+        "motion",
+        "sensor"
+      ]
+    },
+    {
+      "name": "turn_until_white",
+      "import": "libstp.step.motion.drive_until.turn_until_white",
+      "arguments": [
+        {
+          "name": "sensor",
+          "type": "Union[IRSensor, list[IRSensor]]",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "angular_speed",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/drive_until.py",
+      "tags": [
+        "motion",
+        "sensor"
+      ]
+    },
+    {
+      "name": "strafe_until_black",
+      "import": "libstp.step.motion.drive_until.strafe_until_black",
+      "arguments": [
+        {
+          "name": "sensor",
+          "type": "Union[IRSensor, list[IRSensor]]",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "strafe_speed",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/drive_until.py",
+      "tags": [
+        "motion",
+        "sensor"
+      ]
+    },
+    {
+      "name": "strafe_until_white",
+      "import": "libstp.step.motion.drive_until.strafe_until_white",
+      "arguments": [
+        {
+          "name": "sensor",
+          "type": "Union[IRSensor, list[IRSensor]]",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "strafe_speed",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/drive_until.py",
+      "tags": [
+        "motion",
+        "sensor"
+      ]
+    },
+    {
+      "name": "move_until",
+      "import": "libstp.step.motion.drive_until.move_until",
+      "arguments": [
+        {
+          "name": "sensor",
+          "type": "Union[IRSensor, list[IRSensor]]",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "target",
+          "type": "SurfaceColor",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "forward_speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "angular_speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "strafe_speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        },
+        {
+          "name": "scale_speed_on_approach",
+          "type": "bool",
+          "import": null,
+          "optional": true,
+          "default": "True"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/drive_until.py",
+      "tags": [
+        "motion",
+        "sensor"
+      ]
+    },
+    {
+      "name": "forward_lineup_on_black",
+      "import": "libstp.step.motion.lineup.forward_lineup_on_black",
+      "arguments": [
+        {
+          "name": "left_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "right_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "base_speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.3"
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        },
+        {
+          "name": "kp",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "1.0"
+        },
+        {
+          "name": "ki",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "kd",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/lineup.py",
+      "tags": [
+        "motion",
+        "lineup"
+      ]
+    },
+    {
+      "name": "forward_lineup_on_white",
+      "import": "libstp.step.motion.lineup.forward_lineup_on_white",
+      "arguments": [
+        {
+          "name": "left_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "right_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "base_speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.3"
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        },
+        {
+          "name": "kp",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "1.0"
+        },
+        {
+          "name": "ki",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "kd",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/lineup.py",
+      "tags": [
+        "motion",
+        "lineup"
+      ]
+    },
+    {
+      "name": "backward_lineup_on_black",
+      "import": "libstp.step.motion.lineup.backward_lineup_on_black",
+      "arguments": [
+        {
+          "name": "left_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "right_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "base_speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.3"
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        },
+        {
+          "name": "kp",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "1.0"
+        },
+        {
+          "name": "ki",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "kd",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/lineup.py",
+      "tags": [
+        "motion",
+        "lineup"
+      ]
+    },
+    {
+      "name": "backward_lineup_on_white",
+      "import": "libstp.step.motion.lineup.backward_lineup_on_white",
+      "arguments": [
+        {
+          "name": "left_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "right_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "base_speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.3"
+        },
+        {
+          "name": "confidence_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        },
+        {
+          "name": "kp",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "1.0"
+        },
+        {
+          "name": "ki",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "kd",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/lineup.py",
+      "tags": [
+        "motion",
+        "lineup"
+      ]
+    },
+    {
+      "name": "drive_forward",
+      "import": "libstp.step.motion.drive.drive_forward",
+      "arguments": [
+        {
+          "name": "cm",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "1.0"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/drive.py",
+      "tags": [
+        "motion",
+        "drive"
+      ]
+    },
+    {
+      "name": "drive_backward",
+      "import": "libstp.step.motion.drive.drive_backward",
+      "arguments": [
+        {
+          "name": "cm",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "1.0"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/drive.py",
+      "tags": [
+        "motion",
+        "drive"
+      ]
+    },
+    {
+      "name": "strafe_left",
+      "import": "libstp.step.motion.strafe.strafe_left",
+      "arguments": [
+        {
+          "name": "cm",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.3"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/strafe.py",
+      "tags": [
+        "motion",
+        "strafe"
+      ]
+    },
+    {
+      "name": "strafe_right",
+      "import": "libstp.step.motion.strafe.strafe_right",
+      "arguments": [
+        {
+          "name": "cm",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.3"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/strafe.py",
+      "tags": [
+        "motion",
+        "strafe"
+      ]
+    },
+    {
+      "name": "follow_line",
+      "import": "libstp.step.motion.line_follow.follow_line",
+      "arguments": [
+        {
+          "name": "left_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "right_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "distance_cm",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "forward_speed",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.5"
+        },
+        {
+          "name": "strafe_gain",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.05"
+        },
+        {
+          "name": "forward_reduction",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "kp",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.75"
+        },
+        {
+          "name": "ki",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "kd",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.5"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/line_follow.py",
+      "tags": [
+        "motion",
+        "line-follow"
+      ]
+    },
+    {
+      "name": "follow_line_until_both_black",
+      "import": "libstp.step.motion.line_follow.follow_line_until_both_black",
+      "arguments": [
+        {
+          "name": "left_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "right_sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "forward_speed",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "strafe_gain",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.05"
+        },
+        {
+          "name": "forward_reduction",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "kp",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.75"
+        },
+        {
+          "name": "ki",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.0"
+        },
+        {
+          "name": "kd",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.5"
+        },
+        {
+          "name": "both_black_threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.7"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/line_follow.py",
+      "tags": [
+        "motion",
+        "line-follow"
+      ]
+    },
+    {
+      "name": "follow_line_single",
+      "import": "libstp.step.motion.line_follow.follow_line_single",
+      "arguments": [
+        {
+          "name": "sensor",
+          "type": "IRSensor",
+          "import": "libstp.sensor_ir.IRSensor",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "distance_cm",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "forward_speed",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "threshold",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.5"
+        },
+        {
+          "name": "rotation_gain",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.25"
+        },
+        {
+          "name": "strafe_gain",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.05"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/line_follow.py",
+      "tags": [
+        "motion",
+        "line-follow"
+      ]
+    },
+    {
+      "name": "calibrate_sensors",
+      "import": "libstp.step.calibration.calibrate.calibrate_sensors",
+      "arguments": [
+        {
+          "name": "calibration_time",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "5.0"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/calibration/calibrate.py",
+      "tags": [
+        "calibration",
+        "sensor"
+      ]
+    },
+    {
+      "name": "calibrate_distance",
+      "import": "libstp.step.calibration.calibrate_distance.calibrate_distance",
+      "arguments": [
+        {
+          "name": "distance_cm",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "30.0"
+        },
+        {
+          "name": "calibrate_light_sensors",
+          "type": "bool",
+          "import": null,
+          "optional": true,
+          "default": "False"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/calibration/calibrate_distance.py",
+      "tags": [
+        "calibration",
+        "distance"
+      ]
+    },
+    {
+      "name": "calibrate_wait_for_light",
+      "import": "libstp.step.calibration.calibrate_wfl.calibrate_wait_for_light",
+      "arguments": [
+        {
+          "name": "sensor",
+          "type": "AnalogSensor",
+          "import": "libstp.hal.AnalogSensor",
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/calibration/calibrate_wfl.py",
+      "tags": [
+        "calibration",
+        "light"
+      ]
+    },
+    {
+      "name": "loop_forever",
+      "import": "libstp.step.logic.loop.loop_forever",
+      "arguments": [
+        {
+          "name": "step",
+          "type": "StepProtocol",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/logic/loop.py",
+      "tags": [
+        "control",
+        "loop"
+      ]
+    },
+    {
+      "name": "loop_for",
+      "import": "libstp.step.logic.loop.loop_for",
+      "arguments": [
+        {
+          "name": "step",
+          "type": "StepProtocol",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "iterations",
+          "type": "int",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/logic/loop.py",
+      "tags": [
+        "control",
+        "loop"
+      ]
+    },
+    {
+      "name": "do_while_active",
+      "import": "libstp.step.logic.do_while.do_while_active",
+      "arguments": [
+        {
+          "name": "reference_step",
+          "type": "Step",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "task",
+          "type": "Step",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/logic/do_while.py",
+      "tags": [
+        "control",
+        "concurrent"
+      ]
+    },
+    {
+      "name": "servo",
+      "import": "libstp.step.servo.steps.servo",
+      "arguments": [
+        {
+          "name": "servo",
+          "type": "Servo",
+          "import": "libstp.hal.Servo",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "angle",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/servo/steps.py",
+      "tags": [
+        "servo",
+        "actuator"
+      ]
+    },
+    {
+      "name": "slow_servo",
+      "import": "libstp.step.servo.steps.slow_servo",
+      "arguments": [
+        {
+          "name": "servo",
+          "type": "Servo",
+          "import": "libstp.hal.Servo",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "angle",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "duration",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/servo/steps.py",
+      "tags": [
+        "servo",
+        "actuator"
+      ]
+    },
+    {
+      "name": "shake_servo",
+      "import": "libstp.step.servo.steps.shake_servo",
+      "arguments": [
+        {
+          "name": "servo",
+          "type": "Servo",
+          "import": "libstp.hal.Servo",
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "duration",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "angle_a",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        },
+        {
+          "name": "angle_b",
+          "type": "float",
+          "import": null,
+          "optional": false,
+          "default": null
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/servo/steps.py",
+      "tags": [
+        "servo",
+        "actuator"
+      ]
+    }
+  ],
+  "last_indexed_at": "2026-02-02T16:45:28.461393+00:00"
+}

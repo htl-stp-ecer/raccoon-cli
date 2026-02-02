@@ -79,6 +79,14 @@ class RobotGenerator(BaseGenerator):
         if not isinstance(data, dict):
             raise ValueError("Robot config must be a mapping under key 'robot:'")
 
+        # Unified motion PID config is required
+        if "motion_pid" not in data:
+            raise ValueError(
+                "robot.motion_pid is required. Please add a 'motion_pid' block under 'robot'."
+            )
+        if not isinstance(data["motion_pid"], dict):
+            raise ValueError("robot.motion_pid must be a mapping")
+
         # Validate new structure (robot.drive)
         if "drive" in data:
             drive = data["drive"]
@@ -196,7 +204,7 @@ class RobotGenerator(BaseGenerator):
         if odometry_expr:
             builder.add_class_attribute("odometry", odometry_expr)
 
-        # Add motion_pid config if present
+        # Add motion_pid config (required)
         motion_pid_expr = self._build_motion_pid_config(data.get("motion_pid"))
         if motion_pid_expr:
             builder.add_class_attribute("motion_pid_config", motion_pid_expr)
@@ -827,7 +835,7 @@ class RobotGenerator(BaseGenerator):
         Returns:
             Constructor expression string, or empty string if no config
         """
-        if not motion_pid_cfg:
+        if motion_pid_cfg is None:
             return ""
 
         try:
@@ -896,7 +904,7 @@ class RobotGenerator(BaseGenerator):
             if "derating_factor" in heading_sat_cfg:
                 params["heading_saturation_derating_factor"] = heading_sat_cfg["derating_factor"]
             if "min_scale" in heading_sat_cfg:
-                params["heading_saturation_min_scale"] = heading_sat_cfg["min_scale"]
+                params["heading_min_scale"] = heading_sat_cfg["min_scale"]
             if "recovery_rate" in heading_sat_cfg:
                 params["heading_saturation_recovery_rate"] = heading_sat_cfg["recovery_rate"]
 
@@ -904,9 +912,9 @@ class RobotGenerator(BaseGenerator):
         if "tolerances" in motion_pid_cfg:
             tolerances_cfg = motion_pid_cfg["tolerances"]
             if "distance_m" in tolerances_cfg:
-                params["tolerance_distance_m"] = tolerances_cfg["distance_m"]
+                params["distance_tolerance_m"] = tolerances_cfg["distance_m"]
             if "angle_rad" in tolerances_cfg:
-                params["tolerance_angle_rad"] = tolerances_cfg["angle_rad"]
+                params["angle_tolerance_rad"] = tolerances_cfg["angle_rad"]
 
         # Rate limits
         if "rate_limits" in motion_pid_cfg:
@@ -924,9 +932,9 @@ class RobotGenerator(BaseGenerator):
             if "reorient_threshold_m" in lateral_drift_cfg:
                 params["lateral_reorient_threshold_m"] = lateral_drift_cfg["reorient_threshold_m"]
             if "heading_saturation_error_rad" in lateral_drift_cfg:
-                params["lateral_heading_saturation_error_rad"] = lateral_drift_cfg["heading_saturation_error_rad"]
+                params["heading_saturation_error_rad"] = lateral_drift_cfg["heading_saturation_error_rad"]
             if "heading_recovery_error_rad" in lateral_drift_cfg:
-                params["lateral_heading_recovery_error_rad"] = lateral_drift_cfg["heading_recovery_error_rad"]
+                params["heading_recovery_error_rad"] = lateral_drift_cfg["heading_recovery_error_rad"]
 
         # Top-level parameters
         top_level_params = [
@@ -943,7 +951,7 @@ class RobotGenerator(BaseGenerator):
 
         # Build constructor arguments
         if not params:
-            return ""
+            return "UnifiedMotionPidConfig()"
 
         args = []
         for key in sorted(params.keys()):

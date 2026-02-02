@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-01-24 15:28:51
+ Generated: 2026-02-02 13:49:27
 ===========================================================
 
 Authors:
@@ -12,19 +12,29 @@ Authors:
    You are free to modify it as needed. Regeneration may overwrite changes.
 """
 
-from libstp import Feedforward, IRSensor, Motor, MotorCalibration, PidGains
+from libstp import (
+    DigitalSensor,
+    Feedforward,
+    IRSensor,
+    Motor,
+    MotorCalibration,
+    PidGains,
+)
 from libstp import IMU as Imu
 
 
 class Defs:
     imu = Imu()
+    button = DigitalSensor(port=10)
     front_left_motor = Motor(
         port=0,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=0.0040906,
+            ff=Feedforward(
+                kS=0.1417648840286869, kV=0.14772541504885767, kA=0.015623289202440629
+            ),
+            pid=PidGains(kp=10.0, ki=10.0, kd=0.6686005001145189),
+            ticks_to_rad=0.0041282,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -32,9 +42,9 @@ class Defs:
         port=1,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=0.0040906,
+            ff=Feedforward(kS=0.1400952137255979, kV=0.18519694138026058, kA=0.02),
+            pid=PidGains(kp=10.0, ki=10.0, kd=0.9302483087685011),
+            ticks_to_rad=0.0041282,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -42,9 +52,11 @@ class Defs:
         port=2,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=0.0040906,
+            ff=Feedforward(
+                kS=0.18039996578030004, kV=0.16781414693245833, kA=0.01470602559636404
+            ),
+            pid=PidGains(kp=10.0, ki=10.0, kd=0.6409930781445602),
+            ticks_to_rad=0.0041282,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -52,9 +64,11 @@ class Defs:
         port=3,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=0.0040906,
+            ff=Feedforward(
+                kS=0.15022551588302469, kV=0.16005725675687238, kA=0.01576982629213191
+            ),
+            pid=PidGains(kp=10.0, ki=10.0, kd=0.7196966688514292),
+            ticks_to_rad=0.0041282,
             vel_lpf_alpha=0.8,
         ),
     )

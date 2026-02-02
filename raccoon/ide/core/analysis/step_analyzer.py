@@ -1,6 +1,6 @@
 import ast
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
 
@@ -25,30 +25,32 @@ class StepArgument:
 
 @dataclass
 class StepFunction:
-    """Represents a DSL-decorated function"""
+    """Represents a DSL-decorated function or class"""
     name: str
     import_path: str
     arguments: List[StepArgument]
     file_path: str
+    tags: List[str] | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "import": self.import_path,
             "arguments": [arg.to_dict() for arg in self.arguments],
-            "file": self.file_path
+            "file": self.file_path,
+            "tags": self.tags or [],
         }
 
 
 class DSLStepAnalyzer:
-    """Analyzes Python files to extract @dsl decorated functions and their signatures"""
+    """Analyzes Python files to extract @dsl decorated functions/classes and their signatures"""
 
     def __init__(self, project_root: Path):
         self.project_root = project_root
         self.discovered_steps: List[StepFunction] = []
 
     def analyze_all_steps(self) -> List[StepFunction]:
-        """Analyze all Python files in the project for @dsl decorated functions"""
+        """Analyze all Python files in the project for @dsl decorated functions/classes"""
         self.discovered_steps = []
 
         # Analyze project-specific steps
@@ -86,7 +88,7 @@ class DSLStepAnalyzer:
         return step_files
 
     def _analyze_file(self, file_path: Path):
-        """Analyze a single Python file for @dsl decorated functions"""
+        """Analyze a single Python file for @dsl decorated functions/classes"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -100,14 +102,11 @@ class DSLStepAnalyzer:
             # Extract imports for type resolution
             imports = self._extract_imports(ast_tree)
 
-            # Collect step classes to support the new factory style
-            step_classes = self._collect_step_classes(ast_tree)
-
-            # Find DSL functions or factory functions returning Step subclasses
+            # Find @dsl decorated functions and classes
             for node in ast.walk(ast_tree):
-                if isinstance(node, ast.FunctionDef):
-                    if self._is_step_function(node, step_classes, imports):
-                        step_func = self._analyze_function(node, file_path, imports)
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                    if self._is_dsl_step(node):
+                        step_func = self._analyze_dsl_node(node, file_path, imports)
                         if step_func:
                             self.discovered_steps.append(step_func)
 
@@ -132,58 +131,73 @@ class DSLStepAnalyzer:
 
         return imports
 
-    def _has_dsl_decorator(self, node: ast.FunctionDef) -> bool:
-        """Check if function has @dsl decorator"""
+    def _has_dsl_decorator(self, node: ast.FunctionDef | ast.ClassDef) -> bool:
+        """Check if function or class has @dsl decorator"""
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Name) and decorator.id == "dsl":
                 return True
             elif isinstance(decorator, ast.Attribute) and decorator.attr == "dsl":
                 return True
-        return False
-
-    def _collect_step_classes(self, tree: ast.AST) -> Set[str]:
-        """Collect the names of classes inheriting from Step"""
-        step_classes: Set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                for base in node.bases:
-                    base_name = self._get_node_name(base)
-                    if base_name:
-                        simple_name = base_name.split(".")[-1]
-                        if simple_name == "Step":
-                            step_classes.add(node.name)
-                            break
-        return step_classes
-
-    def _is_step_function(self, node: ast.FunctionDef, step_classes: Set[str], imports: Dict[str, str]) -> bool:
-        if self._has_dsl_decorator(node):
-            return True
-        return self._is_step_factory_function(node, step_classes, imports)
-
-    def _is_step_factory_function(self, node: ast.FunctionDef, step_classes: Set[str], imports: Dict[str, str]) -> bool:
-        if not step_classes:
-            return False
-
-        if node.returns:
-            return_type, _, _ = self._resolve_type_annotation(node.returns, imports)
-            if return_type in step_classes:
-                return True
-
-        for sub_node in ast.walk(node):
-            if isinstance(sub_node, ast.Return):
-                if self._is_step_constructor_call(sub_node.value, step_classes):
+            elif isinstance(decorator, ast.Call):
+                func_name = self._get_node_name(decorator.func)
+                if func_name and func_name.split(".")[-1] == "dsl":
                     return True
         return False
 
-    def _is_step_constructor_call(self, node: Optional[ast.AST], step_classes: Set[str]) -> bool:
-        if not isinstance(node, ast.Call):
-            return False
+    def _get_dsl_call_decorator(self, node: ast.FunctionDef | ast.ClassDef) -> Optional[ast.Call]:
+        """Get the @dsl(...) call decorator if present"""
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Call):
+                func_name = self._get_node_name(decorator.func)
+                if func_name and func_name.split(".")[-1] == "dsl":
+                    return decorator
+        return None
 
-        constructor_name = self._get_node_name(node.func)
-        if constructor_name:
-            simple_name = constructor_name.split(".")[-1]
-            return simple_name in step_classes
+    def _get_dsl_tags(self, node: ast.FunctionDef | ast.ClassDef) -> List[str]:
+        """Extract tags from @dsl(tags=[...])"""
+        tags: List[str] = []
+        decorator = self._get_dsl_call_decorator(node)
+        if not decorator:
+            return tags
+        for keyword in decorator.keywords:
+            if keyword.arg != "tags":
+                continue
+            value = keyword.value
+            if isinstance(value, (ast.List, ast.Tuple)):
+                for elt in value.elts:
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                        tags.append(elt.value)
+        return tags
+
+    def _get_dsl_name(self, node: ast.FunctionDef | ast.ClassDef) -> Optional[str]:
+        """Extract custom name from @dsl(name="...")"""
+        decorator = self._get_dsl_call_decorator(node)
+        if not decorator:
+            return None
+        for keyword in decorator.keywords:
+            if keyword.arg == "name":
+                if isinstance(keyword.value, ast.Constant) and isinstance(keyword.value.value, str):
+                    return keyword.value.value
+        return None
+
+    def _is_dsl_hidden(self, node: ast.FunctionDef | ast.ClassDef) -> bool:
+        """Check if @dsl(hidden=True)"""
+        decorator = self._get_dsl_call_decorator(node)
+        if not decorator:
+            return False
+        for keyword in decorator.keywords:
+            if keyword.arg == "hidden":
+                if isinstance(keyword.value, ast.Constant):
+                    return bool(keyword.value.value)
         return False
+
+    def _is_dsl_step(self, node: ast.FunctionDef | ast.ClassDef) -> bool:
+        """Only index functions/classes with @dsl decorator (and not hidden)"""
+        if not self._has_dsl_decorator(node):
+            return False
+        if self._is_dsl_hidden(node):
+            return False
+        return True
 
     def _get_node_name(self, node: Optional[ast.AST]) -> Optional[str]:
         if node is None:
@@ -206,32 +220,49 @@ class DSLStepAnalyzer:
             return node.value
         return None
 
-    def _analyze_function(self, node: ast.FunctionDef, file_path: Path, imports: Dict[str, str]) -> Optional[StepFunction]:
-        """Analyze a @dsl decorated function to extract its signature"""
+    def _analyze_dsl_node(self, node: ast.FunctionDef | ast.ClassDef, file_path: Path, imports: Dict[str, str]) -> Optional[StepFunction]:
+        """Analyze a @dsl decorated function or class to extract its signature"""
         try:
-            # Generate import path
+            tags = self._get_dsl_tags(node)
+            custom_name = self._get_dsl_name(node)
             import_path = self._generate_import_path(file_path)
 
-            # Extract arguments
+            # Extract arguments from function or class __init__
             arguments = []
-            for arg in node.args.args:
-                if arg.arg == "self":  # Skip self parameter
-                    continue
+            if isinstance(node, ast.FunctionDef):
+                args_node = node.args
+            else:
+                # For classes, find __init__ method
+                args_node = self._get_class_init_args(node)
 
-                arg_info = self._analyze_argument(arg, node.args, imports)
-                if arg_info:
-                    arguments.append(arg_info)
+            if args_node:
+                for arg in args_node.args:
+                    if arg.arg == "self":
+                        continue
+                    arg_info = self._analyze_argument(arg, args_node, imports)
+                    if arg_info:
+                        arguments.append(arg_info)
+
+            step_name = custom_name if custom_name else node.name
 
             return StepFunction(
-                name=node.name,
+                name=step_name,
                 import_path=f"{import_path}.{node.name}",
                 arguments=arguments,
-                file_path=str(file_path)
+                file_path=str(file_path),
+                tags=tags or None,
             )
 
         except Exception as e:
-            print(f"Error analyzing function {node.name}: {e}")
+            print(f"Error analyzing {node.name}: {e}")
             return None
+
+    def _get_class_init_args(self, node: ast.ClassDef) -> Optional[ast.arguments]:
+        """Extract arguments from a class's __init__ method"""
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                return item.args
+        return None
 
     def _analyze_argument(self, arg: ast.arg, args: ast.arguments, imports: Dict[str, str]) -> Optional[StepArgument]:
         """Analyze a function argument to extract type information"""

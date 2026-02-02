@@ -15,6 +15,7 @@ from raccoon.project import ProjectError, load_project_config, require_project
 
 from .motors import calibrate_motors_local, calibrate_motors_remote
 from .rpm import calibrate_rpm_local, calibrate_rpm_remote
+from .benchmark import benchmark_motors_local, benchmark_motors_remote
 
 logger = logging.getLogger("raccoon")
 
@@ -105,10 +106,12 @@ def calibrate_group(ctx: click.Context) -> None:
 
     Subcommands:
 
-        motors  - Calibrate motor PID and feedforward parameters
+        motors    - Calibrate motor PID and feedforward parameters
 
-        rpm     - Calibrate motor RPM vs power using hall effect sensor
-                  (also computes BEMF scale/offset)
+        rpm       - Calibrate motor RPM vs power using hall effect sensor
+                    (also computes BEMF scale/offset)
+
+        benchmark - Test motor PID responsiveness and control quality
     """
     pass
 
@@ -117,8 +120,26 @@ def calibrate_group(ctx: click.Context) -> None:
 @click.option("--aggressive", is_flag=True, default=False, help="Use aggressive calibration mode (relay feedback)")
 @click.option("--local", "-l", is_flag=True, help="Run locally on this machine (requires hardware)")
 @click.option("--yes", "-y", is_flag=True, help="Auto-save calibration results without prompting")
+@click.option(
+    "--export-validation/--no-export-validation",
+    default=True,
+    help="Export validation command vs measured velocity CSVs (default: enabled)",
+)
+@click.option(
+    "--validation-output-dir",
+    type=str,
+    default=None,
+    help="Directory to write validation CSVs (default: <project>/logs/motor_validation)",
+)
 @click.pass_context
-def motors_command(ctx: click.Context, aggressive: bool, local: bool, yes: bool) -> None:
+def motors_command(
+    ctx: click.Context,
+    aggressive: bool,
+    local: bool,
+    yes: bool,
+    export_validation: bool,
+    validation_output_dir: Optional[str],
+) -> None:
     """Calibrate motor PID and feedforward parameters.
 
     Runs motor calibration to determine PID and feedforward parameters.
@@ -133,11 +154,28 @@ def motors_command(ctx: click.Context, aggressive: bool, local: bool, yes: bool)
 
     if local:
         # Run locally
-        calibrate_motors_local(ctx, project_root, config, aggressive, auto_save=yes)
+        calibrate_motors_local(
+            ctx,
+            project_root,
+            config,
+            aggressive,
+            auto_save=yes,
+            export_validation=export_validation,
+            validation_output_dir=validation_output_dir,
+        )
     else:
         # Require remote connection
         _require_remote_connection(console, project_root)
-        asyncio.run(calibrate_motors_remote(ctx, project_root, config, aggressive))
+        asyncio.run(
+            calibrate_motors_remote(
+                ctx,
+                project_root,
+                config,
+                aggressive,
+                export_validation=export_validation,
+                validation_output_dir=validation_output_dir,
+            )
+        )
 
 
 @calibrate_group.command(name="rpm")
@@ -259,6 +297,123 @@ def rpm_command(
             motor_port, sensor_port, output,
             power_steps, rotations, magnets, min_power
         ))
+
+
+@calibrate_group.command(name="benchmark")
+@click.option(
+    "--power", "-p",
+    type=float,
+    multiple=True,
+    default=[30.0, 50.0, 70.0, 100.0, -30.0, -50.0, -70.0],
+    help="Motor power %% to test (can specify multiple, default: 30, 50, 70, 100, -30, -50, -70)",
+)
+@click.option(
+    "--duration", "-d",
+    type=float,
+    default=2.0,
+    help="Duration of each step response test in seconds (default: 2.0)",
+)
+@click.option(
+    "--sample-rate", "-r",
+    type=float,
+    default=100.0,
+    help="Sampling rate in Hz (default: 100)",
+)
+@click.option(
+    "--output-dir", "-o",
+    type=str,
+    default=None,
+    help="Output directory for results (default: <project>/logs/motor_benchmark)",
+)
+@click.option("--local", "-l", is_flag=True, help="Run locally on this machine (requires hardware)")
+@click.pass_context
+def benchmark_command(
+    ctx: click.Context,
+    power: tuple,
+    duration: float,
+    sample_rate: float,
+    output_dir: Optional[str],
+    local: bool,
+) -> None:
+    """Benchmark motor PID responsiveness and control quality.
+
+    Tests each motor's step response characteristics including:
+
+    - Rise time: How quickly the motor reaches target speed (10% to 90%)
+
+    - Settling time: Time to stay within 5% of target
+
+    - Overshoot: Peak velocity beyond target as percentage
+
+    - Steady-state error: Average error after settling
+
+    Each motor receives a letter grade (A-F) and numerical score (0-100)
+    based on these metrics. Results are saved to CSV and plotted.
+
+    By default, runs on the connected Pi. Use --local to run on this machine.
+
+    Examples:
+
+        raccoon calibrate benchmark
+
+        raccoon calibrate benchmark -p 40 -p 60 -p 80 -p -40
+
+        raccoon calibrate benchmark --duration 3.0 --sample-rate 200
+
+        raccoon calibrate benchmark --local
+    """
+    console: Console = ctx.obj["console"]
+
+    # Always require project context
+    project_root, config = _require_project_context(console)
+
+    # Convert tuple to list
+    powers = list(power)
+
+    # Validate parameters
+    if duration <= 0:
+        console.print("[red]Duration must be positive[/red]")
+        raise SystemExit(1)
+
+    if sample_rate <= 0:
+        console.print("[red]Sample rate must be positive[/red]")
+        raise SystemExit(1)
+
+    if not powers:
+        console.print("[red]At least one power level must be specified[/red]")
+        raise SystemExit(1)
+
+    # Validate power range
+    for p in powers:
+        if abs(p) > 100:
+            console.print(f"[red]Power {p}%% is out of range (-100 to 100)[/red]")
+            raise SystemExit(1)
+
+    if local:
+        # Run locally
+        benchmark_motors_local(
+            ctx,
+            project_root,
+            config,
+            powers=powers,
+            duration=duration,
+            sample_rate=sample_rate,
+            output_dir=output_dir,
+        )
+    else:
+        # Require remote connection
+        _require_remote_connection(console, project_root)
+        asyncio.run(
+            benchmark_motors_remote(
+                ctx,
+                project_root,
+                config,
+                powers=powers,
+                duration=duration,
+                sample_rate=sample_rate,
+                output_dir=output_dir,
+            )
+        )
 
 
 # Backwards compatibility: expose the group as calibrate_command

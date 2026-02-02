@@ -5,7 +5,7 @@ import yaml
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
-from raccoon.ide.schemas.project import ProjectCreate, ProjectInDB
+from raccoon.ide.schemas.project import ProjectCreate, ProjectInDB, ProjectConnection
 
 
 class ProjectRepository:
@@ -23,10 +23,17 @@ class ProjectRepository:
         )
 
     def get_project_path(self, project_uuid: uuid.UUID) -> Path:
-        return Path(os.path.join(self.project_root, str(project_uuid)))
+        uuid_path = Path(os.path.join(self.project_root, str(project_uuid)))
+        if uuid_path.exists():
+            return uuid_path
+        resolved = self._find_project_path_by_uuid(project_uuid)
+        if resolved:
+            return resolved
+        return uuid_path
 
     def get_project_config_path(self, project_uuid: uuid.UUID) -> Path:
-        return self.get_project_path(project_uuid) / self.CONFIG_FILENAME
+        project_path = self.get_project_path(project_uuid)
+        return project_path / self.CONFIG_FILENAME
 
     def _load_project_config(self, project_uuid: uuid.UUID) -> Dict[str, Any] | None:
         config_path = self.get_project_config_path(project_uuid)
@@ -84,18 +91,7 @@ class ProjectRepository:
         data = self._load_project_config(project_uuid)
         if not data:
             return None
-
-        name = data.get("name")
-        uuid_value = data.get("uuid", project_uuid)
-        if not name or not uuid_value:
-            return None
-
-        try:
-            parsed_uuid = uuid_value if isinstance(uuid_value, uuid.UUID) else uuid.UUID(str(uuid_value))
-        except (ValueError, TypeError):
-            return None
-
-        return ProjectInDB(uuid=parsed_uuid, name=name)
+        return self._project_from_config(data, fallback_uuid=project_uuid)
 
     def update_project(
         self, project_uuid: uuid.UUID, project_update: ProjectCreate
@@ -124,15 +120,73 @@ class ProjectRepository:
         if not os.path.exists(self.project_root):
             return []
 
-        for item_name in os.listdir(self.project_root):
-            item_path = os.path.join(self.project_root, item_name)
-            if os.path.isdir(item_path):
-                try:
-                    project_uuid = uuid.UUID(item_name)
-                    project = self.get_project(project_uuid)
-                    if project:
-                        projects.append(project)
-                except ValueError:
-                    # Not a valid UUID folder, ignore
-                    pass
+        for project_dir in self._iter_project_dirs():
+            config_path = project_dir / self.CONFIG_FILENAME
+            if not config_path.exists():
+                continue
+            try:
+                data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            project = self._project_from_config(data, fallback_uuid=None)
+            if project:
+                projects.append(project)
         return projects
+
+    def _iter_project_dirs(self) -> List[Path]:
+        dirs: List[Path] = []
+        for root, dirnames, _ in os.walk(self.project_root):
+            for dirname in dirnames:
+                candidate = Path(root) / dirname
+                if (candidate / self.CONFIG_FILENAME).exists():
+                    dirs.append(candidate)
+        return dirs
+
+    def _find_project_path_by_uuid(self, project_uuid: uuid.UUID) -> Optional[Path]:
+        for project_dir in self._iter_project_dirs():
+            config_path = project_dir / self.CONFIG_FILENAME
+            if not config_path.exists():
+                continue
+            try:
+                data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            uuid_value = data.get("uuid")
+            try:
+                parsed_uuid = uuid_value if isinstance(uuid_value, uuid.UUID) else uuid.UUID(str(uuid_value))
+            except (ValueError, TypeError):
+                continue
+            if parsed_uuid == project_uuid:
+                return project_dir
+        return None
+
+    def _project_from_config(
+        self,
+        data: Dict[str, Any],
+        fallback_uuid: uuid.UUID | None,
+    ) -> Optional[ProjectInDB]:
+        name = data.get("name")
+        uuid_value = data.get("uuid", fallback_uuid)
+        if not name or not uuid_value:
+            return None
+        try:
+            parsed_uuid = uuid_value if isinstance(uuid_value, uuid.UUID) else uuid.UUID(str(uuid_value))
+        except (ValueError, TypeError):
+            return None
+
+        connection = None
+        connection_payload = data.get("connection")
+        if isinstance(connection_payload, dict):
+            connection = ProjectConnection(
+                pi_address=connection_payload.get("pi_address"),
+                pi_port=connection_payload.get("pi_port"),
+                pi_user=connection_payload.get("pi_user"),
+                remote_path=connection_payload.get("remote_path"),
+                auto_connect=connection_payload.get("auto_connect"),
+            )
+
+        return ProjectInDB(uuid=parsed_uuid, name=name, connection=connection)
