@@ -73,7 +73,7 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.014717944639950216
+        kS: 0.11
         kV: 0.1981503563639978
         kA: 0.02
       pid:
@@ -88,7 +88,7 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.24995750568338232
+        kS: 0.09
         kV: 0.1350324603642087
         kA: 0.008225329011787715
       pid:
@@ -103,7 +103,7 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.07927658167594495
+        kS: 0.11
         kV: 0.18219958232362843
         kA: 0.02
       pid:
@@ -118,7 +118,7 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.12808157687902538
+        kS: 0.11
         kV: 0.15768136518367729
         kA: 0.017155086054130467
       pid:
@@ -136,7 +136,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 192.168.178.85
+  pi_address: 192.168.100.81
   pi_port: 8421
   pi_user: pi
   remote_path: null

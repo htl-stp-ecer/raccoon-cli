@@ -6,7 +6,7 @@ from libstp import wait_for_button, calibrate_distance
 class SetupMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
-            #calibrate_distance(calibrate_light_sensors=True),
+            calibrate_distance(calibrate_light_sensors=True),
             #calibrate_sensors(),
-            #wait_for_button()
+            wait_for_button()
         ])
