@@ -433,6 +433,64 @@ def _generate_validation_plots(console: Console, validation_dir: Path) -> None:
             plt.close()
 
 
+def _average_calibration_results(all_results: list, console: Console) -> list:
+    """Average multiple calibration runs to reduce BEMF noise.
+
+    Args:
+        all_results: List of result lists from multiple calibration runs
+        console: Rich console for output
+
+    Returns:
+        List of averaged results (same structure as single run)
+    """
+    if not all_results or not all_results[0]:
+        return []
+
+    num_motors = len(all_results[0])
+    num_runs = len(all_results)
+
+    console.print(f"\n[cyan]Averaging {num_runs} calibration runs...[/cyan]")
+
+    # Create averaged results
+    averaged = []
+    for motor_idx in range(num_motors):
+        # Collect all successful results for this motor
+        successful_runs = [
+            run[motor_idx] for run in all_results
+            if run[motor_idx].success
+        ]
+
+        if not successful_runs:
+            # No successful runs - use first result (will be marked as failed)
+            averaged.append(all_results[0][motor_idx])
+            continue
+
+        # Average the values
+        avg_kp = sum(r.pid.kp for r in successful_runs) / len(successful_runs)
+        avg_ki = sum(r.pid.ki for r in successful_runs) / len(successful_runs)
+        avg_kd = sum(r.pid.kd for r in successful_runs) / len(successful_runs)
+        avg_kS = sum(r.ff.kS for r in successful_runs) / len(successful_runs)
+        avg_kV = sum(r.ff.kV for r in successful_runs) / len(successful_runs)
+        avg_kA = sum(r.ff.kA for r in successful_runs) / len(successful_runs)
+
+        # Create a result-like object with averaged values
+        # We'll use the first successful result as template and update values
+        template = successful_runs[0]
+
+        # Create new PID and FF objects with averaged values
+        class AvgResult:
+            def __init__(self):
+                self.success = True
+                self.pid = type('PID', (), {'kp': avg_kp, 'ki': avg_ki, 'kd': avg_kd})()
+                self.ff = type('FF', (), {'kS': avg_kS, 'kV': avg_kV, 'kA': avg_kA})()
+
+        averaged.append(AvgResult())
+
+        console.print(f"  Motor {motor_idx}: {len(successful_runs)}/{num_runs} successful runs averaged")
+
+    return averaged
+
+
 def calibrate_motors_local(
     ctx: click.Context,
     project_root: Path,
@@ -441,6 +499,7 @@ def calibrate_motors_local(
     auto_save: bool = False,
     export_validation: bool = True,
     validation_output_dir: str | None = None,
+    iterations: int = 1,
 ) -> None:
     """Run motor PID/FF calibration locally (on the Pi itself)."""
     console: Console = ctx.obj["console"]
@@ -458,10 +517,11 @@ def calibrate_motors_local(
         console.print("[yellow]Make sure you have run 'raccoon codegen' first and that libstp is installed.[/yellow]")
         raise SystemExit(1) from exc
 
+    iterations_msg = f"\nIterations: [yellow]{iterations}[/yellow] (results will be averaged)" if iterations > 1 else ""
     console.print(Panel(
         f"[bold cyan]Starting Motor Calibration[/bold cyan]\n"
         f"Mode: {'[yellow]Aggressive (relay feedback)[/yellow]' if aggressive else '[green]Standard[/green]'}\n"
-        f"Project: {config.get('name', 'Unknown')}",
+        f"Project: {config.get('name', 'Unknown')}{iterations_msg}",
         border_style="cyan"
     ))
 
@@ -472,26 +532,53 @@ def calibrate_motors_local(
         console.print(f"[red]Failed to initialize robot: {exc}[/red]")
         raise SystemExit(1) from exc
 
-    # Run calibration
-    console.print("\n[cyan]Running calibration... This may take a few moments.[/cyan]")
+    # Run calibration (potentially multiple times)
+    all_results = []
 
-    try:
-        calibration_config = None
-        if aggressive or export_validation or validation_output_dir:
-            calibration_config = CalibrationConfig()
-            if aggressive:
-                calibration_config.use_relay_feedback = True
-            if export_validation:
-                calibration_config.export_validation_profiles = True
-            if validation_output_dir:
-                calibration_config.validation_output_dir = str(validation_output_dir)
-        if calibration_config is not None:
-            results = robot.kinematics.calibrate_motors(calibration_config)
+    for iteration in range(iterations):
+        if iterations > 1:
+            console.print(f"\n[cyan]Running calibration iteration {iteration + 1}/{iterations}...[/cyan]")
         else:
-            results = robot.kinematics.calibrate_motors()
-    except Exception as exc:
-        console.print(f"\n[red]Calibration failed: {exc}[/red]")
-        raise SystemExit(1) from exc
+            console.print("\n[cyan]Running calibration... This may take a few moments.[/cyan]")
+
+        try:
+            calibration_config = None
+            if aggressive or export_validation or validation_output_dir:
+                calibration_config = CalibrationConfig()
+                if aggressive:
+                    calibration_config.use_relay_feedback = True
+                if export_validation:
+                    calibration_config.export_validation_profiles = True
+                if validation_output_dir:
+                    # Append iteration number to validation dir for multiple runs
+                    if iterations > 1:
+                        iter_dir = f"{validation_output_dir}_iter{iteration + 1}"
+                    else:
+                        iter_dir = validation_output_dir
+                    calibration_config.validation_output_dir = str(iter_dir)
+            if calibration_config is not None:
+                results = robot.kinematics.calibrate_motors(calibration_config)
+            else:
+                results = robot.kinematics.calibrate_motors()
+
+            all_results.append(results)
+
+        except Exception as exc:
+            console.print(f"\n[red]Calibration iteration {iteration + 1} failed: {exc}[/red]")
+            if iteration == 0:
+                # First iteration failed - can't continue
+                raise SystemExit(1) from exc
+            # Later iterations can fail - we'll average what we have
+            console.print("[yellow]Continuing with remaining iterations...[/yellow]")
+
+    # Average results if multiple iterations
+    if iterations > 1 and len(all_results) > 1:
+        results = _average_calibration_results(all_results, console)
+    elif all_results:
+        results = all_results[0]
+    else:
+        console.print("[red]No successful calibration runs.[/red]")
+        raise SystemExit(1)
 
     # Determine motor names based on drivetrain type
     drivetrain_type = config.get("robot", {}).get("drive", {}).get("kinematics", {}).get("type", "")
@@ -549,6 +636,7 @@ async def calibrate_motors_remote(
     aggressive: bool,
     export_validation: bool = True,
     validation_output_dir: str | None = None,
+    iterations: int = 1,
 ) -> None:
     """Run motor PID/FF calibration on the connected Pi."""
     console: Console = ctx.obj["console"]
@@ -580,6 +668,8 @@ async def calibrate_motors_remote(
         args.append("--no-export-validation")
     if validation_output_dir:
         args.extend(["--validation-output-dir", str(validation_output_dir)])
+    if iterations > 1:
+        args.extend(["--iterations", str(iterations)])
 
     # Start the calibrate command on Pi
     async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:

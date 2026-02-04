@@ -16,6 +16,7 @@ from raccoon.project import ProjectError, load_project_config, require_project
 from .motors import calibrate_motors_local, calibrate_motors_remote
 from .rpm import calibrate_rpm_local, calibrate_rpm_remote
 from .benchmark import benchmark_motors_local, benchmark_motors_remote
+from .deadzone import calibrate_deadzone_local, calibrate_deadzone_remote
 
 logger = logging.getLogger("raccoon")
 
@@ -111,6 +112,9 @@ def calibrate_group(ctx: click.Context) -> None:
         rpm       - Calibrate motor RPM vs power using hall effect sensor
                     (also computes BEMF scale/offset)
 
+        deadzone  - Interactive deadzone calibration using human observation
+                    (BEMF is unreliable at low RPM)
+
         benchmark - Test motor PID responsiveness and control quality
     """
     pass
@@ -131,6 +135,12 @@ def calibrate_group(ctx: click.Context) -> None:
     default=None,
     help="Directory to write validation CSVs (default: <project>/logs/motor_validation)",
 )
+@click.option(
+    "--iterations", "-i",
+    type=int,
+    default=1,
+    help="Number of calibration runs to average (default: 1). Use 3-5 for noisy BEMF.",
+)
 @click.pass_context
 def motors_command(
     ctx: click.Context,
@@ -139,11 +149,15 @@ def motors_command(
     yes: bool,
     export_validation: bool,
     validation_output_dir: Optional[str],
+    iterations: int,
 ) -> None:
     """Calibrate motor PID and feedforward parameters.
 
     Runs motor calibration to determine PID and feedforward parameters.
     The results are automatically saved to raccoon.project.yml.
+
+    Use --iterations to run multiple calibration passes and average the results,
+    which helps reduce noise from unreliable BEMF readings.
 
     By default, runs on the connected Pi. Use --local to run on this machine.
     """
@@ -151,6 +165,11 @@ def motors_command(
 
     # Always require project context
     project_root, config = _require_project_context(console)
+
+    # Validate iterations
+    if iterations < 1:
+        console.print("[red]Iterations must be at least 1[/red]")
+        raise SystemExit(1)
 
     if local:
         # Run locally
@@ -162,6 +181,7 @@ def motors_command(
             auto_save=yes,
             export_validation=export_validation,
             validation_output_dir=validation_output_dir,
+            iterations=iterations,
         )
     else:
         # Require remote connection
@@ -174,6 +194,7 @@ def motors_command(
                 aggressive,
                 export_validation=export_validation,
                 validation_output_dir=validation_output_dir,
+                iterations=iterations,
             )
         )
 
@@ -297,6 +318,122 @@ def rpm_command(
             motor_port, sensor_port, output,
             power_steps, rotations, magnets, min_power
         ))
+
+
+@calibrate_group.command(name="deadzone")
+@click.option(
+    "--motor-port", "-m",
+    type=int,
+    multiple=True,
+    help="Motor port to calibrate (can specify multiple). If not specified, calibrates all motors.",
+)
+@click.option(
+    "--start-percent",
+    type=int,
+    default=1,
+    help="Starting percentage to test (default: 1)",
+)
+@click.option(
+    "--max-percent",
+    type=int,
+    default=30,
+    help="Maximum percentage before giving up (default: 30)",
+)
+@click.option(
+    "--settle-time",
+    type=float,
+    default=0.3,
+    help="Seconds to wait after setting speed before asking (default: 0.3)",
+)
+@click.option("--local", "-l", is_flag=True, help="Run locally on this machine (requires hardware)")
+@click.option("--yes", "-y", is_flag=True, help="Auto-save calibration results without prompting")
+@click.pass_context
+def deadzone_command(
+    ctx: click.Context,
+    motor_port: tuple,
+    start_percent: int,
+    max_percent: int,
+    settle_time: float,
+    local: bool,
+    yes: bool,
+) -> None:
+    """Interactive deadzone calibration using human observation.
+
+    BEMF readings are unreliable at low RPM, so this command uses human
+    observation to find the exact motor percentage where the wheel starts
+    turning.
+
+    For each motor, you'll be prompted with increasing power levels:
+
+    - Answer "n" if the wheel is NOT turning
+
+    - Answer "y" when you see the wheel START turning
+
+    The command tests both forward and reverse directions since motors
+    often have asymmetric friction.
+
+    IMPORTANT: This command only updates deadzone calibration values.
+    All other calibration (PID, FF, BEMF) is preserved.
+
+    By default, runs on the connected Pi. Use --local to run on this machine.
+
+    Examples:
+
+        raccoon calibrate deadzone
+
+        raccoon calibrate deadzone --motor-port 0 --motor-port 1
+
+        raccoon calibrate deadzone --max-percent 20 --settle-time 0.5
+
+        raccoon calibrate deadzone --local
+    """
+    console: Console = ctx.obj["console"]
+
+    # Always require project context
+    project_root, config = _require_project_context(console)
+
+    # Convert tuple to list
+    ports = list(motor_port) if motor_port else None
+
+    # Validate parameters
+    if start_percent < 1 or start_percent > 100:
+        console.print("[red]Start percent must be between 1 and 100[/red]")
+        raise SystemExit(1)
+
+    if max_percent < start_percent or max_percent > 100:
+        console.print("[red]Max percent must be between start_percent and 100[/red]")
+        raise SystemExit(1)
+
+    if settle_time < 0:
+        console.print("[red]Settle time must be non-negative[/red]")
+        raise SystemExit(1)
+
+    if local:
+        # Run locally
+        calibrate_deadzone_local(
+            ctx,
+            project_root,
+            config,
+            motor_ports=ports,
+            start_percent=start_percent,
+            max_percent=max_percent,
+            settle_time=settle_time,
+            auto_save=yes,
+        )
+    else:
+        # Require remote connection
+        _require_remote_connection(console, project_root)
+        asyncio.run(
+            calibrate_deadzone_remote(
+                ctx,
+                project_root,
+                config,
+                motor_ports=ports,
+                start_percent=start_percent,
+                max_percent=max_percent,
+                settle_time=settle_time,
+            )
+        )
 
 
 @calibrate_group.command(name="benchmark")

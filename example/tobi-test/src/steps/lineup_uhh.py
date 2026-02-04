@@ -1,59 +1,83 @@
 import asyncio
-
-from libstp import Step, IRSensor, dsl
+import time
+from collections import deque
 from libstp.foundation import ChassisVelocity, info
+from libstp.sensor_ir import IRSensor
+from libstp.step import Step
+from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from libstp.robot.api import GenericRobot
 
 
-@dsl
-class LineupUHH(Step):
+class SurfaceColor(Enum):
+    BLACK = 0
+    WHITE = 1
 
-    def __init__(self,
-                 left_sensor: IRSensor,
-                 right_sensor: IRSensor,
-                 ):
+
+class ReverseAlignOnEdge(Step):
+    def __init__(self, left_sensor: IRSensor, right_sensor: IRSensor,
+                 forward_speed: float = 0.25,
+                 reverse_speed: float = -0.05,
+                 trigger_threshold: float = 0.3,
+                 exit_threshold: float = 0.2,
+                 sensor_avg_window: int = 3):
         super().__init__()
         self.left_sensor = left_sensor
         self.right_sensor = right_sensor
+        self.forward_speed = forward_speed
+        self.reverse_speed = reverse_speed
+        self.trigger_threshold = trigger_threshold
+        self.exit_threshold = exit_threshold
+        self.left_buffer = deque(maxlen=sensor_avg_window)
+        self.right_buffer = deque(maxlen=sensor_avg_window)
 
-    def _get_velocity(self, left_conf, right_conf) -> ChassisVelocity:
-        left_speed = 0
-        right_speed = 0
-        is_left_black = left_conf > 0.5
-        is_right_black = right_conf > 0.5
-        if is_left_black and not is_right_black:
-            left_speed = -0.01
-            right_speed = 0.01
-        elif not is_left_black and is_right_black:
-            left_speed = 0.01
-            right_speed = -0.01
-        else:
-            left_speed = 0.05
-            right_speed = 0.05
+    def _avg_confidence(self) -> tuple[float, float]:
+        self.left_buffer.append(self.left_sensor.probabilityOfBlack())
+        self.right_buffer.append(self.right_sensor.probabilityOfBlack())
+        return sum(self.left_buffer) / len(self.left_buffer), sum(self.right_buffer) / len(self.right_buffer)
 
-        info(f"Left conf: {left_conf:.2f}, Right conf: {right_conf:.2f}, Left speed: {left_speed:.2f}, Right speed: {right_speed:.2f}")
-        return ChassisVelocity(
-            (left_speed + right_speed) / 2,
-            0.0,
-            (right_speed - left_speed) / 0.12
-        )
-
-    async def _execute_step(self, robot: "GenericRobot") -> None:
-        left_conf = 0.0
-        right_conf = 0.0
-
+    async def _drive_until_trigger(self, robot: "GenericRobot") -> None:
         last_time = asyncio.get_event_loop().time()
 
-        while left_conf <= 0.9 and right_conf <= 0.9:
-            current_time = asyncio.get_event_loop().time()
-            delta_time = max(current_time - last_time, 0.0)
-            last_time = current_time
+        while True:
+            now = asyncio.get_event_loop().time()
+            dt = now - last_time
+            last_time = now
 
-            left_conf = self.left_sensor.probabilityOfBlack()
-            right_conf = self.right_sensor.probabilityOfBlack()
+            robot.drive.set_velocity(ChassisVelocity(self.forward_speed, 0.0, 0.0))
+            robot.drive.update(dt)
 
-            velocity = self._get_velocity(left_conf, right_conf)
+            left_avg, right_avg = self._avg_confidence()
+            info(f"Forward: L={left_avg:.2f}, R={right_avg:.2f}")
+            if left_avg >= self.trigger_threshold or right_avg >= self.trigger_threshold:
+                break
+            await asyncio.sleep(0.01)
 
-            robot.drive.set_velocity(velocity)
-            robot.drive.update(delta_time)
+        await asyncio.sleep(0.1)
+        robot.drive.hard_stop()
 
-            await asyncio.sleep(0.0)
+    async def _reverse_until_exit(self, robot: "GenericRobot") -> None:
+        last_time = asyncio.get_event_loop().time()
+
+        while True:
+            now = asyncio.get_event_loop().time()
+            dt = now - last_time
+            last_time = now
+
+            robot.drive.set_velocity(ChassisVelocity(self.reverse_speed, 0.0, 0.0))
+            robot.drive.update(dt)
+
+            left_avg, right_avg = self._avg_confidence()
+            info(f"Reverse: L={left_avg:.2f}, R={right_avg:.2f}")
+            if left_avg <= self.exit_threshold and right_avg <= self.exit_threshold:
+                break
+            await asyncio.sleep(0.01)
+
+        robot.drive.hard_stop()
+
+    async def _execute_step(self, robot: "GenericRobot") -> None:
+        await self._drive_until_trigger(robot)
+        #await self._reverse_until_exit(robot)
+        info("Alignment complete: robot centered on line edge")

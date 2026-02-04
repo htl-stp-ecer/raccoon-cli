@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-02 13:49:27
+ Generated: 2026-02-02 22:03:48
 ===========================================================
 
 Authors:
@@ -30,10 +30,8 @@ class Defs:
         port=0,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(
-                kS=0.1417648840286869, kV=0.14772541504885767, kA=0.015623289202440629
-            ),
-            pid=PidGains(kp=10.0, ki=10.0, kd=0.6686005001145189),
+            ff=Feedforward(kS=0.014717944639950216, kV=0.1981503563639978, kA=0.02),
+            pid=PidGains(kp=10.0, ki=9.814794609326363, kd=0.396417538966332),
             ticks_to_rad=0.0041282,
             vel_lpf_alpha=0.8,
         ),
@@ -42,8 +40,10 @@ class Defs:
         port=1,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.1400952137255979, kV=0.18519694138026058, kA=0.02),
-            pid=PidGains(kp=10.0, ki=10.0, kd=0.9302483087685011),
+            ff=Feedforward(
+                kS=0.24995750568338232, kV=0.1350324603642087, kA=0.008225329011787715
+            ),
+            pid=PidGains(kp=10.0, ki=10.0, kd=0.7032264861939415),
             ticks_to_rad=0.0041282,
             vel_lpf_alpha=0.8,
         ),
@@ -52,10 +52,8 @@ class Defs:
         port=2,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(
-                kS=0.18039996578030004, kV=0.16781414693245833, kA=0.01470602559636404
-            ),
-            pid=PidGains(kp=10.0, ki=10.0, kd=0.6409930781445602),
+            ff=Feedforward(kS=0.07927658167594495, kV=0.18219958232362843, kA=0.02),
+            pid=PidGains(kp=10.0, ki=10.0, kd=0.6018354462577499),
             ticks_to_rad=0.0041282,
             vel_lpf_alpha=0.8,
         ),
@@ -65,9 +63,9 @@ class Defs:
         inverted=False,
         calibration=MotorCalibration(
             ff=Feedforward(
-                kS=0.15022551588302469, kV=0.16005725675687238, kA=0.01576982629213191
+                kS=0.12808157687902538, kV=0.15768136518367729, kA=0.017155086054130467
             ),
-            pid=PidGains(kp=10.0, ki=10.0, kd=0.7196966688514292),
+            pid=PidGains(kp=10.0, ki=10.0, kd=0.548293111922021),
             ticks_to_rad=0.0041282,
             vel_lpf_alpha=0.8,
         ),
