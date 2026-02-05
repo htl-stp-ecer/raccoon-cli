@@ -155,7 +155,7 @@ The sync uses SFTP and only uploads changed files (hash-based comparison).
 
 #### `raccoon run`
 
-Run the project. If connected to a Pi, runs remotely with auto-sync.
+Run the project remotely with auto-sync. If no Pi connection is available, the command fails (no local fallback).
 
 ```bash
 # Run on Pi (auto-syncs first)

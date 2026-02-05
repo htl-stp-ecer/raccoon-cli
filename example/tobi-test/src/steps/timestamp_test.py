@@ -4,7 +4,8 @@ import time
 
 from libstp import Sequential, seq, Turn, dsl
 from libstp.foundation import ChassisVelocity, info
-from libstp.motion import TurnConfig
+from libstp.motion import TurnConfig, DriveStraightConfig
+from libstp.step.motion import Drive
 from libstp.sensor_ir import IRSensor
 from libstp.step import Step
 from enum import Enum
@@ -20,11 +21,11 @@ class SurfaceColor(Enum):
 
 
 @dsl(hidden=True)
-class TimestampTest(Step):
+class TimingBasedLineUp(Step):
     def __init__(self, left_sensor: IRSensor, right_sensor: IRSensor,
                  target: SurfaceColor = SurfaceColor.BLACK,
-                 forward_speed: float = 0.2,
-                 detection_threshold: float = 0.6):
+                 forward_speed: float = 1.0,
+                 detection_threshold: float = 0.9):
         super().__init__()
         self.left_sensor = left_sensor
         self.right_sensor = right_sensor
@@ -69,7 +70,7 @@ class TimestampTest(Step):
             # Use get_distance_from_origin() - avoids Pose.position crash
             distance_info = robot.odometry.get_distance_from_origin()
             current_distance = distance_info.forward
-            info(f"Left conf: {left_conf:.3f}, Right conf: {right_conf:.3f}, Distance: {robot.odometry.get_distance_from_origin()}")
+            # info(f"Left conf: {left_conf:.3f}, Right conf: {right_conf:.3f}, Distance: {robot.odometry.get_distance_from_origin()}")
 
             if not left_triggered and left_conf >= self.threshold:
                 left_triggered = True
@@ -77,12 +78,11 @@ class TimestampTest(Step):
                     t_first = now
                     first_sensor = "left"
                     first_hit_distance = current_distance
-                    info("Left sensor hit line at t = 0.000s")
+                    # info("Left sensor hit line at t = 0.000s")
                 else:
                     dt = now - t_first
                     self.distance_between_hits_m = abs(current_distance - first_hit_distance)
-                    info(
-                        f"Left sensor hit line at t = {dt:.3f}s, distance = {self.distance_between_hits_m * 100:.2f}cm")
+                    # info(f"Left sensor hit line at t = {dt:.3f}s, distance = {self.distance_between_hits_m * 100:.2f}cm")
                     robot.drive.hard_stop()
                     break
 
@@ -92,43 +92,63 @@ class TimestampTest(Step):
                     t_first = now
                     first_sensor = "right"
                     first_hit_distance = current_distance
-                    info("Right sensor hit line at t = 0.000s")
+                    # info("Right sensor hit line at t = 0.000s")
                 else:
                     dt = now - t_first
                     self.distance_between_hits_m = abs(current_distance - first_hit_distance)
-                    info(
-                        f"Right sensor hit line at t = {dt:.3f}s, distance = {self.distance_between_hits_m * 100:.2f}cm")
+                    # info(f"Right sensor hit line at t = {dt:.3f}s, distance = {self.distance_between_hits_m * 100:.2f}cm")
                     robot.drive.hard_stop()
                     break
 
             await asyncio.sleep(update_rate)
 
         robot.drive.hard_stop()
-        info(f"Distance between sensor hits: {self.distance_between_hits_m * 100:.2f}cm")
+        # info(f"Distance between sensor hits: {self.distance_between_hits_m * 100:.2f}cm")
         self.results = (first_sensor, self.distance_between_hits_m)
 
-@dsl(hidden=True)
-class CrazyTurn(Turn):
-    wheeleBase = 0.064 # m
 
-    def __init__(self, step: TimestampTest):
+@dsl(hidden=True)
+class ComputeTimingBasedAngle(Turn):
+    wheeleBase = 0.065  # m; Todo: Use real value from robot config
+
+    def __init__(self, step: TimingBasedLineUp):
         config = TurnConfig()
         config.max_angular_rate = 1.0
         super().__init__(config)
         self.step = step
 
     async def _execute_step(self, robot: "GenericRobot") -> None:
-        info("Starting CrazyTurn!")
-        self.config.target_angle_rad = math.atan(self.step.results[1]/CrazyTurn.wheeleBase)
+        res = self.step.results[1] * 1.025  # Todo: Configurable?
+        self.config.target_angle_rad = math.atan(res / ComputeTimingBasedAngle.wheeleBase)
+        if self.step.results[0] == "right":
+            self.config.target_angle_rad = -self.config.target_angle_rad
         await super()._execute_step(robot)
-        info("Finished CrazyTurn!")
 
-@dsl
-def timestamp_test(left_sensor: IRSensor, right_sensor: IRSensor,
-                   sensor_distance_m: float) -> Sequential:
-    step = TimestampTest(left_sensor, right_sensor)
+
+class DriveStuffBackward(Drive):
+    wheeleBase = 0.065  # m; Todo: Use real value from robot config
+
+    def __init__(self, step: TimingBasedLineUp):
+        config = DriveStraightConfig()
+        config.max_speed_mps = 1.0
+        super().__init__(config)
+        self.step = step
+
+    async def _execute_step(self, robot: "GenericRobot") -> None:
+        res = self.step.results[1] * 1.025  # Todo: Configurable?
+        target_angle_rad = math.atan(res / ComputeTimingBasedAngle.wheeleBase)
+        m = 0.087 - math.cos(target_angle_rad) * (0.087 - (ComputeTimingBasedAngle.wheeleBase / 2))
+        self.config.distance_m = -m  # Negative distance for backwards
+        self.info(f"Driving backward for {self.config.distance_m * 100:.2f}cm to adjust for lineup")
+        await super()._execute_step(robot)
+
+
+@dsl(hidden=True)
+def lineup(left_sensor: IRSensor, right_sensor: IRSensor, target: SurfaceColor = SurfaceColor.BLACK) -> Sequential:
+    step = TimingBasedLineUp(left_sensor, right_sensor, target)
 
     return seq([
         step,
-        CrazyTurn(step)
+        ComputeTimingBasedAngle(step),
+        DriveStuffBackward(step)
     ])

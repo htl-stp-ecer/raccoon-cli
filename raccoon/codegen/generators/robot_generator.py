@@ -213,6 +213,10 @@ class RobotGenerator(BaseGenerator):
         if hasattr(self, '_full_config'):
             self._add_missions_to_builder(builder, self._full_config)
 
+        # Add geometry configuration from robot.physical
+        if hasattr(self, '_full_config'):
+            self._add_geometry_to_builder(builder, self._full_config)
+
         return builder.build()
 
     def _add_missions_to_builder(self, builder: ClassBuilder, config: Dict[str, Any]) -> None:
@@ -281,6 +285,219 @@ class RobotGenerator(BaseGenerator):
             builder.add_class_attribute("shutdown_mission", f"{shutdown_mission}()")
         else:
             builder.add_class_attribute("shutdown_mission", "None")
+
+    def _add_geometry_to_builder(self, builder: ClassBuilder, config: Dict[str, Any]) -> None:
+        """
+        Add robot geometry properties to the class builder.
+
+        Generates class attributes for:
+        - Physical dimensions (width_cm, length_cm)
+        - Rotation center offset
+        - Sensor positions (keyed by defs.sensor_name)
+        - Wheel positions (from kinematics)
+
+        Args:
+            builder: The ClassBuilder instance to add geometry to
+            config: Full project configuration
+        """
+        robot_config = config.get("robot", {})
+        physical = robot_config.get("physical", {})
+
+        if not physical:
+            return
+
+        # Add physical dimensions
+        width_cm = physical.get("width_cm", 0)
+        length_cm = physical.get("length_cm", 0)
+
+        if width_cm > 0:
+            builder.add_class_attribute("width_cm", str(width_cm))
+        if length_cm > 0:
+            builder.add_class_attribute("length_cm", str(length_cm))
+
+        # Compute rotation center offset from geometric center
+        rotation_center = physical.get("rotation_center", {})
+        rc_forward, rc_strafe = self._compute_rotation_center_offset(
+            width_cm, length_cm, rotation_center
+        )
+        builder.add_class_attribute("rotation_center_forward_cm", str(rc_forward))
+        builder.add_class_attribute("rotation_center_strafe_cm", str(rc_strafe))
+
+        # Build sensor positions dict
+        sensors = physical.get("sensors", [])
+        definitions = config.get("definitions", {})
+        if sensors and width_cm > 0 and length_cm > 0:
+            sensor_positions_expr = self._build_sensor_positions_expr(
+                sensors, width_cm, length_cm, definitions
+            )
+            if sensor_positions_expr:
+                builder.add_class_attribute("_sensor_positions", sensor_positions_expr)
+
+        # Build wheel positions from kinematics
+        drive_config = robot_config.get("drive", {})
+        kinematics = drive_config.get("kinematics", {})
+        if kinematics:
+            wheel_positions_expr = self._build_wheel_positions_expr(kinematics)
+            if wheel_positions_expr:
+                builder.add_class_attribute("_wheel_positions", wheel_positions_expr)
+
+    def _compute_rotation_center_offset(
+        self,
+        width_cm: float,
+        length_cm: float,
+        rotation_center: Dict[str, Any],
+    ) -> tuple:
+        """
+        Compute the rotation center offset from the geometric center.
+
+        Args:
+            width_cm: Robot width in cm
+            length_cm: Robot length in cm
+            rotation_center: Dict with x_cm, y_cm (cm from lower-left origin)
+
+        Returns:
+            Tuple of (forward_cm, strafe_cm) offset from geometric center
+        """
+        if not rotation_center or width_cm <= 0 or length_cm <= 0:
+            return (0.0, 0.0)
+
+        # YAML stores x_cm from left, y_cm from back (lower-left origin)
+        x_cm = rotation_center.get("x_cm", width_cm / 2)
+        y_cm = rotation_center.get("y_cm", length_cm / 2)
+
+        # Convert to offset from geometric center
+        # forward_cm: positive = toward front, negative = toward back
+        # strafe_cm: positive = toward left, negative = toward right
+        forward_cm = y_cm - length_cm / 2
+        strafe_cm = (width_cm / 2) - x_cm
+
+        return (round(forward_cm, 4), round(strafe_cm, 4))
+
+    def _build_sensor_positions_expr(
+        self,
+        sensors: List[Dict[str, Any]],
+        width_cm: float,
+        length_cm: float,
+        definitions: Dict[str, Any],
+    ) -> str:
+        """
+        Build a Python dict expression mapping sensor objects to SensorPosition.
+
+        Args:
+            sensors: List of sensor config dicts with name, x_cm, y_cm, clearance_cm
+            width_cm: Robot width in cm
+            length_cm: Robot length in cm
+            definitions: Hardware definitions from config
+
+        Returns:
+            Python dict literal string like "{defs.sensor: SensorPosition(...), ...}"
+        """
+        entries = []
+
+        for sensor_cfg in sensors:
+            name = sensor_cfg.get("name")
+            # YAML stores x_cm from left, y_cm from back (lower-left origin)
+            x_cm = sensor_cfg.get("x_cm")
+            y_cm = sensor_cfg.get("y_cm")
+            clearance_cm = sensor_cfg.get("clearance_cm", 0)
+
+            # Skip sensors without position data or not in definitions
+            if not name or x_cm is None or y_cm is None:
+                continue
+            if name not in definitions:
+                logger.warning(f"Sensor '{name}' not found in definitions, skipping geometry")
+                continue
+
+            # Convert to offset from geometric center
+            # forward_cm: positive = toward front, negative = toward back
+            # strafe_cm: positive = toward left, negative = toward right
+            forward_cm = round(y_cm - length_cm / 2, 4)
+            strafe_cm = round((width_cm / 2) - x_cm, 4)
+            clearance = round(clearance_cm, 4) if clearance_cm else 0
+
+            entries.append(
+                f"defs.{name}: SensorPosition(forward_cm={forward_cm}, strafe_cm={strafe_cm}, clearance_cm={clearance})"
+            )
+
+        if not entries:
+            return ""
+
+        # Format as multi-line dict for readability
+        formatted = ",\n        ".join(entries)
+        return f"{{\n        {formatted}\n    }}"
+
+    def _build_wheel_positions_expr(self, kinematics: Dict[str, Any]) -> str:
+        """
+        Build a Python dict expression for wheel positions from kinematics.
+
+        Uses defs.motor_name as keys instead of strings for type safety.
+
+        Args:
+            kinematics: Kinematics config with type, track_width, wheelbase, and motor references
+
+        Returns:
+            Python dict literal string for wheel positions
+        """
+        drive_type = kinematics.get("type", "").lower()
+        track_width_m = kinematics.get("track_width", 0)
+        wheelbase_m = kinematics.get("wheelbase", 0)
+
+        # Convert to cm
+        track_width_cm = track_width_m * 100
+        wheelbase_cm = wheelbase_m * 100
+
+        if track_width_cm <= 0:
+            return ""
+
+        entries = []
+
+        if drive_type == "mecanum":
+            # Mecanum: 4 wheels
+            if wheelbase_cm <= 0:
+                logger.warning("Mecanum kinematics requires wheelbase for wheel positions")
+                return ""
+
+            forward = round(wheelbase_cm / 2, 4)
+            strafe = round(track_width_cm / 2, 4)
+
+            # Get motor references from kinematics config
+            front_left = kinematics.get("front_left_motor")
+            front_right = kinematics.get("front_right_motor")
+            back_left = kinematics.get("back_left_motor")
+            back_right = kinematics.get("back_right_motor")
+
+            if front_left:
+                entries.append(f'defs.{front_left}: WheelPosition(forward_cm={forward}, strafe_cm={strafe})')
+            if front_right:
+                entries.append(f'defs.{front_right}: WheelPosition(forward_cm={forward}, strafe_cm={-strafe})')
+            if back_left:
+                entries.append(f'defs.{back_left}: WheelPosition(forward_cm={-forward}, strafe_cm={strafe})')
+            if back_right:
+                entries.append(f'defs.{back_right}: WheelPosition(forward_cm={-forward}, strafe_cm={-strafe})')
+
+        elif drive_type in ("differential", "tank", "two_wheel"):
+            # Differential: 2 wheels centered on axle
+            strafe = round(track_width_cm / 2, 4)
+
+            # Get motor references from kinematics config
+            left = kinematics.get("left_motor")
+            right = kinematics.get("right_motor")
+
+            if left:
+                entries.append(f'defs.{left}: WheelPosition(forward_cm=0, strafe_cm={strafe})')
+            if right:
+                entries.append(f'defs.{right}: WheelPosition(forward_cm=0, strafe_cm={-strafe})')
+        else:
+            # Unknown drive type, skip wheel positions
+            logger.info(f"Unknown drive type '{drive_type}', skipping wheel positions")
+            return ""
+
+        if not entries:
+            return ""
+
+        # Format as multi-line dict
+        formatted = ",\n        ".join(entries)
+        return f"{{\n        {formatted}\n    }}"
 
     @staticmethod
     def _class_name_to_snake_case(class_name: str) -> str:
@@ -962,11 +1179,32 @@ class RobotGenerator(BaseGenerator):
 
     def generate_imports(self) -> str:
         """Generate import statements including Defs, GenericRobot, and mission imports."""
-        # Add standard imports
-        base_imports = super().generate_imports()
+        # Add GenericRobot to imports (will be consolidated with other libstp imports)
+        from ..introspection import resolve_class
+        try:
+            generic_robot_cls = resolve_class("libstp.GenericRobot")
+            self.imports.add(generic_robot_cls)
+        except (ImportError, AttributeError):
+            pass  # Will be handled by placeholder
 
-        # Add GenericRobot import
-        generic_robot_import = "from libstp import GenericRobot"
+        # Add geometry dataclass imports if needed (SensorPosition, WheelPosition)
+        if hasattr(self, '_full_config'):
+            robot_config = self._full_config.get("robot", {})
+            physical = robot_config.get("physical", {})
+            drive_config = robot_config.get("drive", {})
+            kinematics = drive_config.get("kinematics", {})
+            # Import if we have physical sensors or kinematics for wheel positions
+            if physical.get("sensors") or kinematics:
+                try:
+                    sensor_pos_cls = resolve_class("libstp.robot.geometry.SensorPosition")
+                    wheel_pos_cls = resolve_class("libstp.robot.geometry.WheelPosition")
+                    self.imports.add(sensor_pos_cls)
+                    self.imports.add(wheel_pos_cls)
+                except (ImportError, AttributeError):
+                    pass  # Will be handled by placeholder
+
+        # Get consolidated libstp imports from ImportSet
+        base_imports = super().generate_imports()
 
         # Add Defs import - always use src.hardware.defs
         defs_import = "from src.hardware.defs import Defs"
@@ -987,7 +1225,6 @@ class RobotGenerator(BaseGenerator):
         if base_imports:
             parts.append(base_imports)
 
-        parts.append(generic_robot_import)
         parts.append(defs_import)
 
         if mission_import_lines:

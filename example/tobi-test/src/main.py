@@ -1,8 +1,5 @@
 from libstp.button import set_digital
 
-from .missions.setup_mission import SetupMission
-from .missions.shutdown_mission import ShutdownMission
-from .missions.potato_mission import PotatoMission
 """
 ===========================================================
  Project:   tobi-test
@@ -23,9 +20,12 @@ claimed over the generated code itself.
 """
 
 from src.hardware.robot import Robot
+import libstp.foundation as logging
 
 robot = Robot()
 
+logging.set_global_level(logging.Level.info)
+logging.set_file_level("fused_odometry.cpp", logging.Level.trace)
+
 if __name__ == "__main__":
-   set_digital(10)
-   robot.start()
+    robot.start()

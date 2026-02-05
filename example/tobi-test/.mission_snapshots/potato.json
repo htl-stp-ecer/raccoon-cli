@@ -1,1 +1,0 @@
-{"name":"PotatoMission","is_setup":false,"is_shutdown":false,"order":0,"steps":[{"step_type":"LineupUHH","function_name":"LineupUHH","arguments":[{"name":"left_sensor","value":"Defs.front_left_ir_sensor","type":"keyword"},{"name":"right_sensor","value":"Defs.front_right_ir_sensor","type":"keyword"}],"position":{"x":251,"y":152},"children":null}],"comments":[],"groups":[]}

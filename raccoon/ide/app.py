@@ -17,6 +17,7 @@ from raccoon.ide.routes import projects as projects_router
 from raccoon.ide.routes import missions as missions_router
 from raccoon.ide.routes import steps as steps_router
 from raccoon.ide.routes import type_definitions as type_definitions_router
+from raccoon.ide.routes import device as device_router
 
 
 def create_app(project_root: Path | str = None, settings: Settings = None) -> FastAPI:
@@ -94,12 +95,15 @@ def create_app(project_root: Path | str = None, settings: Settings = None) -> Fa
     app.dependency_overrides[missions_router.get_mission_service] = get_mission_service
     app.dependency_overrides[missions_router.get_project_codegen] = get_project_codegen
     app.dependency_overrides[steps_router.get_step_discovery_service] = get_step_discovery_service
+    app.dependency_overrides[type_definitions_router.get_project_service] = get_project_service
+    app.dependency_overrides[device_router.get_project_service] = get_project_service
 
     # Include API routes
     app.include_router(projects_router.router, prefix="/api/v1/projects", tags=["projects"])
     app.include_router(missions_router.router, prefix="/api/v1/missions", tags=["missions"])
     app.include_router(steps_router.router, prefix="/api/v1/steps", tags=["steps"])
     app.include_router(type_definitions_router.router, prefix="/api/v1/type-definitions", tags=["type-definitions"])
+    app.include_router(device_router.router, prefix="/api/v1/device", tags=["device"])
 
     # Health check endpoint
     @app.get("/api/v1/health")

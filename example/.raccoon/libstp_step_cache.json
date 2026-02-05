@@ -433,41 +433,6 @@
           "import": "libstp.sensor_ir.IRSensor",
           "optional": false,
           "default": null
-        },
-        {
-          "name": "base_speed",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.3"
-        },
-        {
-          "name": "confidence_threshold",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.7"
-        },
-        {
-          "name": "kp",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "1.0"
-        },
-        {
-          "name": "ki",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.0"
-        },
-        {
-          "name": "kd",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.0"
         }
       ],
       "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/lineup.py",
@@ -493,41 +458,6 @@
           "import": "libstp.sensor_ir.IRSensor",
           "optional": false,
           "default": null
-        },
-        {
-          "name": "base_speed",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.3"
-        },
-        {
-          "name": "confidence_threshold",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.7"
-        },
-        {
-          "name": "kp",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "1.0"
-        },
-        {
-          "name": "ki",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.0"
-        },
-        {
-          "name": "kd",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.0"
         }
       ],
       "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/lineup.py",
@@ -553,41 +483,6 @@
           "import": "libstp.sensor_ir.IRSensor",
           "optional": false,
           "default": null
-        },
-        {
-          "name": "base_speed",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.3"
-        },
-        {
-          "name": "confidence_threshold",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.7"
-        },
-        {
-          "name": "kp",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "1.0"
-        },
-        {
-          "name": "ki",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.0"
-        },
-        {
-          "name": "kd",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.0"
         }
       ],
       "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/lineup.py",
@@ -613,41 +508,6 @@
           "import": "libstp.sensor_ir.IRSensor",
           "optional": false,
           "default": null
-        },
-        {
-          "name": "base_speed",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.3"
-        },
-        {
-          "name": "confidence_threshold",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.7"
-        },
-        {
-          "name": "kp",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "1.0"
-        },
-        {
-          "name": "ki",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.0"
-        },
-        {
-          "name": "kd",
-          "type": "float",
-          "import": null,
-          "optional": true,
-          "default": "0.0"
         }
       ],
       "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/motion/lineup.py",
@@ -958,21 +818,34 @@
       ]
     },
     {
-      "name": "calibrate_sensors",
-      "import": "libstp.step.calibration.calibrate.calibrate_sensors",
+      "name": "calibrate",
+      "import": "libstp.step.calibration.calibrate.calibrate",
       "arguments": [
         {
-          "name": "calibration_time",
+          "name": "distance_cm",
           "type": "float",
           "import": null,
           "optional": true,
-          "default": "5.0"
+          "default": "30.0"
+        },
+        {
+          "name": "persist_to_yaml",
+          "type": "bool",
+          "import": null,
+          "optional": true,
+          "default": "True"
+        },
+        {
+          "name": "ema_alpha",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "DEFAULT_EMA_ALPHA"
         }
       ],
       "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/calibration/calibrate.py",
       "tags": [
-        "calibration",
-        "sensor"
+        "calibration"
       ]
     },
     {
@@ -992,6 +865,20 @@
           "import": null,
           "optional": true,
           "default": "False"
+        },
+        {
+          "name": "persist_to_yaml",
+          "type": "bool",
+          "import": null,
+          "optional": true,
+          "default": "True"
+        },
+        {
+          "name": "ema_alpha",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "DEFAULT_EMA_ALPHA"
         }
       ],
       "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/calibration/calibrate_distance.py",
@@ -1181,7 +1068,72 @@
         "servo",
         "actuator"
       ]
+    },
+    {
+      "name": "calibrate_sensors",
+      "import": "libstp.step.calibration.sensors.step.calibrate_sensors",
+      "arguments": [
+        {
+          "name": "calibration_time",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "5.0"
+        },
+        {
+          "name": "allow_use_existing",
+          "type": "bool",
+          "import": null,
+          "optional": true,
+          "default": "True"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/calibration/sensors/step.py",
+      "tags": [
+        "calibration",
+        "sensor"
+      ]
+    },
+    {
+      "name": "calibrate_deadzone",
+      "import": "libstp.step.calibration.deadzone.step.calibrate_deadzone",
+      "arguments": [
+        {
+          "name": "motor_ports",
+          "type": "List",
+          "import": "typing",
+          "optional": true,
+          "default": "None"
+        },
+        {
+          "name": "start_percent",
+          "type": "int",
+          "import": null,
+          "optional": true,
+          "default": "1"
+        },
+        {
+          "name": "max_percent",
+          "type": "int",
+          "import": null,
+          "optional": true,
+          "default": "30"
+        },
+        {
+          "name": "settle_time",
+          "type": "float",
+          "import": null,
+          "optional": true,
+          "default": "0.3"
+        }
+      ],
+      "file": "/home/pi/.local/lib/python3.13/site-packages/libstp/step/calibration/deadzone/step.py",
+      "tags": [
+        "calibration",
+        "motor",
+        "deadzone"
+      ]
     }
   ],
-  "last_indexed_at": "2026-02-02T17:10:20.697143+00:00"
+  "last_indexed_at": "2026-02-05T16:03:50.082706+00:00"
 }

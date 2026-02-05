@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-02 14:37:29
+ Generated: 2026-02-05 17:54:18
 ===========================================================
 
 Authors:
@@ -15,12 +15,14 @@ Authors:
 from libstp import (
     Drive,
     FusedOdometry,
+    GenericRobot,
     MecanumKinematics,
     MotionLimits,
+    SensorPosition,
     UnifiedMotionPidConfig,
+    WheelPosition,
 )
-
-from libstp import GenericRobot
+from libstp.odometry_fused import FusedOdometryConfig
 
 from src.hardware.defs import Defs
 
@@ -29,6 +31,11 @@ from src.missions.setup_mission import SetupMission
 from src.missions.shutdown_mission import ShutdownMission
 from src.missions.potato_mission import PotatoMission
 
+
+def build():
+    cfg = FusedOdometryConfig()
+    cfg.bemf_trust = 0.0
+    return cfg
 
 class Robot(GenericRobot):
     defs = Defs()
@@ -40,15 +47,15 @@ class Robot(GenericRobot):
         max_acceleration=99999,
         max_velocity=99999,
         track_width=0.19,
-        wheel_radius=0.0295,
+        wheel_radius=0.03,
         wheelbase=0.12,
     )
     drive = Drive(
         kinematics=kinematics, chassis_lim=MotionLimits(max_omega=99999, max_v=99999)
     )
-    odometry = FusedOdometry(imu=defs.imu, kinematics=kinematics)
+    odometry = FusedOdometry(imu=defs.imu, kinematics=kinematics, config=build())
     motion_pid_config = UnifiedMotionPidConfig(
-        angle_tolerance_rad=0.02,
+        angle_tolerance_rad=0.017,
         derivative_lpf_alpha=0.1,
         distance_kd=0.0,
         distance_ki=0.0,
@@ -83,6 +90,24 @@ class Robot(GenericRobot):
     missions = [PotatoMission()]
     setup_mission = SetupMission()
     shutdown_mission = ShutdownMission()
+    width_cm = 13.0
+    length_cm = 19.0
+    rotation_center_forward_cm = -1.5
+    rotation_center_strafe_cm = 0.0
+    _sensor_positions = {
+        defs.front_left_ir_sensor: SensorPosition(
+            forward_cm=7.5, strafe_cm=3.3, clearance_cm=1.0
+        ),
+        defs.front_right_ir_sensor: SensorPosition(
+            forward_cm=7.5, strafe_cm=-3.3, clearance_cm=1.0
+        ),
+    }
+    _wheel_positions = {
+        defs.front_left_motor: WheelPosition(forward_cm=6.0, strafe_cm=9.5),
+        defs.front_right_motor: WheelPosition(forward_cm=6.0, strafe_cm=-9.5),
+        defs.rear_left_motor: WheelPosition(forward_cm=-6.0, strafe_cm=9.5),
+        defs.rear_right_motor: WheelPosition(forward_cm=-6.0, strafe_cm=-9.5),
+    }
 
 
 __all__ = ["Robot"]

@@ -181,11 +181,18 @@ def run_command(ctx: click.Context, args: tuple, local: bool, no_sync: bool) -> 
                 except VersionMismatchError as e:
                     print_version_mismatch_error(e, console)
                     raise SystemExit(1)
+                except Exception as e:
+                    console.print(f"[red]Failed to connect to Pi: {e}[/red]")
+                    raise SystemExit(1)
 
             if manager.is_connected:
                 # Run remotely
                 asyncio.run(_run_remote(ctx, project_root, config, args))
                 return
+
+            console.print("[red]Remote execution requested, but no Pi connection is available.[/red]")
+            console.print("Run [cyan]raccoon connect <PI_ADDRESS>[/cyan] or use [cyan]--local[/cyan].")
+            raise SystemExit(1)
 
         # Run locally
         _run_local(ctx, project_root, config, args)
