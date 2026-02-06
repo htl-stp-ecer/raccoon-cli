@@ -81,10 +81,18 @@ def _codegen_local(
     output_dir: str | None,
 ) -> None:
     """Run code generation locally."""
+    import sys
+
     if output_dir:
         out_dir = Path(output_dir)
     else:
         out_dir = project_root / "src" / "hardware"
+
+    # Add project root to sys.path so user-defined types (e.g.
+    # src.hardware.thresholded_sensor.ThresholdedSensor) can be resolved.
+    project_root_str = str(project_root)
+    if project_root_str not in sys.path:
+        sys.path.insert(0, project_root_str)
 
     pipeline = create_pipeline()
 

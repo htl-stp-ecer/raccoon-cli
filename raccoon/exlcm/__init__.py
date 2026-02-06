@@ -23,3 +23,5 @@ __all__ = [
     "string_t",
     "vector3f_t",
 ]
+from .yolo_box_t import yolo_box_t as yolo_box_t
+from .yolo_frame_t import yolo_frame_t as yolo_frame_t

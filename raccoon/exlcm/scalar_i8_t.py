@@ -9,13 +9,15 @@ import struct
 
 class scalar_i8_t(object):
 
-    __slots__ = ["dir"]
+    __slots__ = ["timestamp", "dir"]
 
-    __typenames__ = ["int8_t"]
+    __typenames__ = ["int64_t", "int8_t"]
 
-    __dimensions__ = [None]
+    __dimensions__ = [None, None]
 
     def __init__(self):
+        self.timestamp = 0
+        """ LCM Type: int64_t """
         self.dir = 0
         """ LCM Type: int8_t """
 
@@ -26,7 +28,7 @@ class scalar_i8_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
-        buf.write(struct.pack(">b", self.dir))
+        buf.write(struct.pack(">qb", self.timestamp, self.dir))
 
     @staticmethod
     def decode(data: bytes):
@@ -41,13 +43,13 @@ class scalar_i8_t(object):
     @staticmethod
     def _decode_one(buf):
         self = scalar_i8_t()
-        self.dir = struct.unpack(">b", buf.read(1))[0]
+        self.timestamp, self.dir = struct.unpack(">qb", buf.read(9))
         return self
 
     @staticmethod
     def _get_hash_recursive(parents):
         if scalar_i8_t in parents: return 0
-        tmphash = (0x2ad21b643f2846e4) & 0xffffffffffffffff
+        tmphash = (0x5727e921d0e057b2) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _packed_fingerprint = None

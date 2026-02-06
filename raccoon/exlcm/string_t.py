@@ -9,13 +9,15 @@ import struct
 
 class string_t(object):
 
-    __slots__ = ["value"]
+    __slots__ = ["timestamp", "value"]
 
-    __typenames__ = ["string"]
+    __typenames__ = ["int64_t", "string"]
 
-    __dimensions__ = [None]
+    __dimensions__ = [None, None]
 
     def __init__(self):
+        self.timestamp = 0
+        """ LCM Type: int64_t """
         self.value = ""
         """ LCM Type: string """
 
@@ -26,6 +28,7 @@ class string_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
+        buf.write(struct.pack(">q", self.timestamp))
         __value_encoded = self.value.encode('utf-8')
         buf.write(struct.pack('>I', len(__value_encoded)+1))
         buf.write(__value_encoded)
@@ -44,6 +47,7 @@ class string_t(object):
     @staticmethod
     def _decode_one(buf):
         self = string_t()
+        self.timestamp = struct.unpack(">q", buf.read(8))[0]
         __value_len = struct.unpack('>I', buf.read(4))[0]
         self.value = buf.read(__value_len)[:-1].decode('utf-8', 'replace')
         return self
@@ -51,7 +55,7 @@ class string_t(object):
     @staticmethod
     def _get_hash_recursive(parents):
         if string_t in parents: return 0
-        tmphash = (0x4c9c80a0d3b89a64) & 0xffffffffffffffff
+        tmphash = (0x812290a93d150cb8) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _packed_fingerprint = None

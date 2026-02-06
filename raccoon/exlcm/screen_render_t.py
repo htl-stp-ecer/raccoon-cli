@@ -9,13 +9,15 @@ import struct
 
 class screen_render_t(object):
 
-    __slots__ = ["screen_name", "entries"]
+    __slots__ = ["timestamp", "screen_name", "entries"]
 
-    __typenames__ = ["string", "string"]
+    __typenames__ = ["int64_t", "string", "string"]
 
-    __dimensions__ = [None, None]
+    __dimensions__ = [None, None, None]
 
     def __init__(self):
+        self.timestamp = 0
+        """ LCM Type: int64_t """
         self.screen_name = ""
         """ LCM Type: string """
         self.entries = ""
@@ -28,6 +30,7 @@ class screen_render_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
+        buf.write(struct.pack(">q", self.timestamp))
         __screen_name_encoded = self.screen_name.encode('utf-8')
         buf.write(struct.pack('>I', len(__screen_name_encoded)+1))
         buf.write(__screen_name_encoded)
@@ -50,6 +53,7 @@ class screen_render_t(object):
     @staticmethod
     def _decode_one(buf):
         self = screen_render_t()
+        self.timestamp = struct.unpack(">q", buf.read(8))[0]
         __screen_name_len = struct.unpack('>I', buf.read(4))[0]
         self.screen_name = buf.read(__screen_name_len)[:-1].decode('utf-8', 'replace')
         __entries_len = struct.unpack('>I', buf.read(4))[0]
@@ -59,7 +63,7 @@ class screen_render_t(object):
     @staticmethod
     def _get_hash_recursive(parents):
         if screen_render_t in parents: return 0
-        tmphash = (0x546c4a437eed256f) & 0xffffffffffffffff
+        tmphash = (0x4054b15297f126e1) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _packed_fingerprint = None

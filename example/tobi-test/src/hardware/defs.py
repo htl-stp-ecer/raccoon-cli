@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-06 13:44:48
+ Generated: 2026-02-06 19:37:42
 ===========================================================
 
 Authors:
@@ -21,6 +21,7 @@ from libstp import (
     MotorCalibration,
     PidGains,
 )
+from src.hardware.thresholded_sensor import ThresholdedSensor
 from libstp import IMU as Imu
 
 
@@ -69,9 +70,15 @@ class Defs:
     )
     drum_motor = Motor(port=2, inverted=False)
     drum_light_sensor = AnalogSensor(port=1)
+    drum_distance_sensor = ThresholdedSensor(port=0)
     front_left_ir_sensor = IRSensor(port=0)
     front_right_ir_sensor = IRSensor(port=1)
-    analog_sensors = [drum_light_sensor, front_left_ir_sensor, front_right_ir_sensor]
+    analog_sensors = [
+        drum_light_sensor,
+        drum_distance_sensor,
+        front_left_ir_sensor,
+        front_right_ir_sensor,
+    ]
 
 
 __all__ = ["Defs"]

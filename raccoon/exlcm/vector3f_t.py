@@ -9,13 +9,15 @@ import struct
 
 class vector3f_t(object):
 
-    __slots__ = ["x", "y", "z"]
+    __slots__ = ["timestamp", "x", "y", "z"]
 
-    __typenames__ = ["float", "float", "float"]
+    __typenames__ = ["int64_t", "float", "float", "float"]
 
-    __dimensions__ = [None, None, None]
+    __dimensions__ = [None, None, None, None]
 
     def __init__(self):
+        self.timestamp = 0
+        """ LCM Type: int64_t """
         self.x = 0.0
         """ LCM Type: float """
         self.y = 0.0
@@ -30,7 +32,7 @@ class vector3f_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
-        buf.write(struct.pack(">fff", self.x, self.y, self.z))
+        buf.write(struct.pack(">qfff", self.timestamp, self.x, self.y, self.z))
 
     @staticmethod
     def decode(data: bytes):
@@ -45,13 +47,13 @@ class vector3f_t(object):
     @staticmethod
     def _decode_one(buf):
         self = vector3f_t()
-        self.x, self.y, self.z = struct.unpack(">fff", buf.read(12))
+        self.timestamp, self.x, self.y, self.z = struct.unpack(">qfff", buf.read(20))
         return self
 
     @staticmethod
     def _get_hash_recursive(parents):
         if vector3f_t in parents: return 0
-        tmphash = (0x2a14f112c253ac0c) & 0xffffffffffffffff
+        tmphash = (0x393b7b1dca7ce3a9) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _packed_fingerprint = None

@@ -9,13 +9,15 @@ import struct
 
 class scalar_f_t(object):
 
-    __slots__ = ["value"]
+    __slots__ = ["timestamp", "value"]
 
-    __typenames__ = ["float"]
+    __typenames__ = ["int64_t", "float"]
 
-    __dimensions__ = [None]
+    __dimensions__ = [None, None]
 
     def __init__(self):
+        self.timestamp = 0
+        """ LCM Type: int64_t """
         self.value = 0.0
         """ LCM Type: float """
 
@@ -26,7 +28,7 @@ class scalar_f_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
-        buf.write(struct.pack(">f", self.value))
+        buf.write(struct.pack(">qf", self.timestamp, self.value))
 
     @staticmethod
     def decode(data: bytes):
@@ -41,13 +43,13 @@ class scalar_f_t(object):
     @staticmethod
     def _decode_one(buf):
         self = scalar_f_t()
-        self.value = struct.unpack(">f", buf.read(4))[0]
+        self.timestamp, self.value = struct.unpack(">qf", buf.read(12))
         return self
 
     @staticmethod
     def _get_hash_recursive(parents):
         if scalar_f_t in parents: return 0
-        tmphash = (0x324da988a3dbb233) & 0xffffffffffffffff
+        tmphash = (0xdc7fd06753cae48c) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _packed_fingerprint = None

@@ -9,13 +9,15 @@ import struct
 
 class scalar_i32_t(object):
 
-    __slots__ = ["value"]
+    __slots__ = ["timestamp", "value"]
 
-    __typenames__ = ["int32_t"]
+    __typenames__ = ["int64_t", "int32_t"]
 
-    __dimensions__ = [None]
+    __dimensions__ = [None, None]
 
     def __init__(self):
+        self.timestamp = 0
+        """ LCM Type: int64_t """
         self.value = 0
         """ LCM Type: int32_t """
 
@@ -26,7 +28,7 @@ class scalar_i32_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
-        buf.write(struct.pack(">i", self.value))
+        buf.write(struct.pack(">qi", self.timestamp, self.value))
 
     @staticmethod
     def decode(data: bytes):
@@ -41,13 +43,13 @@ class scalar_i32_t(object):
     @staticmethod
     def _decode_one(buf):
         self = scalar_i32_t()
-        self.value = struct.unpack(">i", buf.read(4))[0]
+        self.timestamp, self.value = struct.unpack(">qi", buf.read(12))
         return self
 
     @staticmethod
     def _get_hash_recursive(parents):
         if scalar_i32_t in parents: return 0
-        tmphash = (0xa6869f09f492d897) & 0xffffffffffffffff
+        tmphash = (0xd36958f926ead304) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _packed_fingerprint = None

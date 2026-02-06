@@ -9,13 +9,15 @@ import struct
 
 class quaternion_t(object):
 
-    __slots__ = ["w", "x", "y", "z"]
+    __slots__ = ["timestamp", "w", "x", "y", "z"]
 
-    __typenames__ = ["float", "float", "float", "float"]
+    __typenames__ = ["int64_t", "float", "float", "float", "float"]
 
-    __dimensions__ = [None, None, None, None]
+    __dimensions__ = [None, None, None, None, None]
 
     def __init__(self):
+        self.timestamp = 0
+        """ LCM Type: int64_t """
         self.w = 0.0
         """ LCM Type: float """
         self.x = 0.0
@@ -32,7 +34,7 @@ class quaternion_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
-        buf.write(struct.pack(">ffff", self.w, self.x, self.y, self.z))
+        buf.write(struct.pack(">qffff", self.timestamp, self.w, self.x, self.y, self.z))
 
     @staticmethod
     def decode(data: bytes):
@@ -47,13 +49,13 @@ class quaternion_t(object):
     @staticmethod
     def _decode_one(buf):
         self = quaternion_t()
-        self.w, self.x, self.y, self.z = struct.unpack(">ffff", buf.read(16))
+        self.timestamp, self.w, self.x, self.y, self.z = struct.unpack(">qffff", buf.read(24))
         return self
 
     @staticmethod
     def _get_hash_recursive(parents):
         if quaternion_t in parents: return 0
-        tmphash = (0xa319400fc73763af) & 0xffffffffffffffff
+        tmphash = (0xf0fba0ff74c6e61c) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _packed_fingerprint = None
