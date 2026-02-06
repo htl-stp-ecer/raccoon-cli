@@ -1,18 +1,21 @@
-from libstp import Step, GenericRobot, wait_for_button, loop_forever
+from libstp import Step, GenericRobot, wait_for_button, loop_forever, wait
 from libstp.mission.api import Mission
 from libstp.step.sequential import Sequential, seq
 
 from src.hardware.defs import Defs
+from src.steps.thresholded_sensor.wait_for_threshold import wait_for_threshold
 from src.steps.timestamp_test import lineup
-from src.steps.drum_collector import drum_advance
+from src.steps.drum_collector import drum_advance, drum_retreat
 
 
 class PotatoMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
             loop_forever(seq([
-                drum_advance(),
-                wait_for_button(),
+                wait_for_threshold(Defs.drum_distance_sensor),
+                wait(1),
+                drum_retreat(),
+                #wait_for_button(),
             ])),
 
             # lineup(
