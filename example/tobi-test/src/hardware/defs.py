@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-05 22:57:26
+ Generated: 2026-02-06 13:44:48
 ===========================================================
 
 Authors:
@@ -13,6 +13,7 @@ Authors:
 """
 
 from libstp import (
+    AnalogSensor,
     DigitalSensor,
     Feedforward,
     IRSensor,
@@ -32,7 +33,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.11, kV=0.1981503563639978, kA=0.02),
             pid=PidGains(kp=10.0, ki=9.814794609326363, kd=0.396417538966332),
-            ticks_to_rad=0.0041668254282385304,
+            ticks_to_rad=0.004287663768984838,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -42,7 +43,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.09, kV=0.1350324603642087, kA=0.008225329011787715),
             pid=PidGains(kp=10.0, ki=10.0, kd=0.7032264861939415),
-            ticks_to_rad=0.004132057448734478,
+            ticks_to_rad=0.004242410626981493,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -52,7 +53,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.11, kV=0.18219958232362843, kA=0.02),
             pid=PidGains(kp=10.0, ki=10.0, kd=0.6018354462577499),
-            ticks_to_rad=0.004876998667207109,
+            ticks_to_rad=0.005053571686246181,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -62,13 +63,15 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.11, kV=0.15768136518367729, kA=0.017155086054130467),
             pid=PidGains(kp=10.0, ki=10.0, kd=0.548293111922021),
-            ticks_to_rad=0.004264954008171339,
+            ticks_to_rad=0.004396681173008571,
             vel_lpf_alpha=0.8,
         ),
     )
+    drum_motor = Motor(port=2, inverted=False)
+    drum_light_sensor = AnalogSensor(port=1)
     front_left_ir_sensor = IRSensor(port=0)
     front_right_ir_sensor = IRSensor(port=1)
-    analog_sensors = [front_left_ir_sensor, front_right_ir_sensor]
+    analog_sensors = [drum_light_sensor, front_left_ir_sensor, front_right_ir_sensor]
 
 
 __all__ = ["Defs"]

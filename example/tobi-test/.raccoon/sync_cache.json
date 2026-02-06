@@ -1,0 +1,22 @@
+{
+  "src/missions/setup_mission.py": {
+    "hash": "2594fadbe97889dfe8ee4cba88a5121bb28d074fe4ee09ea48b883a78802be79",
+    "mtime": 1770385409.4935641,
+    "size": 566
+  },
+  "src/hardware/defs.py": {
+    "hash": "d9372ae8a8524cc31b6ca71f801a6f869b15d3db32eb34d250cd1229cb17cb7f",
+    "mtime": 1770373587.5437145,
+    "size": 2230
+  },
+  "src/hardware/robot.py": {
+    "hash": "ce97bdcfafe1712b7c18e39d11fe23b419e03ebffceaaa02feb31269d24c342b",
+    "mtime": 1770373142.874661,
+    "size": 3494
+  },
+  "mission_layouts.json": {
+    "hash": "2ecae845b7719d8bf31441769bda0e5a440312523126986d2b2e7654aad4682a",
+    "mtime": 1770047940.568001,
+    "size": 340
+  }
+}

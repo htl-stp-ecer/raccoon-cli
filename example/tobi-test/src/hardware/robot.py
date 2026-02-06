@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-05 17:54:18
+ Generated: 2026-02-06 15:15:04
 ===========================================================
 
 Authors:
@@ -15,6 +15,7 @@ Authors:
 from libstp import (
     Drive,
     FusedOdometry,
+    FusedOdometryConfig,
     GenericRobot,
     MecanumKinematics,
     MotionLimits,
@@ -22,7 +23,6 @@ from libstp import (
     UnifiedMotionPidConfig,
     WheelPosition,
 )
-from libstp.odometry_fused import FusedOdometryConfig
 
 from src.hardware.defs import Defs
 
@@ -31,11 +31,6 @@ from src.missions.setup_mission import SetupMission
 from src.missions.shutdown_mission import ShutdownMission
 from src.missions.potato_mission import PotatoMission
 
-
-def build():
-    cfg = FusedOdometryConfig()
-    cfg.bemf_trust = 0.0
-    return cfg
 
 class Robot(GenericRobot):
     defs = Defs()
@@ -53,7 +48,9 @@ class Robot(GenericRobot):
     drive = Drive(
         kinematics=kinematics, chassis_lim=MotionLimits(max_omega=99999, max_v=99999)
     )
-    odometry = FusedOdometry(imu=defs.imu, kinematics=kinematics, config=build())
+    odometry = FusedOdometry(
+        imu=defs.imu, kinematics=kinematics, config=FusedOdometryConfig(bemf_trust=1.0)
+    )
     motion_pid_config = UnifiedMotionPidConfig(
         angle_tolerance_rad=0.017,
         derivative_lpf_alpha=0.1,

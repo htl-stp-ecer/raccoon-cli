@@ -47,24 +47,35 @@ class RobotGenerator(BaseGenerator):
             config: Full project configuration
 
         Returns:
-            Robot configuration dictionary
+            Robot configuration dictionary (includes missions for cache fingerprinting)
         """
         robot_config = config.get("robot")
         if robot_config is None:
             logger.warning("No 'robot' key found in config")
             return {}
 
+        # Copy so we can add missions without mutating the original
+        result = dict(robot_config)
+
+        # Include missions and definitions in extracted config so the cache
+        # fingerprint accounts for changes (these live at config root, not under robot)
+        missions = config.get("missions", [])
+        if missions:
+            result["_missions"] = missions
+        definitions = config.get("definitions", {})
+        if definitions:
+            result["_definitions"] = definitions
+
         # Support both old structure (robot.kinematics) and new structure (robot.drive)
-        # If robot.drive exists, use that; otherwise fall back to old structure
-        if "drive" in robot_config:
-            return robot_config
+        if "drive" in result:
+            return result
 
-        # Legacy support: if kinematics is at robot level, wrap it in drive
-        if "kinematics" in robot_config:
+        # Legacy support: if kinematics is at robot level
+        if "kinematics" in result:
             logger.info("Using legacy robot.kinematics structure")
-            return robot_config
+            return result
 
-        return robot_config
+        return result
 
     def validate_config(self, data: Dict[str, Any]) -> None:
         """
@@ -858,6 +869,8 @@ class RobotGenerator(BaseGenerator):
                 param_exprs[name] = self._render_odometry_param_value(
                     params_cfg[name],
                     reference_map,
+                    odometry_class=odometry_class,
+                    param_name=name,
                 )
                 used_config_keys.add(name)
             elif name in reference_map:
@@ -896,7 +909,7 @@ class RobotGenerator(BaseGenerator):
         ]
         for key in extra_keys:
             args.append(
-                f"{key}={self._render_odometry_param_value(params_cfg[key], reference_map)}"
+                f"{key}={self._render_odometry_param_value(params_cfg[key], reference_map, odometry_class=odometry_class, param_name=key)}"
             )
 
         return f"{odometry_class.__name__}({', '.join(args)})"
@@ -905,13 +918,22 @@ class RobotGenerator(BaseGenerator):
         self,
         value: Any,
         reference_map: Dict[str, str],
+        *,
+        odometry_class: Optional[type] = None,
+        param_name: Optional[str] = None,
     ) -> str:
         """
         Convert an odometry parameter value to a Python expression.
 
+        When the value is a dict, attempts to introspect the odometry class's
+        __init__ signature to determine the expected type and construct a proper
+        class instance instead of a raw dict literal.
+
         Args:
             value: Raw value from configuration
             reference_map: Mapping of known reference names to expressions
+            odometry_class: The odometry class (for type introspection on dict values)
+            param_name: The parameter name (for type introspection on dict values)
 
         Returns:
             Python expression string
@@ -921,7 +943,66 @@ class RobotGenerator(BaseGenerator):
                 return reference_map[value]
             if value.startswith("defs.") and value[5:] in reference_map:
                 return reference_map[value[5:]]
+            return build_literal_expr(value)
+
+        if isinstance(value, dict) and odometry_class is not None and param_name is not None:
+            # Try to infer the expected class type from the odometry class's signature
+            nested_cls = self._infer_odometry_param_class(odometry_class, param_name)
+            if nested_cls is not None:
+                return build_constructor_expr(
+                    nested_cls,
+                    value,
+                    f"robot.odometry.{param_name}",
+                    self.imports,
+                )
+
         return build_literal_expr(value)
+
+    def _infer_odometry_param_class(self, odometry_class: type, param_name: str) -> Optional[type]:
+        """
+        Infer the expected class type for an odometry __init__ parameter.
+
+        Uses type annotations first, then falls back to pybind11 docstring parsing.
+
+        Args:
+            odometry_class: The odometry class to introspect
+            param_name: The parameter name to look up
+
+        Returns:
+            The resolved class type, or None if it cannot be determined
+        """
+        from ..introspection import (
+            get_init_params,
+            is_class_annotation,
+            parse_type_from_docstring,
+            unwrap_optional,
+        )
+
+        # First try type annotations from the signature
+        init_params = get_init_params(odometry_class)
+        if param_name in init_params:
+            annotation = init_params[param_name].annotation
+            if is_class_annotation(annotation):
+                resolved = unwrap_optional(annotation)
+                if isinstance(resolved, type):
+                    logger.info(
+                        f"Inferred type for odometry param '{param_name}': {resolved.__name__} (from annotation)"
+                    )
+                    return resolved
+
+        # Fall back to pybind11 docstring parsing
+        nested_cls = parse_type_from_docstring(odometry_class, param_name)
+        if nested_cls is not None:
+            logger.info(
+                f"Inferred type for odometry param '{param_name}': {nested_cls.__name__} (from docstring)"
+            )
+            return nested_cls
+
+        logger.warning(
+            f"robot.odometry: Could not infer class type for parameter '{param_name}' "
+            f"of {odometry_class.__name__}, using dict literal"
+        )
+        return None
 
     def _resolve_odometry_qualified_name(self, odometry_type: str) -> str:
         """

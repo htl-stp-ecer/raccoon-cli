@@ -1,0 +1,1 @@
+{"name":"SetupMission","is_setup":true,"is_shutdown":false,"order":-1,"steps":[{"step_type":"calibrate_sensors","function_name":"calibrate_sensors","arguments":[],"position":{"x":12,"y":26},"children":null},{"step_type":"wait_for_button","function_name":"wait_for_button","arguments":[],"position":{"x":12,"y":29},"children":null}],"comments":[],"groups":[]}
