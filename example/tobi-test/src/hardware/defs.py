@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-06 19:37:42
+ Generated: 2026-02-07 16:02:24
 ===========================================================
 
 Authors:
@@ -20,6 +20,7 @@ from libstp import (
     Motor,
     MotorCalibration,
     PidGains,
+    Servo,
 )
 from src.hardware.thresholded_sensor import ThresholdedSensor
 from libstp import IMU as Imu
@@ -34,7 +35,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.11, kV=0.1981503563639978, kA=0.02),
             pid=PidGains(kp=10.0, ki=9.814794609326363, kd=0.396417538966332),
-            ticks_to_rad=0.004287663768984838,
+            ticks_to_rad=0.004391830359802708,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -44,7 +45,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.09, kV=0.1350324603642087, kA=0.008225329011787715),
             pid=PidGains(kp=10.0, ki=10.0, kd=0.7032264861939415),
-            ticks_to_rad=0.004242410626981493,
+            ticks_to_rad=0.0042869081060705775,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -54,7 +55,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.11, kV=0.18219958232362843, kA=0.02),
             pid=PidGains(kp=10.0, ki=10.0, kd=0.6018354462577499),
-            ticks_to_rad=0.005053571686246181,
+            ticks_to_rad=0.005058544093256774,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -64,13 +65,14 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.11, kV=0.15768136518367729, kA=0.017155086054130467),
             pid=PidGains(kp=10.0, ki=10.0, kd=0.548293111922021),
-            ticks_to_rad=0.004396681173008571,
+            ticks_to_rad=0.004448910019230072,
             vel_lpf_alpha=0.8,
         ),
     )
     drum_motor = Motor(port=2, inverted=False)
     drum_light_sensor = AnalogSensor(port=1)
     drum_distance_sensor = ThresholdedSensor(port=0)
+    drum_pusher_servo = Servo(port=0)
     front_left_ir_sensor = IRSensor(port=0)
     front_right_ir_sensor = IRSensor(port=1)
     analog_sensors = [

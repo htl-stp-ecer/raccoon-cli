@@ -24,7 +24,11 @@ import libstp.foundation as logging
 
 robot = Robot()
 
-logging.set_global_level(logging.Level.info)
+import libstp.foundation as logging
+
+logging.set_global_level(logging.Level.debug)
+logging.set_file_level("turn.py", logging.Level.trace)
+logging.set_file_level("turn_motion.cpp", logging.Level.trace)
 logging.set_file_level("fused_odometry.cpp", logging.Level.trace)
 
 if __name__ == "__main__":

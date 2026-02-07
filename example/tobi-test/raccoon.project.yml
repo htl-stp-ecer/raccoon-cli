@@ -26,9 +26,9 @@ robot:
       ki: 0.0
       kd: 0.0
     heading:
-      kp: 3.0
-      ki: 0.0
-      kd: 0.0
+      kp: 5.502657562205853
+      ki: 0.21886354129079075
+      kd: 0.8922643931122729
     lateral:
       kp: 2.0
       ki: 0.0
@@ -38,7 +38,7 @@ robot:
       max_angular_acceleration: 3.0
     integral_max: 10.0
     integral_deadband: 0.01
-    derivative_lpf_alpha: 0.1
+    derivative_lpf_alpha: 0.12858439349331208
     output_min: -10.0
     output_max: 10.0
     saturation:
@@ -51,7 +51,7 @@ robot:
       recovery_rate: 0.05
     tolerances:
       distance_m: 0.01
-      angle_rad: 0.017
+      angle_rad: 0.01
     rate_limits:
       max_heading_rate: 3.0
       min_angular_rate: 0.1
@@ -101,7 +101,7 @@ definitions:
         kp: 10.0
         ki: 9.814794609326363
         kd: 0.396417538966332
-      ticks_to_rad: 0.004287663768984838
+      ticks_to_rad: 0.004391830359802708
       vel_lpf_alpha: 0.8
   front_right_motor:
     type: Motor
@@ -116,7 +116,7 @@ definitions:
         kp: 10.0
         ki: 10.0
         kd: 0.7032264861939415
-      ticks_to_rad: 0.004242410626981493
+      ticks_to_rad: 0.0042869081060705775
       vel_lpf_alpha: 0.8
   rear_left_motor:
     type: Motor
@@ -131,7 +131,7 @@ definitions:
         kp: 10.0
         ki: 10.0
         kd: 0.6018354462577499
-      ticks_to_rad: 0.005053571686246181
+      ticks_to_rad: 0.005058544093256774
       vel_lpf_alpha: 0.8
   rear_right_motor:
     type: Motor
@@ -146,7 +146,7 @@ definitions:
         kp: 10.0
         ki: 10.0
         kd: 0.548293111922021
-      ticks_to_rad: 0.004396681173008571
+      ticks_to_rad: 0.004448910019230072
       vel_lpf_alpha: 0.8
   drum_motor:
     type: Motor
@@ -157,6 +157,9 @@ definitions:
     port: 1
   drum_distance_sensor:
     type: src.hardware.thresholded_sensor.ThresholdedSensor
+    port: 0
+  drum_pusher_servo:
+    type: Servo
     port: 0
   imu:
     type: IMU
