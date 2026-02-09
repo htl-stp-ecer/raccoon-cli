@@ -67,10 +67,11 @@ This generates `src/hardware/defs.py` and `src/hardware/robot.py` from your `rac
 ### Calibrate Motors
 
 ```bash
-raccoon calibrate
+raccoon calibrate motors    # PID and feedforward calibration
+raccoon calibrate maxspeed  # Determine maximum motor speeds
 ```
 
-Runs calibration routines to determine PID and feedforward parameters, saving results to your project config.
+Runs calibration routines to determine PID and feedforward parameters, or measure maximum motor speeds, saving results to your project config.
 
 ### Run Your Project
 

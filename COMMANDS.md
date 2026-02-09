@@ -315,6 +315,62 @@ rear_right_motor:
     vel_lpf_alpha: 0.8
 ```
 
+**Calibration Subcommands:**
+
+The `raccoon calibrate` command has several subcommands for different calibration tasks:
+
+- `raccoon calibrate motors` - Calibrate motor PID and feedforward parameters
+- `raccoon calibrate rpm` - Calibrate motor RPM vs power using hall effect sensor
+- `raccoon calibrate deadzone` - Interactive deadzone calibration using human observation
+- `raccoon calibrate benchmark` - Test motor PID responsiveness and control quality
+- `raccoon calibrate maxspeed` - Determine maximum motor speeds by testing at full power
+
+#### `raccoon calibrate maxspeed`
+
+Determines the maximum speed of all motors by running them at full power (100% and -100%) for a specified duration and measuring average speed from Back-EMF feedback.
+
+**Usage:**
+```bash
+raccoon calibrate maxspeed
+raccoon calibrate maxspeed --duration 5.0
+raccoon calibrate maxspeed --local --yes
+```
+
+**Options:**
+- `-d, --duration FLOAT` - Test duration in seconds per direction (default: 10.0)
+- `-l, --local` - Run locally on this machine (requires hardware)
+- `-y, --yes` - Auto-save calibration results without prompting
+
+**What it does:**
+1. Discovers all motors defined in `raccoon.project.yml`
+2. For each motor:
+   - Runs at 100% power for specified duration (forward test)
+   - Measures average speed from Back-EMF encoder
+   - Runs at -100% power for specified duration (reverse test)
+   - Measures average speed in reverse
+3. Converts speeds from ticks/second to rad/s using `ticks_to_rad`
+4. Saves results to each motor's calibration section
+
+**Results saved to YAML:**
+```yaml
+front_left_motor:
+  calibration:
+    max_forward_speed: 5.24  # rad/s
+    max_reverse_speed: 5.18  # rad/s
+```
+
+**Example output:**
+```
+┌────────────────────┬──────┬──────────────────┬──────────────────┬───────┐
+│ Motor              │ Port │ Forward (rad/s)  │ Reverse (rad/s)  │ Status│
+├────────────────────┼──────┼──────────────────┼──────────────────┼───────┤
+│ front_left_motor   │ 0    │ 5.24             │ 5.18             │   ✓   │
+│ front_right_motor  │ 1    │ 5.31             │ 5.29             │   ✓   │
+│ rear_left_motor    │ 2    │ 5.22             │ 5.20             │   ✓   │
+│ rear_right_motor   │ 3    │ 5.28             │ 5.25             │   ✓   │
+└────────────────────┴──────┴──────────────────┴──────────────────┴───────┘
+```
+
 ---
 
 ### `raccoon wizard`

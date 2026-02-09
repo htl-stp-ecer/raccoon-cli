@@ -17,6 +17,7 @@ from .motors import calibrate_motors_local, calibrate_motors_remote
 from .rpm import calibrate_rpm_local, calibrate_rpm_remote
 from .benchmark import benchmark_motors_local, benchmark_motors_remote
 from .deadzone import calibrate_deadzone_local, calibrate_deadzone_remote
+from .maxspeed import maxspeed_local, maxspeed_remote
 
 logger = logging.getLogger("raccoon")
 
@@ -116,6 +117,8 @@ def calibrate_group(ctx: click.Context) -> None:
                     (BEMF is unreliable at low RPM)
 
         benchmark - Test motor PID responsiveness and control quality
+
+        maxspeed  - Determine maximum motor speeds by testing at full power
     """
     pass
 
@@ -549,6 +552,73 @@ def benchmark_command(
                 duration=duration,
                 sample_rate=sample_rate,
                 output_dir=output_dir,
+            )
+        )
+
+
+@calibrate_group.command(name="maxspeed")
+@click.option(
+    "--duration",
+    "-d",
+    type=float,
+    default=10.0,
+    help="Test duration in seconds per direction (default: 10.0)",
+)
+@click.option("--local", "-l", is_flag=True, help="Run locally on this machine (requires hardware)")
+@click.option("--yes", "-y", is_flag=True, help="Auto-save calibration results without prompting")
+@click.pass_context
+def maxspeed_command(
+    ctx: click.Context,
+    duration: float,
+    local: bool,
+    yes: bool,
+) -> None:
+    """Determine maximum motor speeds by testing at full power.
+
+    Tests each motor at 100% and -100% power for the specified duration,
+    measuring the average speed from Back-EMF encoder feedback.
+
+    Results are saved to raccoon.project.yml under each motor's calibration
+    section as max_forward_speed and max_reverse_speed (in rad/s).
+
+    By default, runs on the connected Pi. Use --local to run on this machine.
+
+    Examples:
+
+        raccoon calibrate maxspeed
+
+        raccoon calibrate maxspeed --duration 5.0
+
+        raccoon calibrate maxspeed --local --yes
+    """
+    console: Console = ctx.obj["console"]
+
+    # Always require project context
+    project_root, config = _require_project_context(console)
+
+    # Validate parameters
+    if duration <= 0:
+        console.print("[red]Duration must be positive[/red]")
+        raise SystemExit(1)
+
+    if local:
+        # Run locally
+        maxspeed_local(
+            ctx,
+            project_root,
+            config,
+            duration=duration,
+            auto_save=yes,
+        )
+    else:
+        # Require remote connection
+        _require_remote_connection(console, project_root)
+        asyncio.run(
+            maxspeed_remote(
+                ctx,
+                project_root,
+                config,
+                duration=duration,
             )
         )
 
