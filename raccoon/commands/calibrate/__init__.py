@@ -17,7 +17,7 @@ from .motors import calibrate_motors_local, calibrate_motors_remote
 from .rpm import calibrate_rpm_local, calibrate_rpm_remote
 from .benchmark import benchmark_motors_local, benchmark_motors_remote
 from .deadzone import calibrate_deadzone_local, calibrate_deadzone_remote
-from .maxspeed import maxspeed_local, maxspeed_remote
+from .rotation import rotation_local, rotation_remote
 
 logger = logging.getLogger("raccoon")
 
@@ -118,7 +118,7 @@ def calibrate_group(ctx: click.Context) -> None:
 
         benchmark - Test motor PID responsiveness and control quality
 
-        maxspeed  - Determine maximum motor speeds by testing at full power
+        rotation  - Measure maximum robot rotation speed using IMU
     """
     pass
 
@@ -556,7 +556,7 @@ def benchmark_command(
         )
 
 
-@calibrate_group.command(name="maxspeed")
+@calibrate_group.command(name="rotation")
 @click.option(
     "--duration",
     "-d",
@@ -567,29 +567,33 @@ def benchmark_command(
 @click.option("--local", "-l", is_flag=True, help="Run locally on this machine (requires hardware)")
 @click.option("--yes", "-y", is_flag=True, help="Auto-save calibration results without prompting")
 @click.pass_context
-def maxspeed_command(
+def rotation_command(
     ctx: click.Context,
     duration: float,
     local: bool,
     yes: bool,
 ) -> None:
-    """Determine maximum motor speeds by testing at full power.
+    """Measure maximum robot rotation speed using IMU gyroscope.
 
-    Tests each motor at 100% and -100% power for the specified duration,
-    measuring the average speed from Back-EMF encoder feedback.
+    Spins the robot in place at maximum angular velocity and measures
+    the actual rotation rate using the IMU/gyroscope over the specified duration.
 
-    Results are saved to raccoon.project.yml under each motor's calibration
-    section as max_forward_speed and max_reverse_speed (in rad/s).
+    Tests both clockwise and counter-clockwise rotation, then saves the
+    average to raccoon.project.yml under robot.drive.limits.max_rotation_speed
+    (in rad/s).
+
+    ⚠ WARNING: The robot will spin in place at maximum speed.
+    Ensure there is adequate clear space around the robot.
 
     By default, runs on the connected Pi. Use --local to run on this machine.
 
     Examples:
 
-        raccoon calibrate maxspeed
+        raccoon calibrate rotation
 
-        raccoon calibrate maxspeed --duration 5.0
+        raccoon calibrate rotation --duration 5.0
 
-        raccoon calibrate maxspeed --local --yes
+        raccoon calibrate rotation --local --yes
     """
     console: Console = ctx.obj["console"]
 
@@ -603,7 +607,7 @@ def maxspeed_command(
 
     if local:
         # Run locally
-        maxspeed_local(
+        rotation_local(
             ctx,
             project_root,
             config,
@@ -614,7 +618,7 @@ def maxspeed_command(
         # Require remote connection
         _require_remote_connection(console, project_root)
         asyncio.run(
-            maxspeed_remote(
+            rotation_remote(
                 ctx,
                 project_root,
                 config,
