@@ -644,11 +644,12 @@ async def calibrate_motors_remote(
     from raccoon.client.connection import get_connection_manager
     from raccoon.client.api import create_api_client
     from raccoon.client.output_handler import OutputHandler
+    from raccoon.client.sftp_sync import SyncDirection
     from raccoon.commands.sync_cmd import sync_project_interactive
 
-    # Sync project first (with interactive conflict resolution)
+    # Sync project to Pi before calibration
     if not sync_project_interactive(project_root, console):
-        console.print("[red]Cannot run calibration with unresolved conflicts[/red]")
+        console.print("[red]Sync failed, cannot run calibration remotely[/red]")
         raise SystemExit(1)
     console.print()
 
@@ -693,7 +694,7 @@ async def calibrate_motors_remote(
 
     console.print()
     console.print("[dim]Syncing calibration results...[/dim]")
-    sync_ok = sync_project_interactive(project_root, console)
+    sync_ok = sync_project_interactive(project_root, console, direction=SyncDirection.PULL)
     if sync_ok:
         console.print("[green]✓ Calibration results synced to local project[/green]")
     else:

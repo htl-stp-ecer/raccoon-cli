@@ -1,269 +1,285 @@
-"""Tests for SFTP sync functionality."""
+"""Tests for rsync-based sync functionality."""
 
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import patch, MagicMock
 
-from raccoon.client.sftp_sync import HashCache, SftpSync, SyncOptions, SyncDirection
+from raccoon.client.sftp_sync import (
+    RsyncSync,
+    SyncOptions,
+    SyncDirection,
+    SyncResult,
+    load_raccoonignore,
+)
 
 
-class TestLineEndingNormalization:
-    """Test that CRLF and LF produce the same hash for text files."""
+class TestRsyncCommandConstruction:
+    """Test that rsync commands are built correctly."""
 
-    def test_crlf_and_lf_produce_same_hash(self, tmp_path: Path):
-        """Text files with different line endings should produce the same hash."""
-        # Create two files with same content but different line endings
-        file_lf = tmp_path / "test_lf.py"
-        file_crlf = tmp_path / "test_crlf.py"
+    def test_push_command(self):
+        """Push should put local path first, remote path second."""
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        options = SyncOptions(direction=SyncDirection.PUSH, delete=False)
 
-        content = "line1\nline2\nline3\n"
-        file_lf.write_bytes(content.encode())
-        file_crlf.write_bytes(content.replace('\n', '\r\n').encode())
+        cmd = sync._build_command(Path("/home/user/project"), "/home/pi/programs/abc", options)
 
-        cache = HashCache(tmp_path)
-        hash_lf = cache.get_hash("test_lf.py", file_lf)
-        hash_crlf = cache.get_hash("test_crlf.py", file_crlf)
+        assert cmd[0] == "rsync"
+        assert "-avz" in cmd
+        assert "--stats" in cmd
+        # Source (local) before destination (remote)
+        assert cmd[-2] == "/home/user/project/"
+        assert cmd[-1] == "pi@192.168.4.1:/home/pi/programs/abc/"
 
-        assert hash_lf == hash_crlf
+    def test_pull_command(self):
+        """Pull should put remote path first, local path second."""
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        options = SyncOptions(direction=SyncDirection.PULL, delete=False)
 
-    def test_cr_only_normalized(self, tmp_path: Path):
-        """CR-only line endings (old Mac) should also be normalized."""
-        file_lf = tmp_path / "test_lf.py"
-        file_cr = tmp_path / "test_cr.py"
+        cmd = sync._build_command(Path("/home/user/project"), "/home/pi/programs/abc", options)
 
-        content = "line1\nline2\nline3\n"
-        file_lf.write_bytes(content.encode())
-        file_cr.write_bytes(content.replace('\n', '\r').encode())
+        # Source (remote) before destination (local)
+        assert cmd[-2] == "pi@192.168.4.1:/home/pi/programs/abc/"
+        assert cmd[-1] == "/home/user/project/"
 
-        cache = HashCache(tmp_path)
-        hash_lf = cache.get_hash("test_lf.py", file_lf)
-        hash_cr = cache.get_hash("test_cr.py", file_cr)
+    def test_delete_flag(self):
+        """--delete should be included when delete=True."""
+        sync = RsyncSync(host="192.168.4.1", user="pi")
 
-        assert hash_lf == hash_cr
+        options_del = SyncOptions(delete=True)
+        cmd_del = sync._build_command(Path("/tmp/proj"), "/remote", options_del)
+        assert "--delete" in cmd_del
 
-    def test_binary_files_not_normalized(self, tmp_path: Path):
-        """Binary files should NOT have line ending normalization."""
-        file1 = tmp_path / "test.bin"
-        file2 = tmp_path / "test2.bin"
+        options_nodel = SyncOptions(delete=False)
+        cmd_nodel = sync._build_command(Path("/tmp/proj"), "/remote", options_nodel)
+        assert "--delete" not in cmd_nodel
 
-        file1.write_bytes(b'\x00\r\n\x01')
-        file2.write_bytes(b'\x00\n\x01')
+    def test_ssh_port(self):
+        """Custom SSH port should be passed via -e flag."""
+        sync = RsyncSync(host="192.168.4.1", user="pi", ssh_port=2222)
+        options = SyncOptions(delete=False)
 
-        cache = HashCache(tmp_path)
-        hash1 = cache.get_hash("test.bin", file1)
-        hash2 = cache.get_hash("test2.bin", file2)
+        cmd = sync._build_command(Path("/tmp/proj"), "/remote", options)
 
-        # Binary files should NOT be normalized, so hashes differ
-        assert hash1 != hash2
+        # Find the -e argument
+        e_idx = cmd.index("-e")
+        ssh_cmd = cmd[e_idx + 1]
+        assert "-p 2222" in ssh_cmd
 
-    def test_yaml_files_normalized(self, tmp_path: Path):
-        """YAML files should be normalized."""
-        file_lf = tmp_path / "config.yml"
-        file_crlf = tmp_path / "config_crlf.yml"
+    def test_default_ssh_port(self):
+        """Default SSH port should be 22."""
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        options = SyncOptions(delete=False)
 
-        content = "key: value\nlist:\n  - item1\n  - item2\n"
-        file_lf.write_bytes(content.encode())
-        file_crlf.write_bytes(content.replace('\n', '\r\n').encode())
+        cmd = sync._build_command(Path("/tmp/proj"), "/remote", options)
 
-        cache = HashCache(tmp_path)
-        hash_lf = cache.get_hash("config.yml", file_lf)
-        hash_crlf = cache.get_hash("config_crlf.yml", file_crlf)
+        e_idx = cmd.index("-e")
+        ssh_cmd = cmd[e_idx + 1]
+        assert "-p 22" in ssh_cmd
 
-        assert hash_lf == hash_crlf
+    def test_custom_user(self):
+        """Custom user should appear in remote path."""
+        sync = RsyncSync(host="10.0.0.1", user="admin")
+        options = SyncOptions(direction=SyncDirection.PUSH, delete=False)
 
-    def test_json_files_normalized(self, tmp_path: Path):
-        """JSON files should be normalized."""
-        file_lf = tmp_path / "data.json"
-        file_crlf = tmp_path / "data_crlf.json"
+        cmd = sync._build_command(Path("/tmp/proj"), "/remote", options)
 
-        content = '{\n  "key": "value"\n}\n'
-        file_lf.write_bytes(content.encode())
-        file_crlf.write_bytes(content.replace('\n', '\r\n').encode())
+        assert cmd[-1] == "admin@10.0.0.1:/remote/"
 
-        cache = HashCache(tmp_path)
-        hash_lf = cache.get_hash("data.json", file_lf)
-        hash_crlf = cache.get_hash("data_crlf.json", file_crlf)
 
-        assert hash_lf == hash_crlf
+class TestExcludePatterns:
+    """Test exclude pattern handling."""
 
-    def test_mixed_line_endings_normalized(self, tmp_path: Path):
-        """Files with mixed line endings should be normalized consistently."""
-        file_mixed = tmp_path / "mixed.py"
-        file_lf = tmp_path / "lf.py"
+    def test_default_exclude_patterns(self):
+        """Default options should include common exclude patterns."""
+        options = SyncOptions()
 
-        # Mixed line endings: CRLF, LF, CR
-        file_mixed.write_bytes(b"line1\r\nline2\nline3\rline4\n")
-        # All LF
-        file_lf.write_bytes(b"line1\nline2\nline3\nline4\n")
+        assert ".git" in options.exclude_patterns
+        assert "__pycache__" in options.exclude_patterns
+        assert "*.pyc" in options.exclude_patterns
+        assert ".raccoon" in options.exclude_patterns
 
-        cache = HashCache(tmp_path)
-        hash_mixed = cache.get_hash("mixed.py", file_mixed)
-        hash_lf = cache.get_hash("lf.py", file_lf)
-
-        assert hash_mixed == hash_lf
-
-
-class TestHashCaching:
-    """Test hash cache functionality."""
-
-    def test_cache_stores_hash(self, tmp_path: Path):
-        """Hash should be cached after first computation."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("content")
-
-        cache = HashCache(tmp_path)
-
-        # First call computes hash
-        hash1 = cache.get_hash("test.py", test_file)
-        assert hash1 != ""
-
-        # Second call should return cached value
-        hash2 = cache.get_hash("test.py", test_file)
-        assert hash1 == hash2
-
-    def test_cache_invalidates_on_mtime_change(self, tmp_path: Path):
-        """Cache should invalidate when file mtime changes."""
-        import time
-
-        test_file = tmp_path / "test.py"
-        test_file.write_text("content1")
-
-        cache = HashCache(tmp_path)
-        hash1 = cache.get_hash("test.py", test_file)
-
-        # Modify file (change content and mtime)
-        time.sleep(0.1)  # Ensure different mtime
-        test_file.write_text("content2")
-
-        hash2 = cache.get_hash("test.py", test_file)
-        assert hash1 != hash2
-
-    def test_cache_persists_to_disk(self, tmp_path: Path):
-        """Cache should persist to disk and reload."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("content")
-
-        # Create cache and compute hash
-        cache1 = HashCache(tmp_path)
-        hash1 = cache1.get_hash("test.py", test_file)
-        cache1.save_cache()
-
-        # Create new cache instance (simulating restart)
-        cache2 = HashCache(tmp_path)
-        # Should load from disk cache
-        assert (tmp_path / ".raccoon" / "sync_cache.json").exists()
-
-
-class TestPathNormalization:
-    """Test cross-platform path handling."""
-
-    def test_windows_paths_converted_to_posix(self):
-        """Paths should always use forward slashes internally."""
-        # Note: On Linux, Path("src\\missions") doesn't interpret backslashes
-        # This test verifies as_posix() works correctly
-        path = Path("src/missions/main.py")
-        assert path.as_posix() == "src/missions/main.py"
-
-    def test_relative_path_posix(self, tmp_path: Path):
-        """Relative paths should be converted to POSIX format."""
-        (tmp_path / "src").mkdir()
-        (tmp_path / "src" / "test.py").write_text("test")
-
-        cache = HashCache(tmp_path)
-        local_files = {}
-
-        # Simulate what _get_local_files does
-        for path in tmp_path.rglob("*"):
-            if path.is_file():
-                rel_path = path.relative_to(tmp_path)
-                rel_path_posix = rel_path.as_posix()
-                local_files[rel_path_posix] = cache.get_hash(rel_path_posix, path)
-
-        assert "src/test.py" in local_files
-
-
-class TestMergeToolLauncher:
-    """Test PyCharm merge tool integration."""
-
-    def test_uses_pycharm_launcher(self):
-        """MergeToolLauncher should use PyCharmLauncher internally."""
-        from raccoon.client.conflict_resolver import MergeToolLauncher
-
-        launcher = MergeToolLauncher()
-        # Just verify it can be instantiated and has the expected interface
-        assert hasattr(launcher, 'is_available')
-        assert hasattr(launcher, 'open_diff')
-
-    def test_is_available_checks_pycharm(self):
-        """is_available should delegate to PyCharmLauncher."""
-        from raccoon.client.conflict_resolver import MergeToolLauncher
-
-        launcher = MergeToolLauncher()
-
-        # Mock the internal pycharm launcher
-        mock_pycharm = Mock()
-        mock_pycharm.is_available.return_value = True
-        launcher._pycharm = mock_pycharm
-
-        assert launcher.is_available() is True
-        mock_pycharm.is_available.assert_called_once()
-
-    def test_open_diff_calls_pycharm(self, tmp_path: Path):
-        """open_diff should call PyCharm with diff command."""
-        from raccoon.client.conflict_resolver import MergeToolLauncher
-
-        # Create test files
-        local_file = tmp_path / "local.py"
-        remote_file = tmp_path / "remote.py"
-        local_file.write_text("local content")
-        remote_file.write_text("remote content")
-
-        launcher = MergeToolLauncher()
-
-        # Mock the pycharm launcher
-        mock_pycharm = Mock()
-        mock_pycharm.find_pycharm.return_value = Path("/usr/bin/pycharm")
-        launcher._pycharm = mock_pycharm
-
-        with patch('subprocess.Popen') as mock_popen:
-            result = launcher.open_diff(local_file, remote_file)
-
-            assert result is True
-            mock_popen.assert_called_once()
-            call_args = mock_popen.call_args[0][0]
-            assert "diff" in call_args
-            assert str(local_file) in call_args
-            assert str(remote_file) in call_args
-
-
-class TestConflictResolution:
-    """Test conflict resolution functionality."""
-
-    def test_conflict_file_dataclass(self, tmp_path: Path):
-        """ConflictFile should hold conflict information."""
-        from raccoon.client.conflict_resolver import ConflictFile
-
-        local_file = tmp_path / "test.py"
-        local_file.write_text("local content")
-
-        conflict = ConflictFile(
-            rel_path="test.py",
-            local_path=local_file,
-            remote_content=b"remote content",
+    def test_exclude_patterns_in_command(self):
+        """Each exclude pattern should become an --exclude argument."""
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        options = SyncOptions(
+            exclude_patterns=["*.pyc", ".git", "__pycache__"],
+            delete=False,
         )
 
-        assert conflict.rel_path == "test.py"
-        assert conflict.local_path == local_file
-        assert conflict.remote_content == b"remote content"
+        cmd = sync._build_command(Path("/tmp/proj"), "/remote", options)
 
-    def test_resolution_enum_values(self):
-        """ConflictResolution should have expected values."""
-        from raccoon.client.conflict_resolver import ConflictResolution
+        # Count --exclude occurrences
+        exclude_indices = [i for i, arg in enumerate(cmd) if arg == "--exclude"]
+        assert len(exclude_indices) == 3
 
-        assert ConflictResolution.KEEP_LOCAL.value == "local"
-        assert ConflictResolution.KEEP_REMOTE.value == "remote"
-        assert ConflictResolution.SKIP.value == "skip"
-        assert ConflictResolution.OPEN_DIFF.value == "diff"
+        # Check the patterns follow --exclude
+        exclude_values = [cmd[i + 1] for i in exclude_indices]
+        assert "*.pyc" in exclude_values
+        assert ".git" in exclude_values
+        assert "__pycache__" in exclude_values
+
+    def test_additional_exclude_patterns(self):
+        """Additional patterns should be appended to defaults."""
+        options = SyncOptions()
+        options.exclude_patterns = options.exclude_patterns + ["*.tmp", "build"]
+
+        assert "*.tmp" in options.exclude_patterns
+        assert "build" in options.exclude_patterns
+        # Originals still present
+        assert ".git" in options.exclude_patterns
+
+
+class TestRaccoonIgnore:
+    """Test .raccoonignore file loading."""
+
+    def test_load_raccoonignore(self, tmp_path: Path):
+        """Should load patterns from .raccoonignore file."""
+        ignore_file = tmp_path / ".raccoonignore"
+        ignore_file.write_text("*.tmp\n# comment\n\nbuild\ndata/\n")
+
+        patterns = load_raccoonignore(tmp_path)
+
+        assert "*.tmp" in patterns
+        assert "build" in patterns
+        assert "data" in patterns  # trailing slash stripped
+        assert len(patterns) == 3  # comments and blank lines excluded
+
+    def test_missing_raccoonignore(self, tmp_path: Path):
+        """Missing .raccoonignore should return empty list."""
+        patterns = load_raccoonignore(tmp_path)
+        assert patterns == []
+
+
+class TestRsyncNotFound:
+    """Test behavior when rsync is not installed."""
+
+    @patch("raccoon.client.sftp_sync.shutil.which", return_value=None)
+    def test_rsync_not_found_returns_error(self, mock_which):
+        """Should return failure with helpful message when rsync is missing."""
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+
+        result = sync.sync(Path("/tmp/proj"), "/remote")
+
+        assert result.success is False
+        assert len(result.errors) == 1
+        assert "rsync not found" in result.errors[0]
+        assert "sudo apt install rsync" in result.errors[0]
+
+
+class TestRsyncExecution:
+    """Test rsync execution and result parsing."""
+
+    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
+    @patch("raccoon.client.sftp_sync.subprocess.run")
+    def test_successful_push(self, mock_run, mock_which):
+        """Successful push should parse stats correctly."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=(
+                "Number of files: 10\n"
+                "Number of regular files transferred: 3\n"
+                "Total transferred file size: 4,096 bytes\n"
+            ),
+            stderr="",
+        )
+
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        result = sync.sync(Path("/tmp/proj"), "/remote")
+
+        assert result.success is True
+        assert result.files_uploaded == 3
+        assert result.files_downloaded == 0
+        assert result.bytes_transferred == 4096
+
+    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
+    @patch("raccoon.client.sftp_sync.subprocess.run")
+    def test_successful_pull(self, mock_run, mock_which):
+        """Successful pull should count files as downloaded."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=(
+                "Number of regular files transferred: 5\n"
+                "Total transferred file size: 10,240 bytes\n"
+            ),
+            stderr="",
+        )
+
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        options = SyncOptions(direction=SyncDirection.PULL)
+        result = sync.sync(Path("/tmp/proj"), "/remote", options)
+
+        assert result.success is True
+        assert result.files_downloaded == 5
+        assert result.files_uploaded == 0
+
+    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
+    @patch("raccoon.client.sftp_sync.subprocess.run")
+    def test_rsync_failure(self, mock_run, mock_which):
+        """Non-zero exit code should return failure."""
+        mock_run.return_value = MagicMock(
+            returncode=12,
+            stdout="",
+            stderr="rsync error: some error occurred",
+        )
+
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        result = sync.sync(Path("/tmp/proj"), "/remote")
+
+        assert result.success is False
+        assert "exit 12" in result.errors[0]
+
+    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
+    @patch("raccoon.client.sftp_sync.subprocess.run")
+    def test_deleted_files_parsed(self, mock_run, mock_which):
+        """Deleted file count should be parsed from stats."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=(
+                "Number of regular files transferred: 1\n"
+                "Number of deleted files: 2\n"
+                "Total transferred file size: 100 bytes\n"
+            ),
+            stderr="",
+        )
+
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        result = sync.sync(Path("/tmp/proj"), "/remote")
+
+        assert result.files_deleted == 2
+
+    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
+    @patch("raccoon.client.sftp_sync.subprocess.run")
+    def test_nothing_transferred(self, mock_run, mock_which):
+        """Zero transfers should still be success."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=(
+                "Number of regular files transferred: 0\n"
+                "Total transferred file size: 0 bytes\n"
+            ),
+            stderr="",
+        )
+
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        result = sync.sync(Path("/tmp/proj"), "/remote")
+
+        assert result.success is True
+        assert result.files_uploaded == 0
+        assert result.files_downloaded == 0
+
+    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
+    @patch("raccoon.client.sftp_sync.subprocess.run", side_effect=TimeoutError)
+    def test_timeout_handling(self, mock_run, mock_which):
+        """Timeout should be caught and reported."""
+        from subprocess import TimeoutExpired
+
+        mock_run.side_effect = TimeoutExpired("rsync", 300)
+
+        sync = RsyncSync(host="192.168.4.1", user="pi")
+        result = sync.sync(Path("/tmp/proj"), "/remote")
+
+        assert result.success is False
+        assert "timed out" in result.errors[0]
 
 
 class TestSyncOptions:
@@ -274,230 +290,12 @@ class TestSyncOptions:
         options = SyncOptions()
 
         assert options.direction == SyncDirection.PUSH
-        assert options.delete_remote is True
-        assert options.delete_local is False
+        assert options.delete is True
         assert ".git" in options.exclude_patterns
         assert "__pycache__" in options.exclude_patterns
         assert ".raccoon" in options.exclude_patterns
 
-    def test_custom_direction(self):
-        """Should be able to set custom direction."""
-        options = SyncOptions(direction=SyncDirection.BIDIRECTIONAL)
-        assert options.direction == SyncDirection.BIDIRECTIONAL
-
-    def test_custom_exclude_patterns(self):
-        """Should be able to add custom exclude patterns."""
-        options = SyncOptions()
-        options.exclude_patterns = options.exclude_patterns + ["*.tmp", "build/"]
-
-        assert "*.tmp" in options.exclude_patterns
-        assert "build/" in options.exclude_patterns
-        # Original patterns still present
-        assert ".git" in options.exclude_patterns
-
-
-class TestAutoMerge:
-    """Test automatic file merging functionality."""
-
-    def test_identical_files_after_normalization(self):
-        """Files identical after line ending normalization should be IDENTICAL."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        local = b"line1\nline2\nline3\n"
-        remote = b"line1\r\nline2\r\nline3\r\n"
-
-        result = attempt_auto_merge(local, remote, "test.py")
-
-        assert result.status == MergeStatus.IDENTICAL
-
-    def test_non_overlapping_additions_merge(self):
-        """Non-overlapping additions should be merged successfully."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        # Local adds at the end
-        local = b"line1\nline2\nline3\nlocal_addition\n"
-        # Remote is the original
-        remote = b"line1\nline2\nline3\n"
-
-        result = attempt_auto_merge(local, remote, "test.py")
-
-        assert result.status == MergeStatus.SUCCESS
-        assert b"local_addition" in result.merged_content
-
-    def test_binary_files_cannot_merge(self):
-        """Binary files should return BINARY status."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        local = b"\x00\x01\x02\x03"
-        remote = b"\x00\x01\x02\x04"
-
-        result = attempt_auto_merge(local, remote, "image.png")
-
-        assert result.status == MergeStatus.BINARY
-
-    def test_conflicting_changes_to_same_line(self):
-        """Changes to the same line should result in CONFLICT."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        # Both change line2 differently
-        local = b"line1\nlocal_modified\nline3\n"
-        remote = b"line1\nremote_modified\nline3\n"
-
-        result = attempt_auto_merge(local, remote, "test.py")
-
-        assert result.status == MergeStatus.CONFLICT
-
-    def test_is_text_file_detection(self):
-        """Text file detection should work for common extensions."""
-        from raccoon.client.auto_merge import is_text_file
-
-        assert is_text_file("main.py") is True
-        assert is_text_file("config.yml") is True
-        assert is_text_file("data.json") is True
-        assert is_text_file("script.sh") is True
-        assert is_text_file("image.png") is False
-        assert is_text_file("archive.zip") is False
-        assert is_text_file("video.mp4") is False
-
-    def test_merge_preserves_both_additions(self):
-        """When both sides add different content, merge should include both."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        # Original: line1, line2
-        # Local: adds line3 at end
-        # Remote: adds line0 at start
-        # This is tricky - they're both adding to different parts
-
-        local = b"common\nlocal_add\n"
-        remote = b"common\n"
-
-        result = attempt_auto_merge(local, remote, "test.py")
-
-        # Local additions should be preserved
-        assert result.status == MergeStatus.SUCCESS
-        assert b"local_add" in result.merged_content
-        assert b"common" in result.merged_content
-
-    def test_unicode_content_handled(self):
-        """Unicode content should be handled correctly."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        local = "# Comment with émoji 🎉\ncode = True\n".encode('utf-8')
-        remote = "# Comment with émoji 🎉\n".encode('utf-8')
-
-        result = attempt_auto_merge(local, remote, "test.py")
-
-        assert result.status == MergeStatus.SUCCESS
-        assert "code = True" in result.merged_content.decode('utf-8')
-
-    def test_invalid_utf8_treated_as_binary(self):
-        """Invalid UTF-8 content should be treated as binary."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        # Invalid UTF-8 sequence
-        local = b"\xff\xfe\x00\x01"
-        remote = b"\xff\xfe\x00\x02"
-
-        result = attempt_auto_merge(local, remote, "test.py")
-
-        assert result.status == MergeStatus.BINARY
-
-    def test_both_sides_add_to_different_areas_merges(self):
-        """When both sides add content to different areas, should merge successfully."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        # Both sides start with the same base and add in different places
-        # Local: adds at the end
-        local = b"line1\nline2\nline3\nlocal_addition\n"
-        # Remote: adds at the beginning
-        remote = b"remote_addition\nline1\nline2\nline3\n"
-
-        result = attempt_auto_merge(local, remote, "test.py")
-
-        assert result.status == MergeStatus.SUCCESS
-        merged = result.merged_content.decode('utf-8')
-        assert "remote_addition" in merged
-        assert "local_addition" in merged
-        assert "line1" in merged
-        assert "line2" in merged
-        assert "line3" in merged
-
-    def test_both_sides_add_different_lines_with_common_context(self):
-        """When both sides add different lines with common lines in between, should merge."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        # Local adds local_new, remote adds remote_new, but they share common context
-        local = b"common1\nlocal_new\ncommon2\n"
-        remote = b"common1\nremote_new\ncommon2\n"
-
-        result = attempt_auto_merge(local, remote, "test.py")
-
-        # This is still a conflict because both modified the same region
-        # (the gap between common1 and common2) with no overlap
-        assert result.status == MergeStatus.CONFLICT
-
-    def test_interleaved_additions_merge(self):
-        """When additions can be interleaved based on context, should merge."""
-        from raccoon.client.auto_merge import attempt_auto_merge, MergeStatus
-
-        # Local: has extra line after common
-        local = b"common\nlocal_extra\n"
-        # Remote: has extra line before common
-        remote = b"remote_extra\ncommon\n"
-
-        result = attempt_auto_merge(local, remote, "test.py")
-
-        assert result.status == MergeStatus.SUCCESS
-        merged = result.merged_content.decode('utf-8')
-        # Both additions should be present
-        assert "local_extra" in merged
-        assert "remote_extra" in merged
-        assert "common" in merged
-
-
-class TestHashFromBytes:
-    """Test hash computation from bytes content."""
-
-    def test_compute_hash_from_bytes_normalizes_text(self, tmp_path: Path):
-        """Hash from bytes should normalize line endings for text files."""
-        from raccoon.client.sftp_sync import HashCache
-
-        cache = HashCache(tmp_path)
-
-        content_lf = b"line1\nline2\n"
-        content_crlf = b"line1\r\nline2\r\n"
-
-        hash_lf = cache.compute_hash_from_bytes(content_lf, "test.py")
-        hash_crlf = cache.compute_hash_from_bytes(content_crlf, "test.py")
-
-        assert hash_lf == hash_crlf
-
-    def test_compute_hash_from_bytes_no_normalize_binary(self, tmp_path: Path):
-        """Hash from bytes should NOT normalize binary files."""
-        from raccoon.client.sftp_sync import HashCache
-
-        cache = HashCache(tmp_path)
-
-        content_lf = b"\x00\n\x01"
-        content_crlf = b"\x00\r\n\x01"
-
-        hash_lf = cache.compute_hash_from_bytes(content_lf, "test.bin")
-        hash_crlf = cache.compute_hash_from_bytes(content_crlf, "test.bin")
-
-        # Binary files should NOT be normalized
-        assert hash_lf != hash_crlf
-
-    def test_compute_hash_from_bytes_matches_file_hash(self, tmp_path: Path):
-        """Hash from bytes should match hash computed from file."""
-        from raccoon.client.sftp_sync import HashCache
-
-        cache = HashCache(tmp_path)
-
-        content = b"test content\nwith newlines\n"
-        test_file = tmp_path / "test.py"
-        test_file.write_bytes(content)
-
-        hash_from_bytes = cache.compute_hash_from_bytes(content, "test.py")
-        hash_from_file = cache.get_hash("test.py", test_file)
-
-        assert hash_from_bytes == hash_from_file
+    def test_pull_direction(self):
+        """Should be able to set pull direction."""
+        options = SyncOptions(direction=SyncDirection.PULL)
+        assert options.direction == SyncDirection.PULL

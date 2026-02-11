@@ -747,11 +747,12 @@ async def benchmark_motors_remote(
     from raccoon.client.connection import get_connection_manager
     from raccoon.client.api import create_api_client
     from raccoon.client.output_handler import OutputHandler
+    from raccoon.client.sftp_sync import SyncDirection
     from raccoon.commands.sync_cmd import sync_project_interactive
 
-    # Sync project first (with interactive conflict resolution)
+    # Sync project to Pi before benchmark
     if not sync_project_interactive(project_root, console):
-        console.print("[red]Cannot run benchmark with unresolved conflicts[/red]")
+        console.print("[red]Sync failed, cannot run benchmark remotely[/red]")
         raise SystemExit(1)
     console.print()
 
@@ -792,7 +793,7 @@ async def benchmark_motors_remote(
 
     console.print()
     console.print("[dim]Syncing benchmark results...[/dim]")
-    if sync_project_interactive(project_root, console):
+    if sync_project_interactive(project_root, console, direction=SyncDirection.PULL):
         console.print("[green]✓ Benchmark results synced to local project[/green]")
     else:
         console.print("[yellow]Warning: Failed to sync results. Run 'raccoon sync' manually.[/yellow]")

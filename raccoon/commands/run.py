@@ -56,11 +56,12 @@ async def _run_remote(ctx: click.Context, project_root: Path, config: dict, args
     from raccoon.client.connection import get_connection_manager
     from raccoon.client.api import create_api_client
     from raccoon.client.output_handler import OutputHandler
+    from raccoon.client.sftp_sync import SyncDirection
     from raccoon.commands.sync_cmd import sync_project_interactive
 
-    # Sync project first (with interactive conflict resolution)
+    # Sync project to Pi before running
     if not sync_project_interactive(project_root, console):
-        console.print("[red]Cannot run with unresolved conflicts[/red]")
+        console.print("[red]Sync failed, cannot run remotely[/red]")
         raise SystemExit(1)
     console.print()
 
@@ -107,7 +108,7 @@ async def _run_remote(ctx: click.Context, project_root: Path, config: dict, args
         # Sync changes back from Pi
         console.print()
         console.print("[dim]Syncing changes from Pi...[/dim]")
-        sync_project_interactive(project_root, console)
+        sync_project_interactive(project_root, console, direction=SyncDirection.PULL)
 
         # Display final status
         exit_code = final_status.get("exit_code", -1)

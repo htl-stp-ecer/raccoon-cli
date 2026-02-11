@@ -3,7 +3,7 @@ Raccoon Client - Laptop-side connection and sync utilities.
 
 This module provides:
 - Connection management to Raccoon Pi servers
-- SFTP-based file synchronization
+- Rsync-based file synchronization
 - WebSocket-based output streaming
 - SSH key management
 - API client for remote operations
@@ -38,18 +38,13 @@ from raccoon.client.api import (
     EncoderReading,
 )
 
-# SFTP sync
+# Rsync sync
 from raccoon.client.sftp_sync import (
-    SftpSync,
+    RsyncSync,
     SyncDirection,
     SyncResult,
     SyncOptions,
-    HashCache,
-    RemoteManifest,
     load_raccoonignore,
-    REMOTE_MANIFEST_FILENAME,
-    LOCAL_CACHE_DIR,
-    LOCAL_CACHE_FILENAME,
 )
 
 # Output handling
@@ -85,17 +80,12 @@ __all__ = [
     "ProjectInfo",
     "CommandResult",
     "EncoderReading",
-    # SFTP sync
-    "SftpSync",
+    # Rsync sync
+    "RsyncSync",
     "SyncDirection",
     "SyncResult",
     "SyncOptions",
-    "HashCache",
-    "RemoteManifest",
     "load_raccoonignore",
-    "REMOTE_MANIFEST_FILENAME",
-    "LOCAL_CACHE_DIR",
-    "LOCAL_CACHE_FILENAME",
     # Output handling
     "OutputHandler",
     "stream_command_output",
