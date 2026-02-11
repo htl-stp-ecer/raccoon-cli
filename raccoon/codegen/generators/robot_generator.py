@@ -173,6 +173,7 @@ class RobotGenerator(BaseGenerator):
             # Empty Robot class
             return f"class {self.class_name}:\n    pass"
 
+        self._needs_vel_config_helper = False
         builder = ClassBuilder(self.class_name, base_classes=["GenericRobot"])
 
         # Add Defs instance as first class attribute
@@ -228,7 +229,15 @@ class RobotGenerator(BaseGenerator):
         if hasattr(self, '_full_config'):
             self._add_geometry_to_builder(builder, self._full_config)
 
-        return builder.build()
+        parts = []
+
+        # Add helper function for ChassisVelocityControlConfig if needed
+        if self._needs_vel_config_helper:
+            parts.append(self._generate_vel_config_helper())
+            parts.append("")
+
+        parts.append(builder.build())
+        return "\n".join(parts)
 
     def _add_missions_to_builder(self, builder: ClassBuilder, config: Dict[str, Any]) -> None:
         """
@@ -681,21 +690,20 @@ class RobotGenerator(BaseGenerator):
         """
         Build drive system constructor expression (legacy approach).
 
+        Wraps the new config-based builder with an empty drive config,
+        so introspection still discovers required parameters like vel_config and imu.
+
         Args:
             robot_cfg: Full robot configuration
 
         Returns:
             Constructor expression string
         """
-        try:
-            drive_class = resolve_class("libstp.drive.Drive")
-            self.imports.add(drive_class)
-        except (ImportError, AttributeError):
-            logger.error("Could not resolve libstp.drive.Drive")
-            return ""
-
-        # Drive takes kinematics as primary argument
-        return "Drive(kinematics=kinematics)"
+        # Delegate to the config-based builder with just limits if available
+        drive_cfg = {}
+        if "limits" in robot_cfg:
+            drive_cfg["limits"] = robot_cfg["limits"]
+        return self._build_drive_from_config(drive_cfg)
 
     def _build_drive_from_config(self, drive_cfg: Dict[str, Any]) -> str:
         """
@@ -749,6 +757,15 @@ class RobotGenerator(BaseGenerator):
                     logger.error(f"Missing required parameter '{param_name}' for Drive constructor")
                     return ""
 
+            elif param_name == "vel_config":
+                # Build ChassisVelocityControlConfig from vel_config configuration
+                vel_config_expr = self._build_vel_config(drive_cfg.get("vel_config"))
+                drive_args.append(f"vel_config={vel_config_expr}")
+
+            elif param_name == "imu":
+                # IMU is always referenced from defs
+                drive_args.append("imu=defs.imu")
+
             else:
                 # Handle other parameters if they exist in the config
                 if param_name in drive_cfg:
@@ -760,6 +777,121 @@ class RobotGenerator(BaseGenerator):
                     return ""
 
         return f"Drive({', '.join(drive_args)})"
+
+    def _build_vel_config(self, vel_config_cfg: Optional[Dict[str, Any]]) -> str:
+        """
+        Build ChassisVelocityControlConfig expression.
+
+        If no config is provided, returns the default constructor.
+        If config is provided, builds per-axis AxisVelocityControlConfig with
+        PidGains and Feedforward nested constructors.
+
+        YAML format:
+            vel_config:
+              vx:
+                pid: {kp: 0.0, ki: 0.0, kd: 0.0}
+                ff: {kS: 0.0, kV: 1.0, kA: 0.0}
+              vy: ...
+              wz: ...
+
+        Args:
+            vel_config_cfg: Optional vel_config configuration dict
+
+        Returns:
+            Constructor expression string
+        """
+        # Import the necessary classes
+        try:
+            chassis_vel_cls = resolve_class("libstp.drive.ChassisVelocityControlConfig")
+            self.imports.add(chassis_vel_cls)
+        except (ImportError, AttributeError):
+            logger.warning("Could not resolve ChassisVelocityControlConfig, using unresolved name")
+
+        if not vel_config_cfg:
+            return "ChassisVelocityControlConfig()"
+
+        # Build per-axis configs
+        try:
+            axis_vel_cls = resolve_class("libstp.drive.AxisVelocityControlConfig")
+            self.imports.add(axis_vel_cls)
+        except (ImportError, AttributeError):
+            pass
+
+        axis_exprs = {}
+        for axis_name in ("vx", "vy", "wz"):
+            axis_cfg = vel_config_cfg.get(axis_name)
+            if axis_cfg:
+                axis_exprs[axis_name] = self._build_axis_vel_config(axis_cfg)
+
+        if not axis_exprs:
+            return "ChassisVelocityControlConfig()"
+
+        # ChassisVelocityControlConfig only has a default constructor;
+        # axes are set via readwrite properties. Generate a helper call.
+        # We emit an inline _build_chassis_vel_config(...) helper or
+        # assign to a temporary. For clean generated code, use a
+        # module-level helper function.
+        self._needs_vel_config_helper = True
+        args = ", ".join(f"{k}={v}" for k, v in axis_exprs.items())
+        return f"_build_chassis_vel_config({args})"
+
+    def _build_axis_vel_config(self, axis_cfg: Dict[str, Any]) -> str:
+        """
+        Build AxisVelocityControlConfig expression from per-axis config.
+
+        Args:
+            axis_cfg: Axis config dict with optional 'pid' and 'ff' keys
+
+        Returns:
+            Constructor expression string
+        """
+        pid_cfg = axis_cfg.get("pid")
+        ff_cfg = axis_cfg.get("ff")
+
+        if not pid_cfg and not ff_cfg:
+            return "AxisVelocityControlConfig()"
+
+        args = []
+        if pid_cfg:
+            try:
+                pid_cls = resolve_class("libstp.foundation.PidGains")
+                self.imports.add(pid_cls)
+            except (ImportError, AttributeError):
+                pass
+            pid_args = ", ".join(
+                f"{k}={build_literal_expr(v)}" for k, v in pid_cfg.items()
+            )
+            args.append(f"pid=PidGains({pid_args})")
+
+        if ff_cfg:
+            try:
+                ff_cls = resolve_class("libstp.foundation.Feedforward")
+                self.imports.add(ff_cls)
+            except (ImportError, AttributeError):
+                pass
+            ff_args = ", ".join(
+                f"{k}={build_literal_expr(v)}" for k, v in ff_cfg.items()
+            )
+            args.append(f"ff=Feedforward({ff_args})")
+
+        return f"AxisVelocityControlConfig({', '.join(args)})"
+
+    @staticmethod
+    def _generate_vel_config_helper() -> str:
+        """Generate a helper function for building ChassisVelocityControlConfig with custom axes."""
+        return (
+            "def _build_chassis_vel_config(\n"
+            "    vx=None, vy=None, wz=None\n"
+            "):\n"
+            "    cfg = ChassisVelocityControlConfig()\n"
+            "    if vx is not None:\n"
+            "        cfg.vx = vx\n"
+            "    if vy is not None:\n"
+            "        cfg.vy = vy\n"
+            "    if wz is not None:\n"
+            "        cfg.wz = wz\n"
+            "    return cfg\n"
+        )
 
     ODOMETRY_PARAM_HINTS = {
         # IMU-only odometry

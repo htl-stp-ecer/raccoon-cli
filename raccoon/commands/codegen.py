@@ -79,6 +79,7 @@ def _codegen_local(
     only: tuple,
     no_format: bool,
     output_dir: str | None,
+    force: bool = False,
 ) -> None:
     """Run code generation locally."""
     import sys
@@ -93,6 +94,13 @@ def _codegen_local(
     project_root_str = str(project_root)
     if project_root_str not in sys.path:
         sys.path.insert(0, project_root_str)
+
+    # Clear cache if --force flag is set
+    if force:
+        from raccoon.codegen.cache import CodegenCache
+        cache = CodegenCache(out_dir)
+        cache.clear()
+        logger.info("Cache cleared (--force)")
 
     pipeline = create_pipeline()
 
@@ -120,6 +128,7 @@ async def _codegen_remote(
     only: tuple,
     no_format: bool,
     output_dir: str | None,
+    force: bool = False,
 ) -> None:
     """Run code generation on the connected Pi and sync back."""
     from raccoon.client.connection import get_connection_manager
@@ -147,6 +156,8 @@ async def _codegen_remote(
             args.extend(["--only", o])
     if no_format:
         args.append("--no-format")
+    if force:
+        args.append("--force")
     if output_dir:
         args.extend(["--output-dir", output_dir])
 
@@ -207,6 +218,7 @@ async def _codegen_remote(
 )
 @click.option("--local", "-l", is_flag=True, help="Force local execution (skip remote)")
 @click.option("--no-sync", is_flag=True, help="Skip syncing (for internal use on Pi)")
+@click.option("--force", "-f", is_flag=True, help="Force regeneration, ignoring cache")
 @click.pass_context
 def codegen_command(
     ctx: click.Context,
@@ -215,6 +227,7 @@ def codegen_command(
     output_dir: str | None,
     local: bool,
     no_sync: bool,
+    force: bool,
 ) -> None:
     """Generate Python code from raccoon.project.yml.
 
@@ -271,7 +284,7 @@ def codegen_command(
 
             if manager.is_connected:
                 # Run remotely
-                asyncio.run(_codegen_remote(console, project_root, config, only, no_format, output_dir))
+                asyncio.run(_codegen_remote(console, project_root, config, only, no_format, output_dir, force))
                 return
 
             console.print("[red]Remote execution requested, but no Pi connection is available.[/red]")
@@ -279,7 +292,7 @@ def codegen_command(
             raise SystemExit(1)
 
         # Run locally
-        _codegen_local(console, project_root, config, only, no_format, output_dir)
+        _codegen_local(console, project_root, config, only, no_format, output_dir, force)
 
     except ProjectError as exc:
         logger.error(str(exc))

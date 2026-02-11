@@ -20,16 +20,16 @@ claimed over the generated code itself.
 """
 
 from src.hardware.robot import Robot
-import libstp.foundation as logging
 
 robot = Robot()
 
 import libstp.foundation as logging
 
 logging.set_global_level(logging.Level.debug)
-logging.set_file_level("turn.py", logging.Level.trace)
-logging.set_file_level("turn_motion.cpp", logging.Level.trace)
-logging.set_file_level("fused_odometry.cpp", logging.Level.trace)
+# logging.set_file_level("turn.py", logging.Level.trace)
+# logging.set_file_level("turn_motion.cpp", logging.Level.trace)
+logging.set_file_level("fused_odometry.cpp", logging.Level.info)
 
 if __name__ == "__main__":
+    set_digital(10)
     robot.start()
