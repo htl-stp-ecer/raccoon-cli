@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-06 19:37:44
+ Generated: 2026-02-11 20:03:43
 ===========================================================
 
 Authors:
@@ -13,12 +13,16 @@ Authors:
 """
 
 from libstp import (
+    AxisVelocityControlConfig,
+    ChassisVelocityControlConfig,
     Drive,
+    Feedforward,
     FusedOdometry,
     FusedOdometryConfig,
     GenericRobot,
     MecanumKinematics,
     MotionLimits,
+    PidGains,
     SensorPosition,
     UnifiedMotionPidConfig,
     WheelPosition,
@@ -32,6 +36,17 @@ from src.missions.shutdown_mission import ShutdownMission
 from src.missions.potato_mission import PotatoMission
 
 
+def _build_chassis_vel_config(vx=None, vy=None, wz=None):
+    cfg = ChassisVelocityControlConfig()
+    if vx is not None:
+        cfg.vx = vx
+    if vy is not None:
+        cfg.vy = vy
+    if wz is not None:
+        cfg.wz = wz
+    return cfg
+
+
 class Robot(GenericRobot):
     defs = Defs()
     kinematics = MecanumKinematics(
@@ -39,28 +54,44 @@ class Robot(GenericRobot):
         back_right_motor=defs.rear_right_motor,
         front_left_motor=defs.front_left_motor,
         front_right_motor=defs.front_right_motor,
-        max_acceleration=99999,
-        max_velocity=99999,
+        max_acceleration=40.678,
+        max_velocity=50.847,
         track_width=0.19,
-        wheel_radius=0.03,
+        wheel_radius=0.0295,
         wheelbase=0.12,
     )
     drive = Drive(
-        kinematics=kinematics, chassis_lim=MotionLimits(max_omega=99999, max_v=99999)
+        kinematics=kinematics,
+        chassis_lim=MotionLimits(max_omega=999, max_v=999),
+        vel_config=_build_chassis_vel_config(
+            vx=AxisVelocityControlConfig(
+                pid=PidGains(kp=0.0, ki=0.0, kd=0.0),
+                ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ),
+            vy=AxisVelocityControlConfig(
+                pid=PidGains(kp=0.0, ki=0.0, kd=0.0),
+                ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ),
+            wz=AxisVelocityControlConfig(
+                pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
+                ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ),
+        ),
+        imu=defs.imu,
     )
     odometry = FusedOdometry(
         imu=defs.imu, kinematics=kinematics, config=FusedOdometryConfig(bemf_trust=1.0)
     )
     motion_pid_config = UnifiedMotionPidConfig(
         angle_tolerance_rad=0.017,
-        derivative_lpf_alpha=0.1,
+        derivative_lpf_alpha=0.5,
         distance_kd=0.0,
         distance_ki=0.0,
         distance_kp=2.0,
         distance_tolerance_m=0.01,
         heading_kd=0.0,
         heading_ki=0.0,
-        heading_kp=3.0,
+        heading_kp=1.0,
         heading_min_scale=0.25,
         heading_recovery_error_rad=0.005,
         heading_saturation_derating_factor=0.85,
@@ -73,7 +104,6 @@ class Robot(GenericRobot):
         lateral_ki=0.0,
         lateral_kp=2.0,
         lateral_reorient_threshold_m=0.15,
-        max_angular_acceleration=3.0,
         max_heading_rate=3.0,
         max_linear_acceleration=1.0,
         min_angular_rate=0.1,

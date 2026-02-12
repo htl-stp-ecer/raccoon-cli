@@ -4,18 +4,47 @@ robot:
   drive:
     kinematics:
       type: mecanum
-      wheel_radius: 0.03
+      wheel_radius: 0.0295
       track_width: 0.19
-      max_velocity: 99999
-      max_acceleration: 99999
+      max_velocity: 50.847
+      max_acceleration: 40.678
       wheelbase: 0.12
       front_left_motor: front_left_motor
       front_right_motor: front_right_motor
       back_left_motor: rear_left_motor
       back_right_motor: rear_right_motor
     limits:
-      max_v: 99999
-      max_omega: 99999
+      max_v: 999
+      max_omega: 999
+      max_rotation_speed: 0.0
+    vel_config:
+      vx:
+        pid:
+          kp: 0.0
+          ki: 0.0
+          kd: 0.0
+        ff:
+          kS: 0.0
+          kV: 1.0
+          kA: 0.0
+      vy:
+        pid:
+          kp: 0.0
+          ki: 0.0
+          kd: 0.0
+        ff:
+          kS: 0.0
+          kV: 1.0
+          kA: 0.0
+      wz:
+        pid:
+          kp: 0.65
+          ki: 0.0
+          kd: 0.0
+        ff:
+          kS: 0.0
+          kV: 1.0
+          kA: 0.0
   odometry:
     type: FusedOdometry
     config:
@@ -26,7 +55,7 @@ robot:
       ki: 0.0
       kd: 0.0
     heading:
-      kp: 3.0
+      kp: 1.0
       ki: 0.0
       kd: 0.0
     lateral:
@@ -35,10 +64,9 @@ robot:
       kd: 0.0
     profile:
       max_linear_acceleration: 1.0
-      max_angular_acceleration: 3.0
     integral_max: 10.0
     integral_deadband: 0.01
-    derivative_lpf_alpha: 0.1
+    derivative_lpf_alpha: 0.5
     output_min: -10.0
     output_max: 10.0
     saturation:
@@ -94,14 +122,14 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.11
-        kV: 0.1981503563639978
-        kA: 0.02
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
       pid:
-        kp: 10.0
-        ki: 9.814794609326363
-        kd: 0.396417538966332
-      ticks_to_rad: 0.004287663768984838
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 2.0707520629305845e-05
       vel_lpf_alpha: 0.8
   front_right_motor:
     type: Motor
@@ -109,14 +137,14 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.09
-        kV: 0.1350324603642087
-        kA: 0.008225329011787715
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
       pid:
-        kp: 10.0
-        ki: 10.0
-        kd: 0.7032264861939415
-      ticks_to_rad: 0.004242410626981493
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 2.0821901544582446e-05
       vel_lpf_alpha: 0.8
   rear_left_motor:
     type: Motor
@@ -124,14 +152,14 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.11
-        kV: 0.18219958232362843
-        kA: 0.02
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
       pid:
-        kp: 10.0
-        ki: 10.0
-        kd: 0.6018354462577499
-      ticks_to_rad: 0.005053571686246181
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 2.162187618816031e-05
       vel_lpf_alpha: 0.8
   rear_right_motor:
     type: Motor
@@ -139,25 +167,15 @@ definitions:
     inverted: false
     calibration:
       ff:
-        kS: 0.11
-        kV: 0.15768136518367729
-        kA: 0.017155086054130467
+        kS: 0.08
+        kV: 0.12
+        kA: 0.1
       pid:
-        kp: 10.0
-        ki: 10.0
-        kd: 0.548293111922021
-      ticks_to_rad: 0.004396681173008571
+        kp: 2.4
+        ki: 0.3
+        kd: 0.08
+      ticks_to_rad: 2.079770343853669e-05
       vel_lpf_alpha: 0.8
-  drum_motor:
-    type: Motor
-    port: 2
-    inverted: false
-  drum_light_sensor:
-    type: AnalogSensor
-    port: 1
-  drum_distance_sensor:
-    type: src.hardware.thresholded_sensor.ThresholdedSensor
-    port: 0
   imu:
     type: IMU
   front_left_ir_sensor:
@@ -167,7 +185,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 192.168.100.160
+  pi_address: 10.192.148.134
   pi_port: 8421
   pi_user: pi
   remote_path: null

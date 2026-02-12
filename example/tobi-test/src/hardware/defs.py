@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-06 19:37:42
+ Generated: 2026-02-11 14:02:52
 ===========================================================
 
 Authors:
@@ -13,7 +13,6 @@ Authors:
 """
 
 from libstp import (
-    AnalogSensor,
     DigitalSensor,
     Feedforward,
     IRSensor,
@@ -21,7 +20,6 @@ from libstp import (
     MotorCalibration,
     PidGains,
 )
-from src.hardware.thresholded_sensor import ThresholdedSensor
 from libstp import IMU as Imu
 
 
@@ -32,9 +30,9 @@ class Defs:
         port=0,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.11, kV=0.1981503563639978, kA=0.02),
-            pid=PidGains(kp=10.0, ki=9.814794609326363, kd=0.396417538966332),
-            ticks_to_rad=0.004287663768984838,
+            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
+            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
+            ticks_to_rad=2.0707520629305845e-05,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -42,9 +40,9 @@ class Defs:
         port=1,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.09, kV=0.1350324603642087, kA=0.008225329011787715),
-            pid=PidGains(kp=10.0, ki=10.0, kd=0.7032264861939415),
-            ticks_to_rad=0.004242410626981493,
+            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
+            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
+            ticks_to_rad=2.0821901544582446e-05,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -52,9 +50,9 @@ class Defs:
         port=2,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.11, kV=0.18219958232362843, kA=0.02),
-            pid=PidGains(kp=10.0, ki=10.0, kd=0.6018354462577499),
-            ticks_to_rad=0.005053571686246181,
+            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
+            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
+            ticks_to_rad=2.162187618816031e-05,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -62,23 +60,15 @@ class Defs:
         port=3,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.11, kV=0.15768136518367729, kA=0.017155086054130467),
-            pid=PidGains(kp=10.0, ki=10.0, kd=0.548293111922021),
-            ticks_to_rad=0.004396681173008571,
+            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
+            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
+            ticks_to_rad=2.079770343853669e-05,
             vel_lpf_alpha=0.8,
         ),
     )
-    drum_motor = Motor(port=2, inverted=False)
-    drum_light_sensor = AnalogSensor(port=1)
-    drum_distance_sensor = ThresholdedSensor(port=0)
     front_left_ir_sensor = IRSensor(port=0)
     front_right_ir_sensor = IRSensor(port=1)
-    analog_sensors = [
-        drum_light_sensor,
-        drum_distance_sensor,
-        front_left_ir_sensor,
-        front_right_ir_sensor,
-    ]
+    analog_sensors = [front_left_ir_sensor, front_right_ir_sensor]
 
 
 __all__ = ["Defs"]

@@ -146,6 +146,23 @@ class DrumMotorService(RobotService):
             self.info(f"Shortest path: retreat {NUM_POCKETS - delta}")
             await self.retreat(NUM_POCKETS - delta)
 
+    async def add_offset(self, offset_ticks: int, move_speed: int = 0.3, tolerance: float = 5.0) -> None:
+        """Move motor by ticks"""
+        current_position = self.motor.get_position()
+        target_position = current_position + offset_ticks
+        self.info(f"add_offset({offset_ticks} ticks): current={current_position}, target={target_position}")
+        while True:
+            current_position = self.motor.get_position()
+            error = target_position - current_position
+            if abs(error) < tolerance:  # tolerance in ticks
+                self.info(f"Reached target position within tolerance: current={current_position}, target={target_position}")
+                break
+            speed_percent = int(move_speed * 100) * (1 if error > 0 else -1)
+            self.motor.set_speed(speed_percent)
+            await asyncio.sleep(SAMPLE_INTERVAL)
+        self.motor.set_speed(0)
+        self.motor.brake()
+
     async def _move(self, count: int, *, forward: bool) -> None:
         """Low-level: spin motor and count edge transitions on the sensor.
 

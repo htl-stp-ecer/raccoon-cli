@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -69,10 +70,12 @@ def _test_rotation_speed(
     Returns:
         Tuple of (average_angular_velocity, all_samples)
     """
+    from libstp.foundation import ChassisVelocity
+    
     console.print(f"  Testing {direction_name} at {omega:.2f} rad/s for {duration}s...")
     
     # Start rotating
-    robot.drive.set_velocity(v=0, omega=omega)
+    robot.drive.set_velocity(ChassisVelocity(0, 0, omega))
     
     # Allow brief time for acceleration
     time.sleep(0.5)
@@ -88,7 +91,7 @@ def _test_rotation_speed(
         time.sleep(sample_interval)
     
     # Stop rotation
-    robot.drive.set_velocity(v=0, omega=0)
+    robot.drive.set_velocity(ChassisVelocity(0, 0, 0))
     
     # Calculate average, excluding first and last 1 second to avoid transients
     samples_per_second = int(1.0 / sample_interval)
@@ -121,6 +124,7 @@ def _collect_rotation_data(
     """
     # Import hardware library
     try:
+        from libstp.foundation import ChassisVelocity
         from src.hardware.robot import Robot
     except ImportError as exc:
         console.print(f"[red]Failed to import robot: {exc}[/red]")
@@ -171,7 +175,8 @@ def _collect_rotation_data(
             progress.advance(task)
         
         # Ensure stopped
-        robot.drive.set_velocity(v=0, omega=0)
+        from libstp.foundation import ChassisVelocity
+        robot.drive.set_velocity(ChassisVelocity(0, 0, 0))
         
         return {
             "cw_speed": cw_speed,
@@ -186,7 +191,8 @@ def _collect_rotation_data(
         console.print(f"\n[red]Error during rotation test: {exc}[/red]")
         # Try to stop robot
         try:
-            robot.drive.set_velocity(v=0, omega=0)
+            from libstp.foundation import ChassisVelocity
+            robot.drive.set_velocity(ChassisVelocity(0, 0, 0))
         except Exception:
             pass
         
@@ -315,6 +321,10 @@ def rotation_local(
 ) -> None:
     """Run rotation speed calibration locally (on the Pi itself)."""
     console: Console = ctx.obj["console"]
+    
+    # Add project root to Python path for imports
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
     
     console.print(Panel(
         f"[bold cyan]Robot Rotation Speed Calibration[/bold cyan]\n\n"

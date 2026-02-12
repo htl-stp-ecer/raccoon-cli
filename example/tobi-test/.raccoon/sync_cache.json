@@ -1,22 +1,57 @@
 {
-  "src/missions/setup_mission.py": {
-    "hash": "2594fadbe97889dfe8ee4cba88a5121bb28d074fe4ee09ea48b883a78802be79",
-    "mtime": 1770385409.4935641,
-    "size": 566
-  },
-  "src/hardware/defs.py": {
-    "hash": "d9372ae8a8524cc31b6ca71f801a6f869b15d3db32eb34d250cd1229cb17cb7f",
-    "mtime": 1770373587.5437145,
-    "size": 2230
-  },
-  "src/hardware/robot.py": {
-    "hash": "ce97bdcfafe1712b7c18e39d11fe23b419e03ebffceaaa02feb31269d24c342b",
-    "mtime": 1770373142.874661,
-    "size": 3494
-  },
   "mission_layouts.json": {
     "hash": "2ecae845b7719d8bf31441769bda0e5a440312523126986d2b2e7654aad4682a",
     "mtime": 1770047940.568001,
     "size": 340
+  },
+  "src/missions/potato_mission.py": {
+    "hash": "77ad868f590e8be1000f67538c804d45af9c364a70da92255a2a6165ffc04de3",
+    "mtime": 1770883423.395409,
+    "size": 3698
+  },
+  "src/missions/setup_mission.py": {
+    "hash": "6455227509e5e6579f92998d5fa2d4d8284429618757af017ed536ef9c62f4f8",
+    "mtime": 1770883423.3956366,
+    "size": 937
+  },
+  "src/hardware/defs.py": {
+    "hash": "9634f5b618cc39f9013d5da637160c049a83d8fc029cbbbb2fe302324416d560",
+    "mtime": 1770883423.3958366,
+    "size": 2067
+  },
+  "src/hardware/.raccoon_codegen_cache.json": {
+    "hash": "7f3970f88803a3e4292cc84ce83d025d1842eab95ed947c316e99e90f69933ea",
+    "mtime": 1770883423.395987,
+    "size": 682
+  },
+  ".gitignore": {
+    "hash": "2beb4a5283f1446fb6d701741cd7282190c2677eac155e3e8f996b1e7cf664ed",
+    "mtime": 1770883423.3961017,
+    "size": 5
+  },
+  "raccoon.project.yml": {
+    "hash": "7384dd2a4bf812cdfcf602d49d89020986a5ba58918a23d573da384b6e842544",
+    "mtime": 1770883423.3962152,
+    "size": 3712
+  },
+  "src/hardware/robot.py": {
+    "hash": "302f064bb355afaa67271cc59ae043c4fdc955f83cfa102c2dbbda673e04028b",
+    "mtime": 1770883423.396322,
+    "size": 4314
+  },
+  ".raccoonignore": {
+    "hash": "138aaf74cf5c5edb824311b6f4a3c4f03d520b2b81705ca8a6f6de7e037ab717",
+    "mtime": 1770883423.396435,
+    "size": 668
+  },
+  "src/main.py": {
+    "hash": "80dfb93157c4008c00d14d6f0de542911848101261c187d93172f5e4bb043ded",
+    "mtime": 1770883423.3965368,
+    "size": 1100
+  },
+  "logs/step_timing.db": {
+    "hash": "d0e5755b6cc28c94569db26ccb8f4f57ccfb4ac9818b54eb1c3d6e29b8f9c98a",
+    "mtime": 1770883441.3730693,
+    "size": 229376
   }
 }
