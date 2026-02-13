@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-13 19:36:38
+ Generated: 2026-02-13 19:41:36
 ===========================================================
 
 Authors:
@@ -32,7 +32,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.0047803865879193e-05,
+            ticks_to_rad=1.981675161666937e-05,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -42,7 +42,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.0452386272303457e-05,
+            ticks_to_rad=2.041009800677662e-05,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -52,7 +52,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.1717643871252934e-05,
+            ticks_to_rad=2.211590633014829e-05,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -62,7 +62,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.0284577986050023e-05,
+            ticks_to_rad=2.009767334420386e-05,
             vel_lpf_alpha=0.8,
         ),
     )
