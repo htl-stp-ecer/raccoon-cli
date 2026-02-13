@@ -26,7 +26,7 @@ from libstp.step.motion import auto_tune_turn, motor_response_test
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            #drive_forward(cm=30),
+            drive_forward(cm=30),
             #turn_left(25),
             # auto_tune_turn(
             #     test_angle_deg=90.0,  # 90° test turns
