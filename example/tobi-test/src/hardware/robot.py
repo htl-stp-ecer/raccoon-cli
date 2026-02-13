@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-13 20:42:48
+ Generated: 2026-02-13 20:43:50
 ===========================================================
 
 Authors:
@@ -88,7 +88,7 @@ class Robot(GenericRobot):
         distance_kd=0.0,
         distance_ki=0.0,
         distance_kp=1.0,
-        distance_tolerance_m=0.01,
+        distance_tolerance_m=0.005,
         heading_kd=0.0,
         heading_ki=0.0,
         heading_kp=1.0,
