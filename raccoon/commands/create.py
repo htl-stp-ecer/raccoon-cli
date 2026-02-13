@@ -16,6 +16,7 @@ import yaml
 from jinja2 import Environment, FileSystemLoader
 from rich.console import Console
 
+from raccoon.git_history import initialize_project_history
 from raccoon.project import ProjectError, load_project_config, find_project_root
 
 logger = logging.getLogger("raccoon")
@@ -308,6 +309,15 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
     console.print(f"[green]✓ Project '{name}' scaffolded at {target_dir}[/green]")
     console.print(f"[cyan]Project UUID: {project_uuid}[/cyan]")
 
+    history_result = initialize_project_history(target_dir, name)
+    if history_result.commit_created:
+        console.print("[green]✓ Local git history initialized[/green]")
+        console.print(f"[dim]Initial snapshot: {history_result.commit_sha}[/dim]")
+    elif history_result.reason == "git_unavailable":
+        console.print("[yellow]Git is not installed. Skipping local history initialization.[/yellow]")
+    elif history_result.reason not in {"already_git_repo", "no_changes"}:
+        console.print(f"[yellow]Warning: Could not initialize local git history ({history_result.error})[/yellow]")
+
     # Run wizard before finalizing (unless explicitly skipped)
     if not no_wizard:
         # Prompt for Pi connection before running wizard
@@ -410,5 +420,4 @@ def create_mission_command(ctx: click.Context, name: str) -> None:
     console.print(f"[green]✓ Mission '{mission_class}' created successfully[/green]")
     console.print(f"[cyan]  File: {mission_file.relative_to(project_root)}[/cyan]")
     console.print(f"[cyan]  Added to raccoon.project.yml[/cyan]")
-
 

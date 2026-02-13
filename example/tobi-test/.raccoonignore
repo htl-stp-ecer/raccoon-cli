@@ -14,5 +14,4 @@
 
 # Hardware definitions (generated on device, pulled during codegen)
 # Don't overwrite device-specific calibration with local files
-defs.py
-robot.py
+.git

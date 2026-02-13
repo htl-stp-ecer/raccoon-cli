@@ -11,6 +11,7 @@ from raccoon.client.connection import (
     print_paramiko_version_error,
 )
 from raccoon.client.sftp_sync import RsyncSync, SyncDirection, SyncOptions, load_raccoonignore
+from raccoon.git_history import create_pre_sync_snapshot
 from raccoon.project import find_project_root, load_project_config
 
 
@@ -82,6 +83,22 @@ def do_sync(
         direction_str = "pulling from"
 
     console.print(f"[cyan]Syncing '{project_name}' ({direction_str} {state.pi_hostname})...[/cyan]")
+
+    snapshot_result = create_pre_sync_snapshot(
+        project_root=project_root,
+        direction=direction.value,
+        target=f"{state.pi_user}@{state.pi_address}:{remote_path}",
+    )
+    if snapshot_result.created:
+        console.print(
+            f"[dim]Saved pre-sync snapshot {snapshot_result.commit_sha} ({snapshot_result.summary})[/dim]"
+        )
+    elif snapshot_result.reason == "not_git_repo":
+        console.print("[dim]Local history snapshot skipped (no .git repository).[/dim]")
+    elif snapshot_result.reason == "git_unavailable":
+        console.print("[dim]Local history snapshot skipped (git not installed).[/dim]")
+    elif snapshot_result.reason not in {"no_changes", ""}:
+        console.print(f"[yellow]Warning: local history snapshot failed ({snapshot_result.error})[/yellow]")
 
     # Perform sync
     try:

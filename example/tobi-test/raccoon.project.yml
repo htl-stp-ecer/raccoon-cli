@@ -92,14 +92,14 @@ robot:
     width_cm: 13.0
     length_cm: 19.0
     sensors:
-      - name: front_left_ir_sensor
-        x_cm: 3.2
-        y_cm: 17.0
-        clearance_cm: 1.0
-      - name: front_right_ir_sensor
-        x_cm: 9.800000000000002
-        y_cm: 17.0
-        clearance_cm: 1.0
+    - name: front_left_ir_sensor
+      x_cm: 3.2
+      y_cm: 17.0
+      clearance_cm: 1.0
+    - name: front_right_ir_sensor
+      x_cm: 9.800000000000002
+      y_cm: 17.0
+      clearance_cm: 1.0
     rotation_center:
       x_cm: 6.5
       y_cm: 8.0
@@ -108,9 +108,9 @@ robot:
       y_cm: 20.0
       theta_deg: 90.0
 missions:
-  - SetupMission: setup
-  - ShutdownMission: shutdown
-  - PotatoMission
+- SetupMission: setup
+- ShutdownMission: shutdown
+- PotatoMission
 definitions:
   button:
     type: DigitalSensor
@@ -128,7 +128,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 2.0707520629305845e-05
+      ticks_to_rad: 1.981675161666937e-05
       vel_lpf_alpha: 0.8
   front_right_motor:
     type: Motor
@@ -143,7 +143,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 2.0821901544582446e-05
+      ticks_to_rad: 2.041009800677662e-05
       vel_lpf_alpha: 0.8
   rear_left_motor:
     type: Motor
@@ -158,7 +158,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 2.162187618816031e-05
+      ticks_to_rad: 2.211590633014829e-05
       vel_lpf_alpha: 0.8
   rear_right_motor:
     type: Motor
@@ -173,7 +173,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 2.079770343853669e-05
+      ticks_to_rad: 2.009767334420386e-05
       vel_lpf_alpha: 0.8
   imu:
     type: IMU
