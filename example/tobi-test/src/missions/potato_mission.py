@@ -41,7 +41,6 @@ class PotatoMission(Mission):
             characterize_drive(
                 axes=["forward", "lateral", "angular"],
                 trials=3,  # run each axis 3 times
-                persist=True,
             ),
             # tune_drive(),
             # tune_drive(),
