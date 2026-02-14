@@ -23,7 +23,7 @@ from libstp import Mission, Sequential, seq, calibrate_distance, calibrate, wait
 class SetupMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
-            #calibrate(distance_cm=50),
+            calibrate(distance_cm=50),
 
 
             # calibrate_wait_for_light(Defs.front_left_ir_sensor)
