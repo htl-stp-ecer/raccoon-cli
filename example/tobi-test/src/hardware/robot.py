@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 20:56:01
+ Generated: 2026-02-14 21:16:01
 ===========================================================
 
 Authors:
@@ -81,8 +81,15 @@ class Robot(GenericRobot):
     motion_pid_config = UnifiedMotionPidConfig(
         angle_tolerance_rad=0.017,
         decel_mps2=0.1,
-        default_linear_acceleration_mps2=0.25,
-        default_linear_deceleration_mps2=0.05,
+        default_angular_acceleration_radps2=0.0303,
+        default_angular_deceleration_radps2=2.0422,
+        default_angular_max_rate_radps=1.6103,
+        default_lateral_acceleration_mps2=0.008,
+        default_lateral_deceleration_mps2=0.3042,
+        default_lateral_max_velocity_mps=0.2193,
+        default_linear_acceleration_mps2=0.0082,
+        default_linear_deceleration_mps2=0.2886,
+        default_linear_max_velocity_mps=0.2105,
         derivative_lpf_alpha=0.5,
         distance_kd=0.5,
         distance_ki=0.0,
