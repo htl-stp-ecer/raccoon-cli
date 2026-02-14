@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 21:16:01
+ Generated: 2026-02-14 21:54:12
 ===========================================================
 
 Authors:
@@ -80,16 +80,15 @@ class Robot(GenericRobot):
     )
     motion_pid_config = UnifiedMotionPidConfig(
         angle_tolerance_rad=0.017,
-        decel_mps2=0.1,
-        default_angular_acceleration_radps2=0.0303,
+        default_angular_acceleration_radps2=2.9249,
         default_angular_deceleration_radps2=2.0422,
-        default_angular_max_rate_radps=1.6103,
-        default_lateral_acceleration_mps2=0.008,
+        default_angular_max_rate_radps=1.5075,
+        default_lateral_acceleration_mps2=0.2719,
         default_lateral_deceleration_mps2=0.3042,
-        default_lateral_max_velocity_mps=0.2193,
-        default_linear_acceleration_mps2=0.0082,
+        default_lateral_max_velocity_mps=0.2142,
+        default_linear_acceleration_mps2=0.5656,
         default_linear_deceleration_mps2=0.2886,
-        default_linear_max_velocity_mps=0.2105,
+        default_linear_max_velocity_mps=0.2064,
         derivative_lpf_alpha=0.5,
         distance_kd=0.5,
         distance_ki=0.0,
@@ -103,7 +102,6 @@ class Robot(GenericRobot):
         heading_recovery_rate=0.05,
         heading_saturation_derating_factor=0.85,
         heading_saturation_error_rad=0.01,
-        horizon_blend_speed_mps=0.1,
         integral_deadband=0.01,
         integral_max=10.0,
         lateral_heading_bias_gain=0.5,
@@ -111,12 +109,9 @@ class Robot(GenericRobot):
         lateral_ki=0.0,
         lateral_kp=1.0,
         lateral_reorient_threshold_m=0.15,
-        min_speed_mps=0.05,
         output_max=10.0,
         output_min=-10.0,
         reorientation_speed_factor=0.3,
-        response_lag_s=0.3,
-        rest_horizon_s=0.7,
         saturation_derating_factor=0.85,
         saturation_hold_cycles=5,
         saturation_min_scale=0.2,

@@ -38,10 +38,10 @@ class CheapDrive(Step):
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            characterize_drive(
-                axes=["forward", "lateral", "angular"],
-                trials=3,  # run each axis 3 times
-            ),
+            # characterize_drive(
+            #     axes=["forward", "lateral", "angular"],
+            #     trials=3,  # run each axis 3 times
+            # ),
             # tune_drive(),
             # tune_drive(),
             # drive_forward(cm=100),
@@ -51,7 +51,7 @@ class PotatoMission(Mission):
             # wall_align_forward()
             # wait(5.0),
             # drive_forward(cm=30),
-            # turn_left(90),
+            turn_left(90),
             # auto_tune_turn(
             #     test_angle_deg=90.0,  # 90° test turns
             #     max_rate=1.0,  # your measured max
