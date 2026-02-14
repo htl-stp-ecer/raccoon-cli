@@ -42,13 +42,13 @@ class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
             #tune_drive(),
-            drive_forward(cm=30),
+            #drive_forward(cm=30),
             #wall_align_forward(),
             #stop(),
             #wall_align_forward()
             #wait(5.0),
             #drive_forward(cm=30),
-            #turn_left(25),
+            turn_left(90),
             # auto_tune_turn(
             #     test_angle_deg=90.0,  # 90° test turns
             #     max_rate=1.0,  # your measured max
