@@ -27,5 +27,5 @@ class SetupMission(Mission):
 
 
             # calibrate_wait_for_light(Defs.front_left_ir_sensor)
-            wait_for_button()
+            #wait_for_button()
         ])

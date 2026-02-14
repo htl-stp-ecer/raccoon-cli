@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 20:08:16
+ Generated: 2026-02-14 20:56:01
 ===========================================================
 
 Authors:
@@ -82,7 +82,7 @@ class Robot(GenericRobot):
         angle_tolerance_rad=0.017,
         decel_mps2=0.1,
         default_linear_acceleration_mps2=0.25,
-        default_linear_deceleration_mps2=0.037,
+        default_linear_deceleration_mps2=0.05,
         derivative_lpf_alpha=0.5,
         distance_kd=0.5,
         distance_ki=0.0,
