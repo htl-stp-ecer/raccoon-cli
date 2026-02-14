@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 15:30:16
+ Generated: 2026-02-14 15:37:46
 ===========================================================
 
 Authors:
@@ -61,11 +61,11 @@ class Robot(GenericRobot):
         kinematics=kinematics,
         vel_config=_build_chassis_vel_config(
             vx=AxisVelocityControlConfig(
-                pid=PidGains(kp=1.0, ki=0.0, kd=0.0),
+                pid=PidGains(kp=0.0, ki=0.0, kd=0.0),
                 ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
             ),
             vy=AxisVelocityControlConfig(
-                pid=PidGains(kp=1.0, ki=0.0, kd=0.0),
+                pid=PidGains(kp=0.0, ki=0.0, kd=0.0),
                 ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
             ),
             wz=AxisVelocityControlConfig(
