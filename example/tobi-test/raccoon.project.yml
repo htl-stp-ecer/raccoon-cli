@@ -45,8 +45,8 @@ robot:
       bemf_trust: 1.0
   motion_pid:
     velocity_ff: 1.0
-    default_linear_acceleration_mps2: 0.25
-    default_linear_deceleration_mps2: 0.05
+    default_linear_acceleration_mps2: 0.0082
+    default_linear_deceleration_mps2: 0.2886
     distance:
       kp: 1.0
       ki: 0.0
@@ -86,6 +86,13 @@ robot:
     decel_mps2: 0.1
     rest_horizon_s: 0.7
     horizon_blend_speed_mps: 0.1
+    default_linear_max_velocity_mps: 0.2105
+    default_lateral_acceleration_mps2: 0.008
+    default_lateral_deceleration_mps2: 0.3042
+    default_lateral_max_velocity_mps: 0.2193
+    default_angular_acceleration_radps2: 0.0303
+    default_angular_deceleration_radps2: 2.0422
+    default_angular_max_rate_radps: 1.6103
   physical:
     width_cm: 13.0
     length_cm: 19.0

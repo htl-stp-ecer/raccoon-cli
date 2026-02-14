@@ -38,14 +38,14 @@ class CheapDrive(Step):
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            characterize_drive(
-                axes=["forward", "lateral", "angular"],
-                trials=3,  # run each axis 3 times
-            ),
+            # characterize_drive(
+            #     axes=["forward", "lateral", "angular"],
+            #     trials=3,  # run each axis 3 times
+            # ),
             # tune_drive(),
             # tune_drive(),
             # drive_forward(cm=100),
-            # turn_left(degrees=90),
+            turn_left(degrees=90),
             # wall_align_forward(),
             # stop(),
             # wall_align_forward()
