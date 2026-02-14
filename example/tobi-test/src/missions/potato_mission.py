@@ -40,7 +40,7 @@ class PotatoMission(Mission):
         return seq([
             # tune_drive(),
             # tune_drive(),
-            drive_forward(cm=30),
+            drive_forward(cm=100),
             # wall_align_forward(),
             # stop(),
             # wall_align_forward()
