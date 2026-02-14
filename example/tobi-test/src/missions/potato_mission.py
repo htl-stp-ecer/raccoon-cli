@@ -51,9 +51,9 @@ class PotatoMission(Mission):
             # wall_align_forward()
             # wait(5.0),
             # drive_forward(cm=30),
-            turn_right(90),
-            drive_forward(cm=10),
-            drive_backward(cm=50),
+            #turn_right(90),
+            drive_forward(cm=50),
+            #drive_backward(cm=50),
 
             # auto_tune_turn(
             #     test_angle_deg=90.0,  # 90° test turns
