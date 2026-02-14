@@ -18,7 +18,7 @@ claimed over the generated code itself.
 """
 import math
 
-from libstp import seq, Mission, drive_forward, turn_left, Turn
+from libstp import seq, Mission, drive_forward, turn_left, Turn, tune_drive
 from libstp.motion import TurnConfig
 from libstp.step.motion import measure_max_angular_velocity
 from libstp.step.motion import auto_tune_turn, motor_response_test
@@ -26,7 +26,8 @@ from libstp.step.motion import auto_tune_turn, motor_response_test
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            drive_forward(cm=30),
+            tune_drive(),
+            #drive_forward(cm=30),
             #turn_left(25),
             # auto_tune_turn(
             #     test_angle_deg=90.0,  # 90° test turns
