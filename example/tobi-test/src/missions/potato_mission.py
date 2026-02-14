@@ -22,6 +22,7 @@ from libstp import seq, Mission, drive_forward, turn_left, Turn, tune_drive, Ste
 from libstp.motion import TurnConfig
 from libstp.step.motion import measure_max_angular_velocity
 from libstp.step.motion import auto_tune_turn, motor_response_test
+import asyncio
 
 class CheapDrive(Step):
 
@@ -30,13 +31,18 @@ class CheapDrive(Step):
         robot.defs.front_right_motor.set_velocity(1500)
         robot.defs.rear_left_motor.set_velocity(1500)
         robot.defs.rear_right_motor.set_velocity(1500)
+        start_time = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start_time < 5.0:
+            velocity = robot.drive.estimate_state()
+            self.info(velocity)
+            await asyncio.sleep(0.01)
+
 
 
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
             CheapDrive(),
-            wait(5.0),
             #tune_drive(),
             #drive_forward(cm=30),
             #turn_left(25),
