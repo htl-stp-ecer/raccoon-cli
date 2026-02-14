@@ -41,6 +41,7 @@ class CheapDrive(Step):
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
+            wait(1.0),
             CheapDrive(),
             #tune_drive(),
             #drive_forward(cm=30),
