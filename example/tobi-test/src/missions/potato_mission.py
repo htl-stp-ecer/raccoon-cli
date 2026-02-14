@@ -19,7 +19,7 @@ claimed over the generated code itself.
 
 import asyncio
 
-from libstp import seq, Mission, Step, tune_drive
+from libstp import seq, Mission, Step, drive_forward
 from libstp.foundation import ChassisVelocity
 
 
@@ -46,7 +46,7 @@ class PotatoMission(Mission):
             # wall_align_forward()
             # wait(5.0),
             # drive_forward(cm=30),
-            #turn_left(90),
+            # turn_left(90),
             # auto_tune_turn(
             #     test_angle_deg=90.0,  # 90° test turns
             #     max_rate=1.0,  # your measured max
