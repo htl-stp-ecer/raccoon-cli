@@ -60,7 +60,7 @@ def parse_pybind11_signature(cls: type) -> Dict[str, inspect.Parameter]:
             current.append(char)
 
     for part in parts:
-        if not part:
+        if not part or part.lstrip().startswith('*'):
             continue
         # Parse "name: type = default" or "name: type"
         if '=' in part:
