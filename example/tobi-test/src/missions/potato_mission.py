@@ -18,15 +18,26 @@ claimed over the generated code itself.
 """
 import math
 
-from libstp import seq, Mission, drive_forward, turn_left, Turn, tune_drive
+from libstp import seq, Mission, drive_forward, turn_left, Turn, tune_drive, Step, wait
 from libstp.motion import TurnConfig
 from libstp.step.motion import measure_max_angular_velocity
 from libstp.step.motion import auto_tune_turn, motor_response_test
 
+class CheapDrive(Step):
+
+    async def _execute_step(self, robot: "GenericRobot") -> None:
+        robot.defs.front_left_motor.set_velocity(1500)
+        robot.defs.front_right_motor.set_velocity(1500)
+        robot.defs.rear_left_motor.set_velocity(1500)
+        robot.defs.rear_right_motor.set_velocity(1500)
+
+
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            tune_drive(),
+            CheapDrive(),
+            wait(5.0),
+            #tune_drive(),
             #drive_forward(cm=30),
             #turn_left(25),
             # auto_tune_turn(

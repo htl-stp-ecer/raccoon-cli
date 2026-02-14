@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 11:03:14
+ Generated: 2026-02-14 11:21:31
 ===========================================================
 
 Authors:
@@ -26,13 +26,13 @@ from libstp import IMU as Imu
 class Defs:
     imu = Imu()
     button = DigitalSensor(port=10)
-    front_left_motor = Motor(
+    front_left_motor: Motor = Motor(
         port=0,
         inverted=False,
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.0957505928082034e-05,
+            ticks_to_rad=2.151448149771803e-05,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -42,7 +42,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=1.6597344394675888e-05,
+            ticks_to_rad=1.5298930752626428e-05,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -52,7 +52,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=1.849598834088757e-05,
+            ticks_to_rad=1.7222045828225314e-05,
             vel_lpf_alpha=0.8,
         ),
     )
@@ -62,7 +62,7 @@ class Defs:
         calibration=MotorCalibration(
             ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
             pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=1.98506995308817e-05,
+            ticks_to_rad=1.999565757709896e-05,
             vel_lpf_alpha=0.8,
         ),
     )
