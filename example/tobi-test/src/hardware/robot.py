@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 20:07:45
+ Generated: 2026-02-14 20:08:16
 ===========================================================
 
 Authors:
@@ -115,7 +115,7 @@ class Robot(GenericRobot):
         saturation_min_scale=0.2,
         saturation_recovery_rate=0.02,
         saturation_recovery_threshold=0.95,
-        velocity_ff="1.0,",
+        velocity_ff=1.0,
     )
     missions = [PotatoMission()]
     setup_mission = SetupMission()
