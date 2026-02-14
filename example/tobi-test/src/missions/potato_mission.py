@@ -30,7 +30,7 @@ class CheapDrive(Step):
     async def _execute_step(self, robot: "GenericRobot") -> None:
         robot.drive.set_velocity(ChassisVelocity(0.3, 0.0, 0.0))
         start_time = asyncio.get_event_loop().time()
-        while asyncio.get_event_loop().time() - start_time < 5.0:
+        while asyncio.get_event_loop().time() - start_time < 1.0:
             robot.drive.update(0.01)
             velocity = robot.drive.estimate_state()
             self.info(velocity)
@@ -41,7 +41,9 @@ class CheapDrive(Step):
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            wait(1.0),
+            CheapDrive(),
+            stop(),
+            wait(5.0),
             CheapDrive(),
             #tune_drive(),
             #drive_forward(cm=30),
