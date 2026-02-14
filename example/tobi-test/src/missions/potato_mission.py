@@ -41,9 +41,9 @@ class CheapDrive(Step):
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            #CheapDrive(),
+            CheapDrive(),
             #tune_drive(),
-            drive_forward(cm=30),
+            #drive_forward(cm=30),
             #turn_left(25),
             # auto_tune_turn(
             #     test_angle_deg=90.0,  # 90° test turns
