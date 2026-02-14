@@ -33,6 +33,7 @@ class CheapDrive(Step):
         robot.defs.rear_right_motor.set_velocity(1500)
         start_time = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start_time < 5.0:
+            robot.drive.update(0.01)
             velocity = robot.drive.estimate_state()
             self.info(velocity)
             await asyncio.sleep(0.01)
