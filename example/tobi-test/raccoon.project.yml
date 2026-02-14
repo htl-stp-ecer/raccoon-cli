@@ -6,15 +6,11 @@ robot:
       type: mecanum
       wheel_radius: 0.0295
       track_width: 0.19
-      max_velocity: 9999
       wheelbase: 0.12
       front_left_motor: front_left_motor
       front_right_motor: front_right_motor
       back_left_motor: rear_left_motor
       back_right_motor: rear_right_motor
-    limits:
-      max_v: 999
-      max_omega: 999
     vel_config:
       vx:
         pid:
@@ -127,7 +123,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 2.0957505928082034e-05
+      ticks_to_rad: 2.151448149771803e-05
       vel_lpf_alpha: 0.8
   front_right_motor:
     type: Motor
@@ -142,7 +138,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 1.6597344394675888e-05
+      ticks_to_rad: 1.5298930752626428e-05
       vel_lpf_alpha: 0.8
   rear_left_motor:
     type: Motor
@@ -157,7 +153,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 1.849598834088757e-05
+      ticks_to_rad: 1.7222045828225314e-05
       vel_lpf_alpha: 0.8
   rear_right_motor:
     type: Motor
@@ -172,7 +168,7 @@ definitions:
         kp: 2.4
         ki: 0.3
         kd: 0.08
-      ticks_to_rad: 1.98506995308817e-05
+      ticks_to_rad: 1.999565757709896e-05
       vel_lpf_alpha: 0.8
   imu:
     type: IMU

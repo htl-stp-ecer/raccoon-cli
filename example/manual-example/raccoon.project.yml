@@ -9,14 +9,9 @@ robot:
       back_left_motor: rear_left_motor
       front_right_motor: front_right_motor
       back_right_motor: rear_right_motor
-      max_acceleration: 240.0
-      max_velocity: 40.0
       track_width: 0.19
       wheel_radius: 0.03
       wheelbase: 0.12
-    limits:
-      max_v: 2.0
-      max_omega: 10.0
   odometry:
     type: FusedOdometry
     invert_x: false

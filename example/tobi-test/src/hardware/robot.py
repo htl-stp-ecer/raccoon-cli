@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 11:03:17
+ Generated: 2026-02-14 11:05:20
 ===========================================================
 
 Authors:
@@ -21,7 +21,6 @@ from libstp import (
     FusedOdometryConfig,
     GenericRobot,
     MecanumKinematics,
-    MotionLimits,
     PidGains,
     SensorPosition,
     UnifiedMotionPidConfig,
@@ -54,15 +53,12 @@ class Robot(GenericRobot):
         back_right_motor=defs.rear_right_motor,
         front_left_motor=defs.front_left_motor,
         front_right_motor=defs.front_right_motor,
-        max_acceleration=40.678,
-        max_velocity=50.847,
         track_width=0.19,
         wheel_radius=0.0295,
         wheelbase=0.12,
     )
     drive = Drive(
         kinematics=kinematics,
-        chassis_lim=MotionLimits(max_omega=999, max_v=999),
         vel_config=_build_chassis_vel_config(
             vx=AxisVelocityControlConfig(
                 pid=PidGains(kp=0.1, ki=0.0, kd=0.0),

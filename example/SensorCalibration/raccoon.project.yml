@@ -6,16 +6,11 @@ robot:
       type: mecanum
       wheel_radius: 0.0375
       track_width: 0.2
-      max_velocity: 40.0
-      max_acceleration: 32.0
       wheelbase: 0.15
       front_left_motor: front_left_motor
       front_right_motor: front_right_motor
       back_left_motor: rear_left_motor
       back_right_motor: rear_right_motor
-    limits:
-      max_v: 1.5
-      max_omega: 15.0
   odometry:
     type: FusedOdometry
     invert_x: false

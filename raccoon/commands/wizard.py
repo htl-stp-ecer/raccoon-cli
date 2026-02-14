@@ -55,9 +55,6 @@ def _prompt_measurements(existing_config: Dict[str, object]) -> Dict[str, float]
     existing_wheelbase = kinematics.get("wheelbase") if isinstance(kinematics, dict) else None
     default_wheelbase_cm = round(existing_wheelbase * 100, 1) if existing_wheelbase else 15.0
 
-    existing_max_v = limits.get("max_v") if isinstance(limits, dict) else None
-    default_max_v = existing_max_v if existing_max_v else 1.5
-
     # Try to get vel_lpf_alpha from any motor definition
     default_vel_filter_alpha = 0.8
     if isinstance(definitions, dict):
@@ -71,18 +68,12 @@ def _prompt_measurements(existing_config: Dict[str, object]) -> Dict[str, float]
     wheel_diameter_mm = click.prompt("Wheel diameter (mm)", default=default_wheel_diameter_mm, type=float)
     track_width_cm = click.prompt("Track width (cm, left ↔ right wheel centers)", default=default_track_width_cm, type=float)
     wheelbase_cm = click.prompt("Wheelbase (cm, front ↔ rear axle centers)", default=default_wheelbase_cm, type=float)
-    desired_max_v = click.prompt("Desired max chassis speed (m/s)", default=default_max_v, type=float)
-    accel_linear = click.prompt(
-        "Desired linear acceleration limit (m/s²)", default=round(desired_max_v * 0.8, 2), type=float
-    )
     vel_filter_alpha = click.prompt("Velocity low-pass alpha (0-1)", default=default_vel_filter_alpha, type=float)
 
     return {
         "wheel_diameter_mm": wheel_diameter_mm,
         "track_width_cm": track_width_cm,
         "wheelbase_cm": wheelbase_cm,
-        "max_v": desired_max_v,
-        "accel_linear": accel_linear,
         "vel_filter_alpha": vel_filter_alpha,
     }
 
@@ -179,17 +170,11 @@ def _build_kinematics_config(
     wheel_radius = (measures["wheel_diameter_mm"] / 1000.0) / 2.0
     track_width = measures["track_width_cm"] / 100.0
     wheelbase = measures["wheelbase_cm"] / 100.0
-    max_v = measures["max_v"]
-    max_wheel_velocity = max_v / wheel_radius if wheel_radius > 0 else max_v
-    accel_linear = measures["accel_linear"]
-    max_wheel_accel = accel_linear / wheel_radius if wheel_radius > 0 else accel_linear
 
     config: Dict[str, object] = {
         "type": drivetrain,
         "wheel_radius": round(wheel_radius, 5),
         "track_width": round(track_width, 4),
-        "max_velocity": round(max_wheel_velocity, 3),
-        "max_acceleration": round(max_wheel_accel, 3),
     }
 
     if drivetrain == "mecanum":
@@ -220,9 +205,6 @@ def _build_robot_config(
 ) -> Dict[str, object]:
     """Assemble the robot configuration."""
     kinematics = _build_kinematics_config(drivetrain, motors, measures)
-    track_width = measures["track_width_cm"] / 100.0
-    max_v = measures["max_v"]
-    max_omega = max_v / (track_width / 2.0) if track_width > 0 else max_v
 
     odometry_defaults = {
         "type": "FusedOdometry",
@@ -235,10 +217,6 @@ def _build_robot_config(
     return {
         "drive": {
             "kinematics": kinematics,
-            "limits": {
-                "max_v": round(max_v, 3),
-                "max_omega": round(max_omega, 3),
-            },
         },
         "odometry": odometry_defaults,
     }
