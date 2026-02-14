@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 17:13:26
+ Generated: 2026-02-14 20:07:45
 ===========================================================
 
 Authors:
@@ -81,6 +81,8 @@ class Robot(GenericRobot):
     motion_pid_config = UnifiedMotionPidConfig(
         angle_tolerance_rad=0.017,
         decel_mps2=0.1,
+        default_linear_acceleration_mps2=0.25,
+        default_linear_deceleration_mps2=0.037,
         derivative_lpf_alpha=0.5,
         distance_kd=0.5,
         distance_ki=0.0,
@@ -113,17 +115,18 @@ class Robot(GenericRobot):
         saturation_min_scale=0.2,
         saturation_recovery_rate=0.02,
         saturation_recovery_threshold=0.95,
+        velocity_ff="1.0,",
     )
     missions = [PotatoMission()]
     setup_mission = SetupMission()
     shutdown_mission = ShutdownMission()
     width_cm = 13.0
     length_cm = 19.0
-    rotation_center_forward_cm = -1.5
+    rotation_center_forward_cm = -2.1715
     rotation_center_strafe_cm = 0.0
     _sensor_positions = {
         defs.front_left_ir_sensor: SensorPosition(
-            forward_cm=7.5, strafe_cm=3.3, clearance_cm=1.0
+            forward_cm=7.5, strafe_cm=3.5, clearance_cm=1.0
         ),
         defs.front_right_ir_sensor: SensorPosition(
             forward_cm=7.5, strafe_cm=-3.3, clearance_cm=1.0
