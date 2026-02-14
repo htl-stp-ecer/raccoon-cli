@@ -19,6 +19,7 @@ claimed over the generated code itself.
 import math
 
 from libstp import seq, Mission, drive_forward, turn_left, Turn, tune_drive, Step, wait
+from libstp.foundation import ChassisVelocity
 from libstp.motion import TurnConfig
 from libstp.step.motion import measure_max_angular_velocity
 from libstp.step.motion import auto_tune_turn, motor_response_test
@@ -27,10 +28,7 @@ import asyncio
 class CheapDrive(Step):
 
     async def _execute_step(self, robot: "GenericRobot") -> None:
-        robot.defs.front_left_motor.set_velocity(1500)
-        robot.defs.front_right_motor.set_velocity(1500)
-        robot.defs.rear_left_motor.set_velocity(1500)
-        robot.defs.rear_right_motor.set_velocity(1500)
+        robot.drive.set_velocity(ChassisVelocity(0.3, 0.0, 0.0))
         start_time = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start_time < 5.0:
             robot.drive.update(0.01)
