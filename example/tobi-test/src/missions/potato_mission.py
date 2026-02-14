@@ -38,7 +38,11 @@ class CheapDrive(Step):
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            characterize_drive(),
+            characterize_drive(
+                axes=["forward", "lateral", "angular"],
+                trials=3,  # run each axis 3 times
+                persist=True,
+            ),
             # tune_drive(),
             # tune_drive(),
             # drive_forward(cm=100),
