@@ -16,14 +16,12 @@ Authors:
 Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
-import math
 
-from libstp import seq, Mission, drive_forward, turn_left, Turn, tune_drive, Step, wait, stop, wall_align_forward
-from libstp.foundation import ChassisVelocity
-from libstp.motion import TurnConfig
-from libstp.step.motion import measure_max_angular_velocity
-from libstp.step.motion import auto_tune_turn, motor_response_test
 import asyncio
+
+from libstp import seq, Mission, Step, tune_drive
+from libstp.foundation import ChassisVelocity
+
 
 class CheapDrive(Step):
 
@@ -37,18 +35,18 @@ class CheapDrive(Step):
             await asyncio.sleep(0.01)
 
 
-
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            #tune_drive(),
-            #drive_forward(cm=30),
-            #wall_align_forward(),
-            #stop(),
-            #wall_align_forward()
-            #wait(5.0),
-            #drive_forward(cm=30),
-            turn_left(90),
+            tune_drive(),
+            # tune_drive(),
+            # drive_forward(cm=30),
+            # wall_align_forward(),
+            # stop(),
+            # wall_align_forward()
+            # wait(5.0),
+            # drive_forward(cm=30),
+            #turn_left(90),
             # auto_tune_turn(
             #     test_angle_deg=90.0,  # 90° test turns
             #     max_rate=1.0,  # your measured max
@@ -57,7 +55,7 @@ class PotatoMission(Mission):
             # )
             # measure_max_angular_velocity(duration=5.0, clockwise=False)
             # TuneTurn(angle=90),
-            #turn_custom(90),
+            # turn_custom(90),
             # drive_forward(cm=15),
             # loop_forever(seq([
             #     open_drum_pusher(),
