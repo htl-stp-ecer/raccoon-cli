@@ -19,7 +19,7 @@ claimed over the generated code itself.
 
 import asyncio
 
-from libstp import seq, Mission, Step, drive_forward
+from libstp import seq, Mission, Step, drive_forward, turn_left
 from libstp.foundation import ChassisVelocity
 
 
@@ -40,7 +40,8 @@ class PotatoMission(Mission):
         return seq([
             # tune_drive(),
             # tune_drive(),
-            drive_forward(cm=100),
+            # drive_forward(cm=100),
+            turn_left(degrees=90),
             # wall_align_forward(),
             # stop(),
             # wall_align_forward()
