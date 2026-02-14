@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 11:21:34
+ Generated: 2026-02-14 12:53:41
 ===========================================================
 
 Authors:
@@ -85,7 +85,7 @@ class Robot(GenericRobot):
         distance_ki=0.0,
         distance_kp=1.0,
         distance_tolerance_m=0.005,
-        heading_kd=0.0,
+        heading_kd=0.2,
         heading_ki=0.0,
         heading_kp=1.0,
         heading_min_scale=0.25,
@@ -100,14 +100,11 @@ class Robot(GenericRobot):
         lateral_ki=0.0,
         lateral_kp=1.0,
         lateral_reorient_threshold_m=0.15,
-        max_heading_rate=3.0,
-        max_linear_acceleration=1.0,
-        min_angular_rate=0.1,
         min_speed_mps=0.05,
         output_max=10.0,
         output_min=-10.0,
         saturation_derating_factor=0.85,
-        saturation_min_scale=0.1,
+        saturation_min_scale=0.2,
         saturation_recovery_rate=0.02,
     )
     missions = [PotatoMission()]

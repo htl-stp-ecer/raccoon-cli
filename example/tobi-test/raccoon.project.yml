@@ -48,14 +48,20 @@ robot:
       kp: 1.0
       ki: 0.0
       kd: 0.0
+      tolerance_m: 0.005
     heading:
       kp: 1.0
       ki: 0.0
       kd: 0.2
+      min_scale: 0.25
+      saturation_error_rad: 0.01
+      recovery_error_rad: 0.005
     lateral:
       kp: 1.0
       ki: 0.0
       kd: 0.0
+      heading_bias_gain: 0.5
+      reorient_threshold_m: 0.15
     integral_max: 10.0
     integral_deadband: 0.01
     derivative_lpf_alpha: 0.5
@@ -67,16 +73,8 @@ robot:
       recovery_rate: 0.02
     heading_saturation:
       derating_factor: 0.85
-      min_scale: 0.25
       recovery_rate: 0.05
-    tolerances:
-      distance_m: 0.005
-      angle_rad: 0.017
-    lateral_drift:
-      heading_bias_gain: 0.5
-      reorient_threshold_m: 0.15
-      heading_saturation_error_rad: 0.01
-      heading_recovery_error_rad: 0.005
+    angle_tolerance_rad: 0.017
     min_speed_mps: 0.05
   physical:
     width_cm: 13.0

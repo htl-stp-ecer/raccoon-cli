@@ -1174,9 +1174,33 @@ class RobotGenerator(BaseGenerator):
             for name in hints
         }
 
+    @staticmethod
+    def _flatten_yaml_dict(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+        """Recursively flatten a nested dict by joining keys with ``_``.
+
+        Example::
+
+            {"distance": {"kp": 1.0}, "output_max": 10.0}
+            → {"distance_kp": 1.0, "output_max": 10.0}
+        """
+        out: Dict[str, Any] = {}
+        for key, value in d.items():
+            flat_key = f"{prefix}{key}" if prefix else key
+            if isinstance(value, dict):
+                out.update(RobotGenerator._flatten_yaml_dict(value, f"{flat_key}_"))
+            else:
+                out[flat_key] = value
+        return out
+
     def _build_motion_pid_config(self, motion_pid_cfg: Dict[str, Any] | None) -> str:
         """
         Build UnifiedMotionPidConfig constructor expression from motion_pid configuration.
+
+        Introspects the actual ``UnifiedMotionPidConfig.__init__`` signature so
+        that newly-added parameters are picked up automatically without any
+        code changes here.  The YAML may use nested dicts for readability –
+        they are flattened with ``_`` joining (e.g. ``distance.kp`` becomes
+        ``distance_kp``) and matched against the constructor parameters.
 
         Args:
             motion_pid_cfg: Motion PID configuration (from robot.motion_pid in YAML)
@@ -1195,117 +1219,35 @@ class RobotGenerator(BaseGenerator):
             return ""
 
         from ..builder import build_literal_expr
+        from ..introspection import get_init_params
 
-        # Flatten the nested config structure to match UnifiedMotionPidConfig constructor parameters
-        params = {}
+        # Discover valid constructor parameters by introspecting the class
+        valid_param_names = set(get_init_params(motion_pid_class).keys())
 
-        # Distance PID gains
-        if "distance" in motion_pid_cfg:
-            distance_cfg = motion_pid_cfg["distance"]
-            if "kp" in distance_cfg:
-                params["distance_kp"] = distance_cfg["kp"]
-            if "ki" in distance_cfg:
-                params["distance_ki"] = distance_cfg["ki"]
-            if "kd" in distance_cfg:
-                params["distance_kd"] = distance_cfg["kd"]
+        # Flatten nested YAML structure to match flat constructor params
+        flat_cfg = self._flatten_yaml_dict(motion_pid_cfg)
 
-        # Heading PID gains
-        if "heading" in motion_pid_cfg:
-            heading_cfg = motion_pid_cfg["heading"]
-            if "kp" in heading_cfg:
-                params["heading_kp"] = heading_cfg["kp"]
-            if "ki" in heading_cfg:
-                params["heading_ki"] = heading_cfg["ki"]
-            if "kd" in heading_cfg:
-                params["heading_kd"] = heading_cfg["kd"]
+        # Fail on unknown parameters
+        unknown = sorted(set(flat_cfg.keys()) - valid_param_names)
+        if unknown:
+            raise ValueError(
+                f"motion_pid: Unknown parameter(s) for UnifiedMotionPidConfig: "
+                f"{', '.join(unknown)}. "
+                f"Valid parameters: {', '.join(sorted(valid_param_names))}"
+            )
 
-        # Lateral PID gains
-        if "lateral" in motion_pid_cfg:
-            lateral_cfg = motion_pid_cfg["lateral"]
-            if "kp" in lateral_cfg:
-                params["lateral_kp"] = lateral_cfg["kp"]
-            if "ki" in lateral_cfg:
-                params["lateral_ki"] = lateral_cfg["ki"]
-            if "kd" in lateral_cfg:
-                params["lateral_kd"] = lateral_cfg["kd"]
-
-        # Profile parameters
-        if "profile" in motion_pid_cfg:
-            profile_cfg = motion_pid_cfg["profile"]
-            if "max_linear_acceleration" in profile_cfg:
-                params["max_linear_acceleration"] = profile_cfg["max_linear_acceleration"]
-            if "max_angular_acceleration" in profile_cfg:
-                params["max_angular_acceleration"] = profile_cfg["max_angular_acceleration"]
-
-        # Saturation handling
-        if "saturation" in motion_pid_cfg:
-            saturation_cfg = motion_pid_cfg["saturation"]
-            if "derating_factor" in saturation_cfg:
-                params["saturation_derating_factor"] = saturation_cfg["derating_factor"]
-            if "min_scale" in saturation_cfg:
-                params["saturation_min_scale"] = saturation_cfg["min_scale"]
-            if "recovery_rate" in saturation_cfg:
-                params["saturation_recovery_rate"] = saturation_cfg["recovery_rate"]
-
-        # Heading-specific saturation handling
-        if "heading_saturation" in motion_pid_cfg:
-            heading_sat_cfg = motion_pid_cfg["heading_saturation"]
-            if "derating_factor" in heading_sat_cfg:
-                params["heading_saturation_derating_factor"] = heading_sat_cfg["derating_factor"]
-            if "min_scale" in heading_sat_cfg:
-                params["heading_min_scale"] = heading_sat_cfg["min_scale"]
-            if "recovery_rate" in heading_sat_cfg:
-                params["heading_saturation_recovery_rate"] = heading_sat_cfg["recovery_rate"]
-
-        # Tolerances
-        if "tolerances" in motion_pid_cfg:
-            tolerances_cfg = motion_pid_cfg["tolerances"]
-            if "distance_m" in tolerances_cfg:
-                params["distance_tolerance_m"] = tolerances_cfg["distance_m"]
-            if "angle_rad" in tolerances_cfg:
-                params["angle_tolerance_rad"] = tolerances_cfg["angle_rad"]
-
-        # Rate limits
-        if "rate_limits" in motion_pid_cfg:
-            rate_limits_cfg = motion_pid_cfg["rate_limits"]
-            if "max_heading_rate" in rate_limits_cfg:
-                params["max_heading_rate"] = rate_limits_cfg["max_heading_rate"]
-            if "min_angular_rate" in rate_limits_cfg:
-                params["min_angular_rate"] = rate_limits_cfg["min_angular_rate"]
-
-        # Lateral drift handling
-        if "lateral_drift" in motion_pid_cfg:
-            lateral_drift_cfg = motion_pid_cfg["lateral_drift"]
-            if "heading_bias_gain" in lateral_drift_cfg:
-                params["lateral_heading_bias_gain"] = lateral_drift_cfg["heading_bias_gain"]
-            if "reorient_threshold_m" in lateral_drift_cfg:
-                params["lateral_reorient_threshold_m"] = lateral_drift_cfg["reorient_threshold_m"]
-            if "heading_saturation_error_rad" in lateral_drift_cfg:
-                params["heading_saturation_error_rad"] = lateral_drift_cfg["heading_saturation_error_rad"]
-            if "heading_recovery_error_rad" in lateral_drift_cfg:
-                params["heading_recovery_error_rad"] = lateral_drift_cfg["heading_recovery_error_rad"]
-
-        # Top-level parameters
-        top_level_params = [
-            "integral_max",
-            "integral_deadband",
-            "derivative_lpf_alpha",
-            "output_min",
-            "output_max",
-            "min_speed_mps"
-        ]
-        for param in top_level_params:
-            if param in motion_pid_cfg:
-                params[param] = motion_pid_cfg[param]
-
-        # Build constructor arguments
-        if not params:
-            return "UnifiedMotionPidConfig()"
+        # Fail on missing parameters (every constructor param must be specified)
+        missing = sorted(valid_param_names - set(flat_cfg.keys()))
+        if missing:
+            raise ValueError(
+                f"motion_pid: Missing parameter(s) for UnifiedMotionPidConfig: "
+                f"{', '.join(missing)}. "
+                f"All constructor parameters must be explicitly provided."
+            )
 
         args = []
-        for key in sorted(params.keys()):
-            value = params[key]
-            args.append(f"{key}={build_literal_expr(value)}")
+        for key in sorted(flat_cfg.keys()):
+            args.append(f"{key}={build_literal_expr(flat_cfg[key])}")
 
         return f"UnifiedMotionPidConfig({', '.join(args)})"
 

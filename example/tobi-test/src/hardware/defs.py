@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 11:21:31
+ Generated: 2026-02-14 12:53:38
 ===========================================================
 
 Authors:
@@ -12,58 +12,39 @@ Authors:
    You are free to modify it as needed. Regeneration may overwrite changes.
 """
 
-from libstp import (
-    DigitalSensor,
-    Feedforward,
-    IRSensor,
-    Motor,
-    MotorCalibration,
-    PidGains,
-)
+from libstp import DigitalSensor, IRSensor, Motor, MotorCalibration
 from libstp import IMU as Imu
 
 
 class Defs:
     imu = Imu()
     button = DigitalSensor(port=10)
-    front_left_motor: Motor = Motor(
+    front_left_motor = Motor(
         port=0,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.151448149771803e-05,
-            vel_lpf_alpha=0.8,
+            ticks_to_rad=2.151448149771803e-05, vel_lpf_alpha=0.8
         ),
     )
     front_right_motor = Motor(
         port=1,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=1.5298930752626428e-05,
-            vel_lpf_alpha=0.8,
+            ticks_to_rad=1.5298930752626428e-05, vel_lpf_alpha=0.8
         ),
     )
     rear_left_motor = Motor(
         port=2,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=1.7222045828225314e-05,
-            vel_lpf_alpha=0.8,
+            ticks_to_rad=1.7222045828225314e-05, vel_lpf_alpha=0.8
         ),
     )
     rear_right_motor = Motor(
         port=3,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=1.999565757709896e-05,
-            vel_lpf_alpha=0.8,
+            ticks_to_rad=1.999565757709896e-05, vel_lpf_alpha=0.8
         ),
     )
     front_left_ir_sensor = IRSensor(port=0)
