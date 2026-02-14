@@ -44,6 +44,9 @@ robot:
     config:
       bemf_trust: 1.0
   motion_pid:
+    velocity_ff: 1.0,
+    default_linear_acceleration_mps2: 0.25
+    default_linear_deceleration_mps2: 0.037
     distance:
       kp: 1.0
       ki: 0.0
