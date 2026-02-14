@@ -47,7 +47,7 @@ robot:
     distance:
       kp: 1.0
       ki: 0.0
-      kd: 0.0
+      kd: 0.5
       tolerance_m: 0.005
     heading:
       kp: 1.0
@@ -80,7 +80,7 @@ robot:
     min_speed_mps: 0.05
     reorientation_speed_factor: 0.3
     response_lag_s: 0.3
-    decel_mps2: 0.15
+    decel_mps2: 0.1
     rest_horizon_s: 0.7
     horizon_blend_speed_mps: 0.1
   physical:

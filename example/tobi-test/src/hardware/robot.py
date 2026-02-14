@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 12:53:41
+ Generated: 2026-02-14 13:30:22
 ===========================================================
 
 Authors:
@@ -80,6 +80,7 @@ class Robot(GenericRobot):
     )
     motion_pid_config = UnifiedMotionPidConfig(
         angle_tolerance_rad=0.017,
+        decel_mps2=0.15,
         derivative_lpf_alpha=0.5,
         distance_kd=0.0,
         distance_ki=0.0,
@@ -90,9 +91,10 @@ class Robot(GenericRobot):
         heading_kp=1.0,
         heading_min_scale=0.25,
         heading_recovery_error_rad=0.005,
+        heading_recovery_rate=0.05,
         heading_saturation_derating_factor=0.85,
         heading_saturation_error_rad=0.01,
-        heading_saturation_recovery_rate=0.05,
+        horizon_blend_speed_mps=0.1,
         integral_deadband=0.01,
         integral_max=10.0,
         lateral_heading_bias_gain=0.5,
@@ -103,9 +105,14 @@ class Robot(GenericRobot):
         min_speed_mps=0.05,
         output_max=10.0,
         output_min=-10.0,
+        reorientation_speed_factor=0.3,
+        response_lag_s=0.3,
+        rest_horizon_s=0.7,
         saturation_derating_factor=0.85,
+        saturation_hold_cycles=5,
         saturation_min_scale=0.2,
         saturation_recovery_rate=0.02,
+        saturation_recovery_threshold=0.95,
     )
     missions = [PotatoMission()]
     setup_mission = SetupMission()
