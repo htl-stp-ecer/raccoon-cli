@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-15 10:12:43
+ Generated: 2026-02-15 10:31:00
 ===========================================================
 
 Authors:
@@ -81,8 +81,26 @@ class Robot(GenericRobot):
         imu=defs.imu, kinematics=kinematics, config=FusedOdometryConfig(bemf_trust=0.8)
     )
     motion_pid_config = UnifiedMotionPidConfig(
-        distance=PidConfig(kp=1.0, ki=0.0, kd=0.5, integral_max=10.0, integral_deadband=0.01, derivative_lpf_alpha=0.5, output_min=-10.0, output_max=10.0),
-        heading=PidConfig(kp=1.0, ki=0.0, kd=0.2, integral_max=10.0, integral_deadband=0.01, derivative_lpf_alpha=0.5, output_min=-10.0, output_max=10.0),
+        distance=PidConfig(
+            kp=1.0,
+            ki=0.0,
+            kd=0.5,
+            integral_max=10.0,
+            integral_deadband=0.01,
+            derivative_lpf_alpha=0.5,
+            output_min=-10.0,
+            output_max=10.0,
+        ),
+        heading=PidConfig(
+            kp=1.0,
+            ki=0.0,
+            kd=0.2,
+            integral_max=10.0,
+            integral_deadband=0.01,
+            derivative_lpf_alpha=0.5,
+            output_min=-10.0,
+            output_max=10.0,
+        ),
         velocity_ff=1.0,
         distance_tolerance_m=0.005,
         angle_tolerance_rad=0.017,
@@ -96,9 +114,15 @@ class Robot(GenericRobot):
         heading_recovery_rate=0.05,
         heading_saturation_error_rad=0.01,
         heading_recovery_error_rad=0.005,
-        linear=AxisConstraints(max_velocity=0.2153, acceleration=0.3333, deceleration=0.6229),
-        lateral=AxisConstraints(max_velocity=0.2145, acceleration=0.3922, deceleration=0.6504),
-        angular=AxisConstraints(max_velocity=1.5864, acceleration=1.8933, deceleration=7.754),
+        linear=AxisConstraints(
+            max_velocity=0.2153, acceleration=0.3333, deceleration=0.6229
+        ),
+        lateral=AxisConstraints(
+            max_velocity=0.2145, acceleration=0.3922, deceleration=0.6504
+        ),
+        angular=AxisConstraints(
+            max_velocity=1.5864, acceleration=1.8933, deceleration=7.754
+        ),
     )
     missions = [PotatoMission()]
     setup_mission = SetupMission()
