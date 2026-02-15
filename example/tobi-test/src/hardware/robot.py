@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-15 09:16:31
+ Generated: 2026-02-15 10:12:43
 ===========================================================
 
 Authors:
@@ -13,6 +13,7 @@ Authors:
 """
 
 from libstp import (
+    AxisConstraints,
     AxisVelocityControlConfig,
     ChassisVelocityControlConfig,
     Drive,
@@ -21,6 +22,7 @@ from libstp import (
     FusedOdometryConfig,
     GenericRobot,
     MecanumKinematics,
+    PidConfig,
     PidGains,
     SensorPosition,
     UnifiedMotionPidConfig,
@@ -79,39 +81,24 @@ class Robot(GenericRobot):
         imu=defs.imu, kinematics=kinematics, config=FusedOdometryConfig(bemf_trust=0.8)
     )
     motion_pid_config = UnifiedMotionPidConfig(
+        distance=PidConfig(kp=1.0, ki=0.0, kd=0.5, integral_max=10.0, integral_deadband=0.01, derivative_lpf_alpha=0.5, output_min=-10.0, output_max=10.0),
+        heading=PidConfig(kp=1.0, ki=0.0, kd=0.2, integral_max=10.0, integral_deadband=0.01, derivative_lpf_alpha=0.5, output_min=-10.0, output_max=10.0),
         velocity_ff=1.0,
-        distance_kp=1.0,
-        distance_ki=0.0,
-        distance_kd=0.5,
         distance_tolerance_m=0.005,
-        heading_kp=1.0,
-        heading_ki=0.0,
-        heading_kd=0.2,
-        heading_min_scale=0.25,
-        heading_saturation_error_rad=0.01,
-        heading_recovery_error_rad=0.005,
-        integral_max=10.0,
-        integral_deadband=0.01,
-        derivative_lpf_alpha=0.5,
-        output_min=-10.0,
-        output_max=10.0,
+        angle_tolerance_rad=0.017,
         saturation_derating_factor=0.85,
         saturation_min_scale=0.2,
         saturation_recovery_rate=0.02,
         saturation_hold_cycles=5,
         saturation_recovery_threshold=0.95,
         heading_saturation_derating_factor=0.85,
+        heading_min_scale=0.25,
         heading_recovery_rate=0.05,
-        angle_tolerance_rad=0.017,
-        default_linear_acceleration_mps2=0.3333,
-        default_linear_deceleration_mps2=0.6229,
-        default_linear_max_velocity_mps=0.2153,
-        default_lateral_acceleration_mps2=0.3922,
-        default_lateral_deceleration_mps2=0.6504,
-        default_lateral_max_velocity_mps=0.2145,
-        default_angular_acceleration_radps2=1.8933,
-        default_angular_deceleration_radps2=7.754,
-        default_angular_max_rate_radps=1.5864,
+        heading_saturation_error_rad=0.01,
+        heading_recovery_error_rad=0.005,
+        linear=AxisConstraints(max_velocity=0.2153, acceleration=0.3333, deceleration=0.6229),
+        lateral=AxisConstraints(max_velocity=0.2145, acceleration=0.3922, deceleration=0.6504),
+        angular=AxisConstraints(max_velocity=1.5864, acceleration=1.8933, deceleration=7.754),
     )
     missions = [PotatoMission()]
     setup_mission = SetupMission()

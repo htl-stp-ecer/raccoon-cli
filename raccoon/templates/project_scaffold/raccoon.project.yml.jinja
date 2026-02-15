@@ -31,27 +31,34 @@ robot:
   # Keys match UnifiedMotionPidConfig constructor params directly.
   # These values are used by all motion primitives: drive, turn, strafe
   motion_pid:
-    # Distance/Position PID gains
-    distance_kp: 2.0
-    distance_ki: 0.0
-    distance_kd: 0.0
+    # Distance/Position PID (nested PidConfig)
+    distance:
+      kp: 2.0
+      ki: 0.0
+      kd: 0.0
+      integral_max: 10.0            # Anti-windup limit
+      integral_deadband: 0.01       # Don't integrate within this error
+      derivative_lpf_alpha: 0.1     # Low-pass filter for derivative term
+      output_min: -10.0
+      output_max: 10.0
+
+    # Heading/Angular PID (nested PidConfig)
+    heading:
+      kp: 3.0
+      ki: 0.0
+      kd: 0.0
+      integral_max: 10.0
+      integral_deadband: 0.01
+      derivative_lpf_alpha: 0.1
+      output_min: -10.0
+      output_max: 10.0
+
+    # Profiled PID velocity feedforward
+    velocity_ff: 1.0
+
+    # Tolerances
     distance_tolerance_m: 0.01
-
-    # Heading/Angular PID gains
-    heading_kp: 3.0
-    heading_ki: 0.0
-    heading_kd: 0.0
-    heading_min_scale: 0.25
-    heading_saturation_error_rad: 0.01
-    heading_recovery_error_rad: 0.005
     angle_tolerance_rad: 0.02
-
-    # Advanced PID parameters
-    integral_max: 10.0              # Anti-windup limit for all PIDs
-    integral_deadband: 0.01         # Don't integrate within this error
-    derivative_lpf_alpha: 0.1       # Low-pass filter coefficient for derivative term
-    output_min: -10.0               # Minimum PID output
-    output_max: 10.0                # Maximum PID output
 
     # Saturation handling
     saturation_derating_factor: 0.85
@@ -62,22 +69,24 @@ robot:
 
     # Heading-specific saturation
     heading_saturation_derating_factor: 0.85
+    heading_min_scale: 0.25
     heading_recovery_rate: 0.05
+    heading_saturation_error_rad: 0.01
+    heading_recovery_error_rad: 0.005
 
-    # Rate limits
-    rate_limits:
-      max_heading_rate: 3.0         # Maximum heading correction rate (rad/s)
-      min_angular_rate: 0.1         # Minimum turning speed to prevent stalling
-
-    # Lateral drift handling (for differential drive)
-    lateral_drift:
-      heading_bias_gain: 0.5        # How much to bias heading based on lateral error
-      reorient_threshold_m: 0.15    # Stop and reorient if lateral error exceeds this
-      heading_saturation_error_rad: 0.01    # Only derate when heading error exceeds this
-      heading_recovery_error_rad: 0.005     # Allow recovery once heading error is below this
-
-    # Minimum speeds (to prevent stalling)
-    min_speed_mps: 0.05             # Minimum translational speed
+    # Per-axis motion profile constraints (populated by characterize_drive)
+    # linear:
+    #   max_velocity: 0.0
+    #   acceleration: 0.0
+    #   deceleration: 0.0
+    # lateral:
+    #   max_velocity: 0.0
+    #   acceleration: 0.0
+    #   deceleration: 0.0
+    # angular:
+    #   max_velocity: 0.0
+    #   acceleration: 0.0
+    #   deceleration: 0.0             # Minimum translational speed
 
 
 # They have to be placed in src.missions folder (Filename is snake_case of class name)

@@ -134,8 +134,8 @@ class TuneTurn(Step):
         cfg = robot.motion_pid_config
         self.info(
             f"Turn trial: {self.angle}° | "
-            f"kp={cfg.heading_kp:.4f} ki={cfg.heading_ki:.4f} "
-            f"kd={cfg.heading_kd:.4f} lpf={cfg.derivative_lpf_alpha:.4f}"
+            f"kp={cfg.heading.kp:.4f} ki={cfg.heading.ki:.4f} "
+            f"kd={cfg.heading.kd:.4f} lpf={cfg.heading.derivative_lpf_alpha:.4f}"
         )
 
         result = run_turn(robot, self.angle, self.speed)
