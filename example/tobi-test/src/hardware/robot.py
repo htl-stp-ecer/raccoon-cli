@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-14 21:58:16
+ Generated: 2026-02-15 09:13:48
 ===========================================================
 
 Authors:
@@ -76,48 +76,51 @@ class Robot(GenericRobot):
         imu=defs.imu,
     )
     odometry = FusedOdometry(
-        imu=defs.imu, kinematics=kinematics, config=FusedOdometryConfig(bemf_trust=1.0)
+        imu=defs.imu, kinematics=kinematics, config=FusedOdometryConfig(bemf_trust=0.8)
     )
     motion_pid_config = UnifiedMotionPidConfig(
+        velocity_ff=1.0,
+        distance={"kp": 1.0, "ki": 0.0, "kd": 0.5, "tolerance_m": 0.005},
+        heading={
+            "kp": 1.0,
+            "ki": 0.0,
+            "kd": 0.2,
+            "min_scale": 0.25,
+            "saturation_error_rad": 0.01,
+            "recovery_error_rad": 0.005,
+        },
+        lateral={
+            "kp": 1.0,
+            "ki": 0.0,
+            "kd": 0.0,
+            "heading_bias_gain": 0.5,
+            "reorient_threshold_m": 0.15,
+        },
+        integral_max=10.0,
+        integral_deadband=0.01,
+        derivative_lpf_alpha=0.5,
+        output_min=-10.0,
+        output_max=10.0,
+        saturation={
+            "derating_factor": 0.85,
+            "min_scale": 0.2,
+            "recovery_rate": 0.02,
+            "hold_cycles": 5,
+            "recovery_threshold": 0.95,
+        },
+        heading_saturation={"derating_factor": 0.85},
+        heading_recovery_rate=0.05,
         angle_tolerance_rad=0.017,
-        default_angular_acceleration_radps2=1.8933,
-        default_angular_deceleration_radps2=7.754,
-        default_angular_max_rate_radps=1.5864,
-        default_lateral_acceleration_mps2=0.3922,
-        default_lateral_deceleration_mps2=0.6504,
-        default_lateral_max_velocity_mps=0.2145,
+        reorientation_speed_factor=0.3,
         default_linear_acceleration_mps2=0.3333,
         default_linear_deceleration_mps2=0.6229,
         default_linear_max_velocity_mps=0.2153,
-        derivative_lpf_alpha=0.5,
-        distance_kd=0.5,
-        distance_ki=0.0,
-        distance_kp=1.0,
-        distance_tolerance_m=0.005,
-        heading_kd=0.2,
-        heading_ki=0.0,
-        heading_kp=1.0,
-        heading_min_scale=0.25,
-        heading_recovery_error_rad=0.005,
-        heading_recovery_rate=0.05,
-        heading_saturation_derating_factor=0.85,
-        heading_saturation_error_rad=0.01,
-        integral_deadband=0.01,
-        integral_max=10.0,
-        lateral_heading_bias_gain=0.5,
-        lateral_kd=0.0,
-        lateral_ki=0.0,
-        lateral_kp=1.0,
-        lateral_reorient_threshold_m=0.15,
-        output_max=10.0,
-        output_min=-10.0,
-        reorientation_speed_factor=0.3,
-        saturation_derating_factor=0.85,
-        saturation_hold_cycles=5,
-        saturation_min_scale=0.2,
-        saturation_recovery_rate=0.02,
-        saturation_recovery_threshold=0.95,
-        velocity_ff=1.0,
+        default_lateral_acceleration_mps2=0.3922,
+        default_lateral_deceleration_mps2=0.6504,
+        default_lateral_max_velocity_mps=0.2145,
+        default_angular_acceleration_radps2=1.8933,
+        default_angular_deceleration_radps2=7.754,
+        default_angular_max_rate_radps=1.5864,
     )
     missions = [PotatoMission()]
     setup_mission = SetupMission()
