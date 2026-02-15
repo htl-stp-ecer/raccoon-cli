@@ -216,10 +216,22 @@ class RobotGenerator(BaseGenerator):
         if odometry_expr:
             builder.add_class_attribute("odometry", odometry_expr)
 
-        # Add motion_pid config (required)
-        motion_pid_expr = self._build_motion_pid_config(data.get("motion_pid"))
-        if motion_pid_expr:
-            builder.add_class_attribute("motion_pid_config", motion_pid_expr)
+        # Add motion_pid config (required) – uses build_constructor_expr for
+        # fully dynamic type detection with nested types, no hardcoded params.
+        motion_pid_cfg = data.get("motion_pid")
+        if motion_pid_cfg is not None:
+            try:
+                motion_pid_class = resolve_class("libstp.motion.UnifiedMotionPidConfig")
+                self.imports.add(motion_pid_class)
+                motion_pid_expr = build_constructor_expr(
+                    motion_pid_class, motion_pid_cfg, "robot.motion_pid", self.imports
+                )
+                builder.add_class_attribute("motion_pid_config", motion_pid_expr)
+            except (ImportError, AttributeError):
+                logger.warning(
+                    "Could not resolve libstp.motion.UnifiedMotionPidConfig"
+                    " - skipping motion_pid config generation"
+                )
 
         # Add missions from full config
         if hasattr(self, '_full_config'):
@@ -1174,82 +1186,6 @@ class RobotGenerator(BaseGenerator):
             for name in hints
         }
 
-    @staticmethod
-    def _flatten_yaml_dict(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
-        """Recursively flatten a nested dict by joining keys with ``_``.
-
-        Example::
-
-            {"distance": {"kp": 1.0}, "output_max": 10.0}
-            → {"distance_kp": 1.0, "output_max": 10.0}
-        """
-        out: Dict[str, Any] = {}
-        for key, value in d.items():
-            flat_key = f"{prefix}{key}" if prefix else key
-            if isinstance(value, dict):
-                out.update(RobotGenerator._flatten_yaml_dict(value, f"{flat_key}_"))
-            else:
-                out[flat_key] = value
-        return out
-
-    def _build_motion_pid_config(self, motion_pid_cfg: Dict[str, Any] | None) -> str:
-        """
-        Build UnifiedMotionPidConfig constructor expression from motion_pid configuration.
-
-        Introspects the actual ``UnifiedMotionPidConfig.__init__`` signature so
-        that newly-added parameters are picked up automatically without any
-        code changes here.  The YAML may use nested dicts for readability –
-        they are flattened with ``_`` joining (e.g. ``distance.kp`` becomes
-        ``distance_kp``) and matched against the constructor parameters.
-
-        Args:
-            motion_pid_cfg: Motion PID configuration (from robot.motion_pid in YAML)
-
-        Returns:
-            Constructor expression string, or empty string if no config
-        """
-        if motion_pid_cfg is None:
-            return ""
-
-        try:
-            motion_pid_class = resolve_class("libstp.motion.UnifiedMotionPidConfig")
-            self.imports.add(motion_pid_class)
-        except (ImportError, AttributeError):
-            logger.warning("Could not resolve libstp.motion.UnifiedMotionPidConfig - skipping motion_pid config generation")
-            return ""
-
-        from ..builder import build_literal_expr
-        from ..introspection import get_init_params
-
-        # Discover valid constructor parameters by introspecting the class
-        valid_param_names = set(get_init_params(motion_pid_class).keys())
-
-        # Flatten nested YAML structure to match flat constructor params
-        flat_cfg = self._flatten_yaml_dict(motion_pid_cfg)
-
-        # Fail on unknown parameters
-        unknown = sorted(set(flat_cfg.keys()) - valid_param_names)
-        if unknown:
-            raise ValueError(
-                f"motion_pid: Unknown parameter(s) for UnifiedMotionPidConfig: "
-                f"{', '.join(unknown)}. "
-                f"Valid parameters: {', '.join(sorted(valid_param_names))}"
-            )
-
-        # Fail on missing parameters (every constructor param must be specified)
-        missing = sorted(valid_param_names - set(flat_cfg.keys()))
-        if missing:
-            raise ValueError(
-                f"motion_pid: Missing parameter(s) for UnifiedMotionPidConfig: "
-                f"{', '.join(missing)}. "
-                f"All constructor parameters must be explicitly provided."
-            )
-
-        args = []
-        for key in sorted(flat_cfg.keys()):
-            args.append(f"{key}={build_literal_expr(flat_cfg[key])}")
-
-        return f"UnifiedMotionPidConfig({', '.join(args)})"
 
     def generate_imports(self) -> str:
         """Generate import statements including Defs, GenericRobot, and mission imports."""
