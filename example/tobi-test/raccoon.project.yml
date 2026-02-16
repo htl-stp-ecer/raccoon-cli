@@ -101,7 +101,7 @@ robot:
       clearance_cm: 1.0
     rotation_center:
       x_cm: 6.5
-      y_cm: 7.328473146125205
+      y_cm: 8.0
     start_pose:
       x_cm: 30.0
       y_cm: 20.0
