@@ -19,7 +19,7 @@ claimed over the generated code itself.
 
 import asyncio
 
-from libstp import seq, Mission, Step, drive_forward, turn_left, characterize_drive, turn_right, drive_backward
+from libstp import seq, Mission, Step, drive_forward, turn_left, characterize_drive, turn_right, drive_backward, parallel
 from libstp.foundation import ChassisVelocity
 
 

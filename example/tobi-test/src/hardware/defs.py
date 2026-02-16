@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-15 10:12:40
+ Generated: 2026-02-16 08:12:59
 ===========================================================
 
 Authors:
@@ -23,28 +23,28 @@ class Defs:
         port=0,
         inverted=False,
         calibration=MotorCalibration(
-            ticks_to_rad=1.8015599531492054e-05, vel_lpf_alpha=1.0
+            ticks_to_rad=1.7623667680813118e-05, vel_lpf_alpha=1.0
         ),
     )
     front_right_motor = Motor(
         port=1,
         inverted=False,
         calibration=MotorCalibration(
-            ticks_to_rad=1.3689541759452346e-05, vel_lpf_alpha=1.0
+            ticks_to_rad=1.392706010079093e-05, vel_lpf_alpha=1.0
         ),
     )
     rear_left_motor = Motor(
         port=2,
         inverted=False,
         calibration=MotorCalibration(
-            ticks_to_rad=1.5315950521575733e-05, vel_lpf_alpha=1.0
+            ticks_to_rad=1.5823734931161142e-05, vel_lpf_alpha=1.0
         ),
     )
     rear_right_motor = Motor(
         port=3,
         inverted=False,
         calibration=MotorCalibration(
-            ticks_to_rad=1.7938752660260658e-05, vel_lpf_alpha=1.0
+            ticks_to_rad=1.734218369071362e-05, vel_lpf_alpha=1.0
         ),
     )
     front_left_ir_sensor = IRSensor(port=0)
