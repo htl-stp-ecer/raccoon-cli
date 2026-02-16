@@ -1,4 +1,4 @@
-from libstp import drive_forward
+from libstp import drive_forward, turn_left
 from libstp.mission.api import Mission
 from libstp.step.sequential import Sequential, seq
 
@@ -10,4 +10,5 @@ class PotatoMission(Mission):
             #     axes=["forward", "angular"]
             # )
             drive_forward(cm=50),
+            turn_left(deg=90)
         ])
