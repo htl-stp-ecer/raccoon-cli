@@ -20,8 +20,12 @@ claimed over the generated code itself.
 """
 
 from src.hardware.robot import Robot
+from libstp.button import set_digital
 
 robot = Robot()
+#aaa
+logging.set_global_level(logging.Level.info)
 
 if __name__ == "__main__":
+   set_digital(10)
    robot.start()

@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from raccoon.client.sftp_sync import (
-    RsyncSync,
+    RcloneSync,
     SyncOptions,
     SyncDirection,
     SyncResult,
@@ -18,7 +18,7 @@ class TestRsyncCommandConstruction:
 
     def test_push_command(self):
         """Push should put local path first, remote path second."""
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         options = SyncOptions(direction=SyncDirection.PUSH, delete=False)
 
         cmd = sync._build_command(Path("/home/user/project"), "/home/pi/programs/abc", options)
@@ -32,7 +32,7 @@ class TestRsyncCommandConstruction:
 
     def test_pull_command(self):
         """Pull should put remote path first, local path second."""
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         options = SyncOptions(direction=SyncDirection.PULL, delete=False)
 
         cmd = sync._build_command(Path("/home/user/project"), "/home/pi/programs/abc", options)
@@ -43,7 +43,7 @@ class TestRsyncCommandConstruction:
 
     def test_delete_flag(self):
         """--delete should be included when delete=True."""
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
 
         options_del = SyncOptions(delete=True)
         cmd_del = sync._build_command(Path("/tmp/proj"), "/remote", options_del)
@@ -55,7 +55,7 @@ class TestRsyncCommandConstruction:
 
     def test_ssh_port(self):
         """Custom SSH port should be passed via -e flag."""
-        sync = RsyncSync(host="192.168.4.1", user="pi", ssh_port=2222)
+        sync = RcloneSync(host="192.168.4.1", user="pi", ssh_port=2222)
         options = SyncOptions(delete=False)
 
         cmd = sync._build_command(Path("/tmp/proj"), "/remote", options)
@@ -67,7 +67,7 @@ class TestRsyncCommandConstruction:
 
     def test_default_ssh_port(self):
         """Default SSH port should be 22."""
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         options = SyncOptions(delete=False)
 
         cmd = sync._build_command(Path("/tmp/proj"), "/remote", options)
@@ -78,7 +78,7 @@ class TestRsyncCommandConstruction:
 
     def test_custom_user(self):
         """Custom user should appear in remote path."""
-        sync = RsyncSync(host="10.0.0.1", user="admin")
+        sync = RcloneSync(host="10.0.0.1", user="admin")
         options = SyncOptions(direction=SyncDirection.PUSH, delete=False)
 
         cmd = sync._build_command(Path("/tmp/proj"), "/remote", options)
@@ -100,7 +100,7 @@ class TestExcludePatterns:
 
     def test_exclude_patterns_in_command(self):
         """Each exclude pattern should become an --exclude argument."""
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         options = SyncOptions(
             exclude_patterns=["*.pyc", ".git", "__pycache__"],
             delete=False,
@@ -156,7 +156,7 @@ class TestRsyncNotFound:
     @patch("raccoon.client.sftp_sync.shutil.which", return_value=None)
     def test_rsync_not_found_returns_error(self, mock_which):
         """Should return failure with helpful message when rsync is missing."""
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
 
         result = sync.sync(Path("/tmp/proj"), "/remote")
 
@@ -183,7 +183,7 @@ class TestRsyncExecution:
             stderr="",
         )
 
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         result = sync.sync(Path("/tmp/proj"), "/remote")
 
         assert result.success is True
@@ -204,7 +204,7 @@ class TestRsyncExecution:
             stderr="",
         )
 
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         options = SyncOptions(direction=SyncDirection.PULL)
         result = sync.sync(Path("/tmp/proj"), "/remote", options)
 
@@ -222,7 +222,7 @@ class TestRsyncExecution:
             stderr="rsync error: some error occurred",
         )
 
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         result = sync.sync(Path("/tmp/proj"), "/remote")
 
         assert result.success is False
@@ -242,7 +242,7 @@ class TestRsyncExecution:
             stderr="",
         )
 
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         result = sync.sync(Path("/tmp/proj"), "/remote")
 
         assert result.files_deleted == 2
@@ -260,7 +260,7 @@ class TestRsyncExecution:
             stderr="",
         )
 
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         result = sync.sync(Path("/tmp/proj"), "/remote")
 
         assert result.success is True
@@ -275,7 +275,7 @@ class TestRsyncExecution:
 
         mock_run.side_effect = TimeoutExpired("rsync", 300)
 
-        sync = RsyncSync(host="192.168.4.1", user="pi")
+        sync = RcloneSync(host="192.168.4.1", user="pi")
         result = sync.sync(Path("/tmp/proj"), "/remote")
 
         assert result.success is False

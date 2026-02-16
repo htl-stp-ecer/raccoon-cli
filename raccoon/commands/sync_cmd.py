@@ -10,7 +10,7 @@ from raccoon.client.connection import (
     ParamikoVersionError,
     print_paramiko_version_error,
 )
-from raccoon.client.sftp_sync import RsyncSync, SyncDirection, SyncOptions, load_raccoonignore
+from raccoon.client.sftp_sync import RcloneSync, SyncDirection, SyncOptions, load_raccoonignore
 from raccoon.project import find_project_root, load_project_config
 
 
@@ -85,7 +85,7 @@ def do_sync(
 
     # Perform sync
     try:
-        sync = RsyncSync(host=state.pi_address, user=state.pi_user)
+        sync = RcloneSync(host=state.pi_address, user=state.pi_user)
 
         # Load .raccoonignore patterns
         ignore_patterns = load_raccoonignore(project_root)
@@ -113,12 +113,14 @@ def do_sync(
 
         # Report results
         total_changes = result.files_uploaded + result.files_downloaded + result.files_deleted
-        if total_changes == 0:
+        if total_changes == 0 and result.bytes_transferred == 0:
             console.print("[green]Already in sync[/green]")
         else:
             console.print("[green]Sync complete![/green]")
             if result.files_uploaded > 0:
-                console.print(f"  Uploaded:  {result.files_uploaded}")
+                console.print(f"  Uploaded Files:  {result.files_uploaded}")
+            if result.bytes_transferred > 0:
+                console.print(f"  Bytes Total: {result.bytes_transferred}")
             if result.files_downloaded > 0:
                 console.print(f"  Downloaded: {result.files_downloaded}")
             if result.files_deleted > 0:

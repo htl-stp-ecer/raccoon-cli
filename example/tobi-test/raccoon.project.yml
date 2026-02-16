@@ -92,14 +92,14 @@ robot:
     width_cm: 13.0
     length_cm: 19.0
     sensors:
-      - name: front_left_ir_sensor
-        x_cm: 3.2
-        y_cm: 17.0
-        clearance_cm: 1.0
-      - name: front_right_ir_sensor
-        x_cm: 9.800000000000002
-        y_cm: 17.0
-        clearance_cm: 1.0
+    - name: front_left_ir_sensor
+      x_cm: 3.2
+      y_cm: 17.0
+      clearance_cm: 1.0
+    - name: front_right_ir_sensor
+      x_cm: 9.800000000000002
+      y_cm: 17.0
+      clearance_cm: 1.0
     rotation_center:
       x_cm: 6.5
       y_cm: 8.0
@@ -108,9 +108,9 @@ robot:
       y_cm: 20.0
       theta_deg: 90.0
 missions:
-  - SetupMission: setup
-  - ShutdownMission: shutdown
-  - PotatoMission
+- SetupMission: setup
+- ShutdownMission: shutdown
+- PotatoMission
 definitions:
   button:
     type: DigitalSensor
@@ -184,7 +184,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 192.168.178.85
+  pi_address: 10.123.147.232
   pi_port: 8421
   pi_user: pi
   remote_path: null
