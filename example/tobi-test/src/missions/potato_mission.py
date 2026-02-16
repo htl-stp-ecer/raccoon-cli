@@ -10,5 +10,5 @@ class PotatoMission(Mission):
             #     axes=["forward", "angular"]
             # )
             drive_forward(cm=50),
-            turn_left(deg=90)
+            turn_left(90)
         ])
