@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-16 16:05:30
+ Generated: 2026-02-16 16:06:07
 ===========================================================
 
 Authors:
@@ -53,9 +53,8 @@ class Robot(GenericRobot):
     kinematics = DifferentialKinematics(
         left_motor=defs.front_left_motor,
         right_motor=defs.front_right_motor,
-        track_width=0.17,
         wheel_radius=0.035,
-        wheelbase=0.12,
+        wheelbase=0.17,
     )
     drive = Drive(
         kinematics=kinematics,
@@ -136,10 +135,6 @@ class Robot(GenericRobot):
         defs.front_right_ir_sensor: SensorPosition(
             forward_cm=7.5, strafe_cm=-3.3, clearance_cm=1.0
         ),
-    }
-    _wheel_positions = {
-        defs.front_left_motor: WheelPosition(forward_cm=0, strafe_cm=8.5),
-        defs.front_right_motor: WheelPosition(forward_cm=0, strafe_cm=-8.5),
     }
 
 
