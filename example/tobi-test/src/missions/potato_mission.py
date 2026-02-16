@@ -16,17 +16,45 @@ Authors:
 Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
-import math
 
-from libstp import seq, Mission, drive_forward, turn_left, Turn
-from libstp.motion import TurnConfig
-from libstp.step.motion import measure_max_angular_velocity
-from libstp.step.motion import auto_tune_turn, motor_response_test
+import asyncio
+
+from libstp import seq, Mission, Step, drive_forward, turn_left, characterize_drive, turn_right, drive_backward
+from libstp.foundation import ChassisVelocity
+
+
+class CheapDrive(Step):
+
+    async def _execute_step(self, robot: "GenericRobot") -> None:
+        robot.drive.set_velocity(ChassisVelocity(0.3, 0.0, 0.0))
+        start_time = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start_time < 1.0:
+            robot.drive.update(0.01)
+            velocity = robot.drive.estimate_state()
+            self.info(velocity)
+            await asyncio.sleep(0.01)
+
 
 class PotatoMission(Mission):
     def sequence(self) -> "Step":
         return seq([
-            turn_left(90),
+            # characterize_drive(
+            #     axes=["forward", "lateral", "angular"],
+            #     trials=3,  # run each axis 3 times
+            # ),
+            # tune_drive(),
+            # tune_drive(),
+            # drive_forward(cm=100),
+            # turn_left(degrees=90),
+            # wall_align_forward(),
+            # stop(),
+            # wall_align_forward()
+            # wait(5.0),
+            # drive_forward(cm=30),
+            #turn_right(90),
+            drive_forward(cm=50),
+            #drive_backward(cm=50),
+
             # auto_tune_turn(
             #     test_angle_deg=90.0,  # 90° test turns
             #     max_rate=1.0,  # your measured max
@@ -35,7 +63,7 @@ class PotatoMission(Mission):
             # )
             # measure_max_angular_velocity(duration=5.0, clockwise=False)
             # TuneTurn(angle=90),
-            #turn_custom(90),
+            # turn_custom(90),
             # drive_forward(cm=15),
             # loop_forever(seq([
             #     open_drum_pusher(),

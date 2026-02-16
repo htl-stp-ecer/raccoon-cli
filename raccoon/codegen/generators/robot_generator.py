@@ -216,10 +216,22 @@ class RobotGenerator(BaseGenerator):
         if odometry_expr:
             builder.add_class_attribute("odometry", odometry_expr)
 
-        # Add motion_pid config (required)
-        motion_pid_expr = self._build_motion_pid_config(data.get("motion_pid"))
-        if motion_pid_expr:
-            builder.add_class_attribute("motion_pid_config", motion_pid_expr)
+        # Add motion_pid config (required) – uses build_constructor_expr for
+        # fully dynamic type detection with nested types, no hardcoded params.
+        motion_pid_cfg = data.get("motion_pid")
+        if motion_pid_cfg is not None:
+            try:
+                motion_pid_class = resolve_class("libstp.motion.UnifiedMotionPidConfig")
+                self.imports.add(motion_pid_class)
+                motion_pid_expr = build_constructor_expr(
+                    motion_pid_class, motion_pid_cfg, "robot.motion_pid", self.imports
+                )
+                builder.add_class_attribute("motion_pid_config", motion_pid_expr)
+            except (ImportError, AttributeError):
+                logger.warning(
+                    "Could not resolve libstp.motion.UnifiedMotionPidConfig"
+                    " - skipping motion_pid config generation"
+                )
 
         # Add missions from full config
         if hasattr(self, '_full_config'):
@@ -740,23 +752,6 @@ class RobotGenerator(BaseGenerator):
                 # Kinematics is already built as a class attribute
                 drive_args.append("kinematics=kinematics")
 
-            elif param_name == "chassis_lim":
-                # Build MotionLimits from limits configuration
-                if "limits" in drive_cfg:
-                    limits_cfg = drive_cfg["limits"]
-                    motion_limits_expr = self._build_motion_limits(limits_cfg)
-                    if motion_limits_expr:
-                        drive_args.append(f"chassis_lim={motion_limits_expr}")
-                    else:
-                        # Required parameter missing
-                        if param.default == inspect.Parameter.empty:
-                            logger.error("robot.drive.limits is required for chassis_lim parameter")
-                            return ""
-                elif param.default == inspect.Parameter.empty:
-                    # Required parameter not in config
-                    logger.error(f"Missing required parameter '{param_name}' for Drive constructor")
-                    return ""
-
             elif param_name == "vel_config":
                 # Build ChassisVelocityControlConfig from vel_config configuration
                 vel_config_expr = self._build_vel_config(drive_cfg.get("vel_config"))
@@ -1191,204 +1186,6 @@ class RobotGenerator(BaseGenerator):
             for name in hints
         }
 
-    def _build_motion_limits(self, limits_cfg: Dict[str, Any]) -> str:
-        """
-        Build MotionLimits constructor expression from limits configuration.
-
-        Args:
-            limits_cfg: Limits configuration (from robot.drive.limits in YAML)
-
-        Returns:
-            Constructor expression string
-        """
-        try:
-            motion_limits_class = resolve_class("libstp.drive.MotionLimits")
-            self.imports.add(motion_limits_class)
-        except (ImportError, AttributeError):
-            logger.error("Could not resolve libstp.drive.MotionLimits")
-            return ""
-
-        # Use exact parameter names from YAML - no automatic mapping
-        params = limits_cfg.copy()
-
-        # Get MotionLimits __init__ parameters
-        from ..introspection import get_init_params
-        from ..builder import build_literal_expr
-        import inspect
-
-        init_params = get_init_params(motion_limits_class)
-        logger.info(f"MotionLimits.__init__ parameters: {list(init_params.keys())}")
-
-        # Validate required parameters
-        required_params = {
-            name for name, param in init_params.items()
-            if param.default == inspect.Parameter.empty
-        }
-
-        provided_params = set(params.keys())
-        missing_params = required_params - provided_params
-
-        if missing_params:
-            raise ValueError(
-                f"robot.drive.limits: Missing required parameter(s) for MotionLimits: "
-                f"{', '.join(sorted(missing_params))}. "
-                f"Required: {', '.join(sorted(required_params))}, "
-                f"Provided: {', '.join(sorted(provided_params)) if provided_params else 'none'}"
-            )
-
-        # Check for unknown parameters
-        valid_params = set(init_params.keys())
-        unknown_params = provided_params - valid_params
-
-        if unknown_params:
-            raise ValueError(
-                f"robot.drive.limits: Unknown parameter(s) for MotionLimits: "
-                f"{', '.join(sorted(unknown_params))}. "
-                f"Valid parameters: {', '.join(sorted(valid_params))}"
-            )
-
-        # Build constructor arguments
-        args = []
-        for key in sorted(params.keys()):
-            value = params[key]
-            args.append(f"{key}={build_literal_expr(value)}")
-
-        return f"MotionLimits({', '.join(args)})"
-
-    def _build_motion_pid_config(self, motion_pid_cfg: Dict[str, Any] | None) -> str:
-        """
-        Build UnifiedMotionPidConfig constructor expression from motion_pid configuration.
-
-        Args:
-            motion_pid_cfg: Motion PID configuration (from robot.motion_pid in YAML)
-
-        Returns:
-            Constructor expression string, or empty string if no config
-        """
-        if motion_pid_cfg is None:
-            return ""
-
-        try:
-            motion_pid_class = resolve_class("libstp.motion.UnifiedMotionPidConfig")
-            self.imports.add(motion_pid_class)
-        except (ImportError, AttributeError):
-            logger.warning("Could not resolve libstp.motion.UnifiedMotionPidConfig - skipping motion_pid config generation")
-            return ""
-
-        from ..builder import build_literal_expr
-
-        # Flatten the nested config structure to match UnifiedMotionPidConfig constructor parameters
-        params = {}
-
-        # Distance PID gains
-        if "distance" in motion_pid_cfg:
-            distance_cfg = motion_pid_cfg["distance"]
-            if "kp" in distance_cfg:
-                params["distance_kp"] = distance_cfg["kp"]
-            if "ki" in distance_cfg:
-                params["distance_ki"] = distance_cfg["ki"]
-            if "kd" in distance_cfg:
-                params["distance_kd"] = distance_cfg["kd"]
-
-        # Heading PID gains
-        if "heading" in motion_pid_cfg:
-            heading_cfg = motion_pid_cfg["heading"]
-            if "kp" in heading_cfg:
-                params["heading_kp"] = heading_cfg["kp"]
-            if "ki" in heading_cfg:
-                params["heading_ki"] = heading_cfg["ki"]
-            if "kd" in heading_cfg:
-                params["heading_kd"] = heading_cfg["kd"]
-
-        # Lateral PID gains
-        if "lateral" in motion_pid_cfg:
-            lateral_cfg = motion_pid_cfg["lateral"]
-            if "kp" in lateral_cfg:
-                params["lateral_kp"] = lateral_cfg["kp"]
-            if "ki" in lateral_cfg:
-                params["lateral_ki"] = lateral_cfg["ki"]
-            if "kd" in lateral_cfg:
-                params["lateral_kd"] = lateral_cfg["kd"]
-
-        # Profile parameters
-        if "profile" in motion_pid_cfg:
-            profile_cfg = motion_pid_cfg["profile"]
-            if "max_linear_acceleration" in profile_cfg:
-                params["max_linear_acceleration"] = profile_cfg["max_linear_acceleration"]
-            if "max_angular_acceleration" in profile_cfg:
-                params["max_angular_acceleration"] = profile_cfg["max_angular_acceleration"]
-
-        # Saturation handling
-        if "saturation" in motion_pid_cfg:
-            saturation_cfg = motion_pid_cfg["saturation"]
-            if "derating_factor" in saturation_cfg:
-                params["saturation_derating_factor"] = saturation_cfg["derating_factor"]
-            if "min_scale" in saturation_cfg:
-                params["saturation_min_scale"] = saturation_cfg["min_scale"]
-            if "recovery_rate" in saturation_cfg:
-                params["saturation_recovery_rate"] = saturation_cfg["recovery_rate"]
-
-        # Heading-specific saturation handling
-        if "heading_saturation" in motion_pid_cfg:
-            heading_sat_cfg = motion_pid_cfg["heading_saturation"]
-            if "derating_factor" in heading_sat_cfg:
-                params["heading_saturation_derating_factor"] = heading_sat_cfg["derating_factor"]
-            if "min_scale" in heading_sat_cfg:
-                params["heading_min_scale"] = heading_sat_cfg["min_scale"]
-            if "recovery_rate" in heading_sat_cfg:
-                params["heading_saturation_recovery_rate"] = heading_sat_cfg["recovery_rate"]
-
-        # Tolerances
-        if "tolerances" in motion_pid_cfg:
-            tolerances_cfg = motion_pid_cfg["tolerances"]
-            if "distance_m" in tolerances_cfg:
-                params["distance_tolerance_m"] = tolerances_cfg["distance_m"]
-            if "angle_rad" in tolerances_cfg:
-                params["angle_tolerance_rad"] = tolerances_cfg["angle_rad"]
-
-        # Rate limits
-        if "rate_limits" in motion_pid_cfg:
-            rate_limits_cfg = motion_pid_cfg["rate_limits"]
-            if "max_heading_rate" in rate_limits_cfg:
-                params["max_heading_rate"] = rate_limits_cfg["max_heading_rate"]
-            if "min_angular_rate" in rate_limits_cfg:
-                params["min_angular_rate"] = rate_limits_cfg["min_angular_rate"]
-
-        # Lateral drift handling
-        if "lateral_drift" in motion_pid_cfg:
-            lateral_drift_cfg = motion_pid_cfg["lateral_drift"]
-            if "heading_bias_gain" in lateral_drift_cfg:
-                params["lateral_heading_bias_gain"] = lateral_drift_cfg["heading_bias_gain"]
-            if "reorient_threshold_m" in lateral_drift_cfg:
-                params["lateral_reorient_threshold_m"] = lateral_drift_cfg["reorient_threshold_m"]
-            if "heading_saturation_error_rad" in lateral_drift_cfg:
-                params["heading_saturation_error_rad"] = lateral_drift_cfg["heading_saturation_error_rad"]
-            if "heading_recovery_error_rad" in lateral_drift_cfg:
-                params["heading_recovery_error_rad"] = lateral_drift_cfg["heading_recovery_error_rad"]
-
-        # Top-level parameters
-        top_level_params = [
-            "integral_max",
-            "integral_deadband",
-            "derivative_lpf_alpha",
-            "output_min",
-            "output_max",
-            "min_speed_mps"
-        ]
-        for param in top_level_params:
-            if param in motion_pid_cfg:
-                params[param] = motion_pid_cfg[param]
-
-        # Build constructor arguments
-        if not params:
-            return "UnifiedMotionPidConfig()"
-
-        args = []
-        for key in sorted(params.keys()):
-            value = params[key]
-            args.append(f"{key}={build_literal_expr(value)}")
-
-        return f"UnifiedMotionPidConfig({', '.join(args)})"
 
     def generate_imports(self) -> str:
         """Generate import statements including Defs, GenericRobot, and mission imports."""

@@ -12,7 +12,7 @@ Authors:
    You are free to modify it as needed. Regeneration may overwrite changes.
 """
 
-from libstp.drive import Drive, MotionLimits
+from libstp.drive import Drive
 from libstp.kinematics_mecanum import MecanumKinematics
 from libstp.odometry_fused import FusedOdometry
 
@@ -29,14 +29,12 @@ class Robot(GenericRobot):
         back_right_motor=defs.rear_right_motor,
         front_left_motor=defs.front_left_motor,
         front_right_motor=defs.front_right_motor,
-        max_acceleration=240.0,
-        max_velocity=40.0,
         track_width=0.19,
         wheel_radius=0.03,
         wheelbase=0.12,
     )
     drive = Drive(
-        kinematics=kinematics, chassis_lim=MotionLimits(max_omega=10.0, max_v=1.6)
+        kinematics=kinematics,
     )
     odometry = FusedOdometry(
         imu=defs.imu,
