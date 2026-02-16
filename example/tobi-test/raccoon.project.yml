@@ -5,8 +5,7 @@ robot:
     kinematics:
       type: differential
       wheel_radius: 0.035
-      track_width: 0.17
-      wheelbase: 0.12
+      wheelbase: 0.17
       left_motor: front_left_motor
       right_motor: front_right_motor
     vel_config:

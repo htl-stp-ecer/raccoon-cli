@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-16 08:13:02
+ Generated: 2026-02-16 16:05:30
 ===========================================================
 
 Authors:
@@ -16,12 +16,12 @@ from libstp import (
     AxisConstraints,
     AxisVelocityControlConfig,
     ChassisVelocityControlConfig,
+    DifferentialKinematics,
     Drive,
     Feedforward,
     FusedOdometry,
     FusedOdometryConfig,
     GenericRobot,
-    MecanumKinematics,
     PidConfig,
     PidGains,
     SensorPosition,
@@ -50,13 +50,11 @@ def _build_chassis_vel_config(vx=None, vy=None, wz=None):
 
 class Robot(GenericRobot):
     defs = Defs()
-    kinematics = MecanumKinematics(
-        back_left_motor=defs.rear_left_motor,
-        back_right_motor=defs.rear_right_motor,
-        front_left_motor=defs.front_left_motor,
-        front_right_motor=defs.front_right_motor,
-        track_width=0.19,
-        wheel_radius=0.0295,
+    kinematics = DifferentialKinematics(
+        left_motor=defs.front_left_motor,
+        right_motor=defs.front_right_motor,
+        track_width=0.17,
+        wheel_radius=0.035,
         wheelbase=0.12,
     )
     drive = Drive(
@@ -129,7 +127,7 @@ class Robot(GenericRobot):
     shutdown_mission = ShutdownMission()
     width_cm = 13.0
     length_cm = 19.0
-    rotation_center_forward_cm = -2.1715
+    rotation_center_forward_cm = -1.5
     rotation_center_strafe_cm = 0.0
     _sensor_positions = {
         defs.front_left_ir_sensor: SensorPosition(
@@ -140,10 +138,8 @@ class Robot(GenericRobot):
         ),
     }
     _wheel_positions = {
-        defs.front_left_motor: WheelPosition(forward_cm=6.0, strafe_cm=9.5),
-        defs.front_right_motor: WheelPosition(forward_cm=6.0, strafe_cm=-9.5),
-        defs.rear_left_motor: WheelPosition(forward_cm=-6.0, strafe_cm=9.5),
-        defs.rear_right_motor: WheelPosition(forward_cm=-6.0, strafe_cm=-9.5),
+        defs.front_left_motor: WheelPosition(forward_cm=0, strafe_cm=8.5),
+        defs.front_right_motor: WheelPosition(forward_cm=0, strafe_cm=-8.5),
     }
 
 
