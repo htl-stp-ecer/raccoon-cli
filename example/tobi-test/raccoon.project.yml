@@ -11,7 +11,7 @@ robot:
     vel_config:
       vx:
         pid:
-          kp: 0.0
+          kp: 0.5
           ki: 0.0
           kd: 0.0
         ff:
@@ -20,7 +20,7 @@ robot:
           kA: 0.0
       vy:
         pid:
-          kp: 0.0
+          kp: 0.5
           ki: 0.0
           kd: 0.0
         ff:

@@ -6,10 +6,10 @@ from libstp.step.sequential import Sequential, seq
 class PotatoMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
-            tune_drive(),
+            #tune_drive(),
             # characterize_drive(
             #     axes=["forward", "angular"]
             # )
-            #drive_forward(cm=50),
+            drive_forward(cm=50),
             #turn_left(90)
         ])
