@@ -39,7 +39,7 @@ def test_do_sync_creates_snapshot_for_push(monkeypatch):
 
     monkeypatch.setattr(sync_cmd, "load_project_config", lambda _: {"uuid": "proj-123", "name": "Demo"})
     monkeypatch.setattr(sync_cmd, "get_connection_manager", lambda: manager)
-    monkeypatch.setattr(sync_cmd, "RsyncSync", FakeRsync)
+    monkeypatch.setattr(sync_cmd, "create_sync", lambda host, user: FakeRsync(host=host, user=user))
     monkeypatch.setattr(sync_cmd, "load_raccoonignore", lambda _: [])
     monkeypatch.setattr(sync_cmd, "create_pre_sync_snapshot", fake_snapshot)
 
@@ -81,7 +81,7 @@ def test_do_sync_creates_snapshot_for_pull(monkeypatch):
 
     monkeypatch.setattr(sync_cmd, "load_project_config", lambda _: {"uuid": "proj-123", "name": "Demo"})
     monkeypatch.setattr(sync_cmd, "get_connection_manager", lambda: manager)
-    monkeypatch.setattr(sync_cmd, "RsyncSync", FakeRsync)
+    monkeypatch.setattr(sync_cmd, "create_sync", lambda host, user: FakeRsync(host=host, user=user))
     monkeypatch.setattr(sync_cmd, "load_raccoonignore", lambda _: [])
     monkeypatch.setattr(sync_cmd, "create_pre_sync_snapshot", fake_snapshot)
 

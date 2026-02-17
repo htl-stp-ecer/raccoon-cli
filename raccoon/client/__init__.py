@@ -40,7 +40,9 @@ from raccoon.client.api import (
 
 # Rsync sync
 from raccoon.client.sftp_sync import (
-    RcloneSync,
+    RsyncSync,
+    SftpSync,
+    create_sync,
     SyncDirection,
     SyncResult,
     SyncOptions,
@@ -81,7 +83,9 @@ __all__ = [
     "CommandResult",
     "EncoderReading",
     # Rsync sync
-    "RcloneSync",
+    "RsyncSync",
+    "SftpSync",
+    "create_sync",
     "SyncDirection",
     "SyncResult",
     "SyncOptions",

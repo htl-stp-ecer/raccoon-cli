@@ -10,7 +10,7 @@ from raccoon.client.connection import (
     ParamikoVersionError,
     print_paramiko_version_error,
 )
-from raccoon.client.sftp_sync import RcloneSync, SyncDirection, SyncOptions, load_raccoonignore
+from raccoon.client.sftp_sync import create_sync, SyncDirection, SyncOptions, load_raccoonignore
 from raccoon.git_history import create_pre_sync_snapshot
 from raccoon.project import find_project_root, load_project_config
 
@@ -102,7 +102,7 @@ def do_sync(
 
     # Perform sync
     try:
-        sync = RcloneSync(host=state.pi_address, user=state.pi_user)
+        sync = create_sync(host=state.pi_address, user=state.pi_user)
 
         # Load .raccoonignore patterns
         ignore_patterns = load_raccoonignore(project_root)
