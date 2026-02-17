@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-16 20:24:05
+ Generated: 2026-02-17 15:51:29
 ===========================================================
 
 Authors:
@@ -130,7 +130,7 @@ class Robot(GenericRobot):
     rotation_center_strafe_cm = 0.0
     _sensor_positions = {
         defs.front_left_ir_sensor: SensorPosition(
-            forward_cm=7.5, strafe_cm=3.5, clearance_cm=1.0
+            forward_cm=7.5, strafe_cm=3.3, clearance_cm=1.0
         ),
         defs.front_right_ir_sensor: SensorPosition(
             forward_cm=7.5, strafe_cm=-3.3, clearance_cm=1.0
