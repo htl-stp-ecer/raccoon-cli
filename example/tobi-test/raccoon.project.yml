@@ -89,7 +89,7 @@ robot:
     length_cm: 19.0
     sensors:
     - name: front_left_ir_sensor
-      x_cm: 3.0
+      x_cm: 3.2
       y_cm: 17.0
       clearance_cm: 1.0
     - name: front_right_ir_sensor
@@ -134,7 +134,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 192.168.178.85
+  pi_address: 10.123.147.232
   pi_port: 8421
   pi_user: pi
   remote_path: null
