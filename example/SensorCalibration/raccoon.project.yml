@@ -107,8 +107,8 @@ robot:
         y_cm: 29.0
         clearance_cm: 0.5
 missions:
-  - M01SetupMission: setup
-  - M99ShutdownMission: shutdown
+  - SetupMission: setup
+  - ShutdownMission: shutdown
 definitions:
   button:
     type: DigitalSensor
