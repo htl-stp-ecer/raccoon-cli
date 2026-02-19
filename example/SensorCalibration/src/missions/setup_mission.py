@@ -17,7 +17,7 @@ Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
 
-from libstp import Mission, Sequential, seq, calibrate_sensors
+from libstp import Mission, Sequential, seq
 
 from .steps.APIStep import calibrate_sensors_step
 
