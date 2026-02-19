@@ -19,7 +19,7 @@ claimed over the generated code itself.
 
 from libstp import Mission, Sequential, seq
 
-from .steps.APIStep import calibrate_sensors_step
+from ..steps.APIStep import calibrate_sensors_step
 
 #test command
 class SetupMission(Mission):
