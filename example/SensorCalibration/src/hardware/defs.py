@@ -1,7 +1,7 @@
 """
 ===========================================================
- Project:   tobi-test
- Generated: 2026-02-12 09:59:55
+ Project:   SensorCalibration
+ Generated: 2026-02-19 09:11:04
 ===========================================================
 
 Authors:
@@ -13,12 +13,14 @@ Authors:
 """
 
 from libstp import (
+    AnalogSensor,
     DigitalSensor,
     Feedforward,
     IRSensor,
     Motor,
     MotorCalibration,
     PidGains,
+    Servo,
 )
 from libstp import IMU as Imu
 
@@ -27,48 +29,58 @@ class Defs:
     imu = Imu()
     button = DigitalSensor(port=10)
     front_left_motor = Motor(
-        port=0,
-        inverted=False,
-        calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.0707520629305845e-05,
-            vel_lpf_alpha=0.8,
-        ),
-    )
-    front_right_motor = Motor(
         port=1,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.0821901544582446e-05,
-            vel_lpf_alpha=0.8,
+            ticks_to_rad=1.4976277083107398e-05,
+            vel_lpf_alpha=1.0,
+            pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
+            ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+        ),
+    )
+    front_right_motor = Motor(
+        port=0,
+        inverted=True,
+        calibration=MotorCalibration(
+            ticks_to_rad=1.54189993115549e-05,
+            vel_lpf_alpha=1.0,
+            pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
+            ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
         ),
     )
     rear_left_motor = Motor(
         port=2,
         inverted=False,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.162187618816031e-05,
-            vel_lpf_alpha=0.8,
+            ticks_to_rad=1.5948322551129635e-05,
+            vel_lpf_alpha=1.0,
+            pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
+            ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
         ),
     )
     rear_right_motor = Motor(
         port=3,
-        inverted=False,
+        inverted=True,
         calibration=MotorCalibration(
-            ff=Feedforward(kS=0.08, kV=0.12, kA=0.1),
-            pid=PidGains(kp=2.4, ki=0.3, kd=0.08),
-            ticks_to_rad=2.079770343853669e-05,
-            vel_lpf_alpha=0.8,
+            ticks_to_rad=1.548518357579032e-05,
+            vel_lpf_alpha=1.0,
+            pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
+            ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
         ),
     )
-    front_left_ir_sensor = IRSensor(port=0)
-    front_right_ir_sensor = IRSensor(port=1)
-    analog_sensors = [front_left_ir_sensor, front_right_ir_sensor]
+    rear_left_light_sensor = IRSensor(port=1)
+    wait_for_light_sensor = AnalogSensor(port=2)
+    front_right_light_sensor = IRSensor(port=4)
+    front_left_light_sensor = IRSensor(port=5)
+    shild = Servo(port=0)
+    pom_arm = Servo(port=1)
+    pom_grab = Servo(port=3)
+    analog_sensors = [
+        rear_left_light_sensor,
+        wait_for_light_sensor,
+        front_right_light_sensor,
+        front_left_light_sensor,
+    ]
 
 
 __all__ = ["Defs"]
