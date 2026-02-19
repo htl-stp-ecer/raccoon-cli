@@ -1,7 +1,7 @@
 """
 ===========================================================
- Project:   tobi-test
- Generated: 2026-02-12 09:59:57
+ Project:   SensorCalibration
+ Generated: 2026-02-19 09:05:34
 ===========================================================
 
 Authors:
@@ -18,7 +18,6 @@ from libstp import (
     FusedOdometryConfig,
     GenericRobot,
     MecanumKinematics,
-    MotionLimits,
     SensorPosition,
     UnifiedMotionPidConfig,
     WheelPosition,
@@ -45,43 +44,34 @@ class Robot(GenericRobot):
         wheel_radius=0.0295,
         wheelbase=0.12,
     )
-    drive = Drive(
-        kinematics=kinematics, chassis_lim=MotionLimits(max_omega=999, max_v=999)
-    )
     odometry = FusedOdometry(
         imu=defs.imu, kinematics=kinematics, config=FusedOdometryConfig(bemf_trust=1.0)
     )
     motion_pid_config = UnifiedMotionPidConfig(
-        angle_tolerance_rad=0.017,
-        derivative_lpf_alpha=0.5,
-        distance_kd=0.0,
-        distance_ki=0.0,
-        distance_kp=2.0,
-        distance_tolerance_m=0.01,
-        heading_kd=0.0,
-        heading_ki=0.0,
-        heading_kp=1.0,
-        heading_min_scale=0.25,
-        heading_recovery_error_rad=0.005,
-        heading_saturation_derating_factor=0.85,
-        heading_saturation_error_rad=0.01,
-        heading_saturation_recovery_rate=0.05,
-        integral_deadband=0.01,
+        distance={"kp": 2.0, "ki": 0.0, "kd": 0.0},
+        heading={"kp": 1.0, "ki": 0.0, "kd": 0.0},
+        lateral={"kp": 2.0, "ki": 0.0, "kd": 0.0},
+        profile={"max_linear_acceleration": 1.0},
         integral_max=10.0,
-        lateral_heading_bias_gain=0.5,
-        lateral_kd=0.0,
-        lateral_ki=0.0,
-        lateral_kp=2.0,
-        lateral_reorient_threshold_m=0.15,
-        max_heading_rate=3.0,
-        max_linear_acceleration=1.0,
-        min_angular_rate=0.1,
-        min_speed_mps=0.05,
-        output_max=10.0,
+        integral_deadband=0.01,
+        derivative_lpf_alpha=0.5,
         output_min=-10.0,
-        saturation_derating_factor=0.85,
-        saturation_min_scale=0.1,
-        saturation_recovery_rate=0.02,
+        output_max=10.0,
+        saturation={"derating_factor": 0.85, "min_scale": 0.1, "recovery_rate": 0.02},
+        heading_saturation={
+            "derating_factor": 0.85,
+            "min_scale": 0.25,
+            "recovery_rate": 0.05,
+        },
+        tolerances={"distance_m": 0.01, "angle_rad": 0.017},
+        rate_limits={"max_heading_rate": 3.0, "min_angular_rate": 0.1},
+        lateral_drift={
+            "heading_bias_gain": 0.5,
+            "reorient_threshold_m": 0.15,
+            "heading_saturation_error_rad": 0.01,
+            "heading_recovery_error_rad": 0.005,
+        },
+        min_speed_mps=0.05,
     )
     missions = [PotatoMission()]
     setup_mission = SetupMission()
