@@ -17,13 +17,12 @@ Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
 
-from libstp import Mission, Sequential, seq
+from libstp import Mission, Sequential, seq, calibrate
 
-from ..steps.APIStep import calibrate_sensors_step
 
 #test command
 class SetupMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
-            calibrate_sensors_step()
+            calibrate()
         ])
