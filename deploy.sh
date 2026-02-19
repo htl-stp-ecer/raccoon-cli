@@ -1,7 +1,7 @@
 #!/bin/bash
 
 USER="pi"
-HOST="${RPI_HOST:-192.168.68.110}"
+HOST="${RPI_HOST:-10.70.146.232}"
 
 rsync -a --info=progress2 ./ $USER@$HOST:/home/$USER/toolchain --exclude-from='.gitignore' --delete
 ssh $USER@$HOST 'cd toolchain && sudo RACCOON_SERVER_ONLY=1 RACCOON_SKIP_WEBIDE=1 python3 -m pip install . --break-system-packages'
