@@ -173,6 +173,12 @@ definitions:
         kS: 0.0
         kV: 1.0
         kA: 0.0
+  max_acceleration:
+    type: Motor
+    port: 3
+  max_velocity:
+    type: Motor
+    port: 3
   imu:
     type: IMU
   rear_left_light_sensor:
