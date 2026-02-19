@@ -125,6 +125,14 @@ definitions:
     calibration:
       ticks_to_rad: 1.4976277083107398e-05
       vel_lpf_alpha: 1.0
+      pid:
+        kp: 0.65
+        ki: 0.0
+        kd: 0.0
+      ff:
+        kS: 0.0
+        kV: 1.0
+        kA: 0.0
   front_right_motor:
     type: Motor
     port: 0
@@ -132,6 +140,14 @@ definitions:
     calibration:
       ticks_to_rad: 1.54189993115549e-05
       vel_lpf_alpha: 1.0
+      pid:
+        kp: 0.65
+        ki: 0.0
+        kd: 0.0
+      ff:
+        kS: 0.0
+        kV: 1.0
+        kA: 0.0
   rear_left_motor:
     type: Motor
     port: 2
@@ -139,6 +155,14 @@ definitions:
     calibration:
       ticks_to_rad: 1.5948322551129635e-05
       vel_lpf_alpha: 1.0
+      pid:
+        kp: 0.65
+        ki: 0.0
+        kd: 0.0
+      ff:
+        kS: 0.0
+        kV: 1.0
+        kA: 0.0
   rear_right_motor:
     type: Motor
     port: 3
@@ -146,6 +170,14 @@ definitions:
     calibration:
       ticks_to_rad: 1.548518357579032e-05
       vel_lpf_alpha: 1.0
+      pid:
+        kp: 0.65
+        ki: 0.0
+        kd: 0.0
+      ff:
+        kS: 0.0
+        kV: 1.0
+        kA: 0.0
   imu:
     type: IMU
   rear_left_light_sensor:
