@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   SensorCalibration
- Generated: 2026-02-19 09:11:04
+ Generated: 2026-02-19 09:27:18
 ===========================================================
 
 Authors:
@@ -68,6 +68,8 @@ class Defs:
             ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
         ),
     )
+    max_acceleration = Motor(port=3)
+    max_velocity = Motor(port=3)
     rear_left_light_sensor = IRSensor(port=1)
     wait_for_light_sensor = AnalogSensor(port=2)
     front_right_light_sensor = IRSensor(port=4)
