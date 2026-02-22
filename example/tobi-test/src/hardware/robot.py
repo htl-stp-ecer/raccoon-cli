@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-17 16:04:44
+ Generated: 2026-02-22 20:07:01
 ===========================================================
 
 Authors:
@@ -68,7 +68,7 @@ class Robot(GenericRobot):
                 ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
             ),
             wz=AxisVelocityControlConfig(
-                pid=PidGains(kp=1.741849, ki=0.0, kd=0.035635),
+                pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
                 ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
             ),
         ),
@@ -79,9 +79,9 @@ class Robot(GenericRobot):
     )
     motion_pid_config = UnifiedMotionPidConfig(
         distance=PidConfig(
-            kp=1.25,
+            kp=1.0,
             ki=0.0,
-            kd=0.6875,
+            kd=0.5,
             integral_max=10.0,
             integral_deadband=0.01,
             derivative_lpf_alpha=0.5,
@@ -89,9 +89,9 @@ class Robot(GenericRobot):
             output_max=10.0,
         ),
         heading=PidConfig(
-            kp=2.1875,
+            kp=1.0,
             ki=0.0,
-            kd=0.3062,
+            kd=0.2,
             integral_max=10.0,
             integral_deadband=0.01,
             derivative_lpf_alpha=0.5,
