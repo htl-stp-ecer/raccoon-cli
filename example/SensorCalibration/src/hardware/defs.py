@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   SensorCalibration
- Generated: 2026-02-19 09:27:18
+ Generated: 2026-02-23 08:59:38
 ===========================================================
 
 Authors:
@@ -12,16 +12,7 @@ Authors:
    You are free to modify it as needed. Regeneration may overwrite changes.
 """
 
-from libstp import (
-    AnalogSensor,
-    DigitalSensor,
-    Feedforward,
-    IRSensor,
-    Motor,
-    MotorCalibration,
-    PidGains,
-    Servo,
-)
+from libstp import AnalogSensor, DigitalSensor, IRSensor, Motor, MotorCalibration, Servo
 from libstp import IMU as Imu
 
 
@@ -32,44 +23,30 @@ class Defs:
         port=1,
         inverted=False,
         calibration=MotorCalibration(
-            ticks_to_rad=1.4976277083107398e-05,
-            vel_lpf_alpha=1.0,
-            pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
-            ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ticks_to_rad=1.4976277083107398e-05, vel_lpf_alpha=1.0
         ),
     )
     front_right_motor = Motor(
         port=0,
         inverted=True,
         calibration=MotorCalibration(
-            ticks_to_rad=1.54189993115549e-05,
-            vel_lpf_alpha=1.0,
-            pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
-            ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ticks_to_rad=1.54189993115549e-05, vel_lpf_alpha=1.0
         ),
     )
     rear_left_motor = Motor(
         port=2,
         inverted=False,
         calibration=MotorCalibration(
-            ticks_to_rad=1.5948322551129635e-05,
-            vel_lpf_alpha=1.0,
-            pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
-            ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ticks_to_rad=1.5948322551129635e-05, vel_lpf_alpha=1.0
         ),
     )
     rear_right_motor = Motor(
         port=3,
         inverted=True,
         calibration=MotorCalibration(
-            ticks_to_rad=1.548518357579032e-05,
-            vel_lpf_alpha=1.0,
-            pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
-            ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ticks_to_rad=1.548518357579032e-05, vel_lpf_alpha=1.0
         ),
     )
-    max_acceleration = Motor(port=3)
-    max_velocity = Motor(port=3)
     rear_left_light_sensor = IRSensor(port=1)
     wait_for_light_sensor = AnalogSensor(port=2)
     front_right_light_sensor = IRSensor(port=4)

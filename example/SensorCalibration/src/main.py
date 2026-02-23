@@ -21,9 +21,10 @@ claimed over the generated code itself.
 
 from src.hardware.robot import Robot
 from libstp.button import set_digital
+import libstp.foundation as logging
 
 robot = Robot()
-#aaa
+
 logging.set_global_level(logging.Level.info)
 
 if __name__ == "__main__":

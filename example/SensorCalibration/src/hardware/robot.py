@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   SensorCalibration
- Generated: 2026-02-19 09:05:34
+ Generated: 2026-02-23 08:59:42
 ===========================================================
 
 Authors:
@@ -13,11 +13,17 @@ Authors:
 """
 
 from libstp import (
+    AxisConstraints,
+    AxisVelocityControlConfig,
+    ChassisVelocityControlConfig,
     Drive,
+    Feedforward,
     FusedOdometry,
     FusedOdometryConfig,
     GenericRobot,
     MecanumKinematics,
+    PidConfig,
+    PidGains,
     SensorPosition,
     UnifiedMotionPidConfig,
     WheelPosition,
@@ -28,7 +34,17 @@ from src.hardware.defs import Defs
 
 from src.missions.setup_mission import SetupMission
 from src.missions.shutdown_mission import ShutdownMission
-from src.missions.potato_mission import PotatoMission
+
+
+def _build_chassis_vel_config(vx=None, vy=None, wz=None):
+    cfg = ChassisVelocityControlConfig()
+    if vx is not None:
+        cfg.vx = vx
+    if vy is not None:
+        cfg.vy = vy
+    if wz is not None:
+        cfg.wz = wz
+    return cfg
 
 
 class Robot(GenericRobot):
@@ -38,61 +54,97 @@ class Robot(GenericRobot):
         back_right_motor=defs.rear_right_motor,
         front_left_motor=defs.front_left_motor,
         front_right_motor=defs.front_right_motor,
-        max_acceleration=40.678,
-        max_velocity=50.847,
-        track_width=0.19,
-        wheel_radius=0.0295,
-        wheelbase=0.12,
+        track_width=0.2,
+        wheel_radius=0.0375,
+        wheelbase=0.125,
+    )
+    drive = Drive(
+        kinematics=kinematics,
+        vel_config=_build_chassis_vel_config(
+            vx=AxisVelocityControlConfig(
+                pid=PidGains(kp=0.0, ki=0.0, kd=0.0),
+                ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ),
+            vy=AxisVelocityControlConfig(
+                pid=PidGains(kp=0.0, ki=0.0, kd=0.0),
+                ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ),
+            wz=AxisVelocityControlConfig(
+                pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
+                ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
+            ),
+        ),
+        imu=defs.imu,
     )
     odometry = FusedOdometry(
         imu=defs.imu, kinematics=kinematics, config=FusedOdometryConfig(bemf_trust=1.0)
     )
     motion_pid_config = UnifiedMotionPidConfig(
-        distance={"kp": 2.0, "ki": 0.0, "kd": 0.0},
-        heading={"kp": 1.0, "ki": 0.0, "kd": 0.0},
-        lateral={"kp": 2.0, "ki": 0.0, "kd": 0.0},
-        profile={"max_linear_acceleration": 1.0},
-        integral_max=10.0,
-        integral_deadband=0.01,
-        derivative_lpf_alpha=0.5,
-        output_min=-10.0,
-        output_max=10.0,
-        saturation={"derating_factor": 0.85, "min_scale": 0.1, "recovery_rate": 0.02},
-        heading_saturation={
-            "derating_factor": 0.85,
-            "min_scale": 0.25,
-            "recovery_rate": 0.05,
-        },
-        tolerances={"distance_m": 0.01, "angle_rad": 0.017},
-        rate_limits={"max_heading_rate": 3.0, "min_angular_rate": 0.1},
-        lateral_drift={
-            "heading_bias_gain": 0.5,
-            "reorient_threshold_m": 0.15,
-            "heading_saturation_error_rad": 0.01,
-            "heading_recovery_error_rad": 0.005,
-        },
-        min_speed_mps=0.05,
+        distance=PidConfig(
+            kp=1.0,
+            ki=0.0,
+            kd=0.5,
+            integral_max=10.0,
+            integral_deadband=0.01,
+            derivative_lpf_alpha=0.5,
+            output_min=-10.0,
+            output_max=10.0,
+        ),
+        heading=PidConfig(
+            kp=1.0,
+            ki=0.0,
+            kd=0.2,
+            integral_max=10.0,
+            integral_deadband=0.01,
+            derivative_lpf_alpha=0.5,
+            output_min=-10.0,
+            output_max=10.0,
+        ),
+        velocity_ff=1.0,
+        distance_tolerance_m=0.005,
+        angle_tolerance_rad=0.017,
+        saturation_derating_factor=0.85,
+        saturation_min_scale=0.2,
+        saturation_recovery_rate=0.02,
+        saturation_hold_cycles=5,
+        saturation_recovery_threshold=0.95,
+        heading_saturation_derating_factor=0.85,
+        heading_min_scale=0.25,
+        heading_recovery_rate=0.05,
+        heading_saturation_error_rad=0.01,
+        heading_recovery_error_rad=0.005,
+        linear=AxisConstraints(
+            max_velocity=0.2331, acceleration=0.4327, deceleration=0.4856
+        ),
+        lateral=AxisConstraints(
+            max_velocity=0.2209, acceleration=0.6485, deceleration=0.4498
+        ),
+        angular=AxisConstraints(
+            max_velocity=1.8105, acceleration=2.8187, deceleration=7.8611
+        ),
     )
-    missions = [PotatoMission()]
     setup_mission = SetupMission()
     shutdown_mission = ShutdownMission()
-    width_cm = 13.0
-    length_cm = 19.0
-    rotation_center_forward_cm = -1.5
-    rotation_center_strafe_cm = 0.0
+    width_cm = 28.5
+    length_cm = 29.6
+    rotation_center_forward_cm = 2.95
+    rotation_center_strafe_cm = 2.25
     _sensor_positions = {
-        defs.front_left_ir_sensor: SensorPosition(
-            forward_cm=7.5, strafe_cm=3.3, clearance_cm=1.0
+        defs.rear_left_light_sensor: SensorPosition(
+            forward_cm=-10.3, strafe_cm=11.55, clearance_cm=0.5
         ),
-        defs.front_right_ir_sensor: SensorPosition(
-            forward_cm=7.5, strafe_cm=-3.3, clearance_cm=1.0
+        defs.front_right_light_sensor: SensorPosition(
+            forward_cm=14.2, strafe_cm=-5.45, clearance_cm=0.5
+        ),
+        defs.front_left_light_sensor: SensorPosition(
+            forward_cm=14.2, strafe_cm=11.55, clearance_cm=0.5
         ),
     }
     _wheel_positions = {
-        defs.front_left_motor: WheelPosition(forward_cm=6.0, strafe_cm=9.5),
-        defs.front_right_motor: WheelPosition(forward_cm=6.0, strafe_cm=-9.5),
-        defs.rear_left_motor: WheelPosition(forward_cm=-6.0, strafe_cm=9.5),
-        defs.rear_right_motor: WheelPosition(forward_cm=-6.0, strafe_cm=-9.5),
+        defs.front_left_motor: WheelPosition(forward_cm=6.25, strafe_cm=10.0),
+        defs.front_right_motor: WheelPosition(forward_cm=6.25, strafe_cm=-10.0),
+        defs.rear_left_motor: WheelPosition(forward_cm=-6.25, strafe_cm=10.0),
+        defs.rear_right_motor: WheelPosition(forward_cm=-6.25, strafe_cm=-10.0),
     }
 
 
