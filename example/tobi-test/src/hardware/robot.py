@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-23 15:36:43
+ Generated: 2026-02-23 16:01:56
 ===========================================================
 
 Authors:
@@ -111,15 +111,9 @@ class Robot(GenericRobot):
         heading_recovery_rate=0.05,
         heading_saturation_error_rad=0.01,
         heading_recovery_error_rad=0.005,
-        linear=AxisConstraints(
-            max_velocity=0.222, acceleration=0.2691, deceleration=0.6783
-        ),
-        lateral=AxisConstraints(
-            max_velocity=0.2145, acceleration=0.3922, deceleration=0.6504
-        ),
-        angular=AxisConstraints(
-            max_velocity=1.5864, acceleration=1.8933, deceleration=7.754
-        ),
+        linear=AxisConstraints(max_velocity=0.2, acceleration=0.2, deceleration=0.6),
+        lateral=AxisConstraints(max_velocity=0.2, acceleration=0.3, deceleration=0.6),
+        angular=AxisConstraints(max_velocity=1.0, acceleration=1.0, deceleration=4.0),
     )
     missions = [PotatoMission()]
     setup_mission = SetupMission()
