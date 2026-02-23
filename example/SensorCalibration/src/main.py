@@ -25,7 +25,7 @@ import libstp.foundation as logging
 
 robot = Robot()
 
-logging.set_global_level(logging.Level.trace)
+logging.set_global_level(logging.Level.info)
 
 if __name__ == "__main__":
    set_digital(10)
