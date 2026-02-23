@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-22 20:07:01
+ Generated: 2026-02-23 15:36:43
 ===========================================================
 
 Authors:
@@ -118,7 +118,7 @@ class Robot(GenericRobot):
             max_velocity=0.2145, acceleration=0.3922, deceleration=0.6504
         ),
         angular=AxisConstraints(
-            max_velocity=1.8103, acceleration=2.1106, deceleration=8.7947
+            max_velocity=1.5864, acceleration=1.8933, deceleration=7.754
         ),
     )
     missions = [PotatoMission()]
