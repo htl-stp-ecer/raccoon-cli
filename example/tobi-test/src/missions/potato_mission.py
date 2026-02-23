@@ -6,8 +6,9 @@ from libstp.step.sequential import Sequential, seq
 class PotatoMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
+            auto_tune()
             # turn_left(90),
-            turn_right(90),
+            # turn_right(90),
             # drive_forward(cm=50)
             # auto_tune(),
             # tune_drive(),

@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-23 16:01:56
+ Generated: 2026-02-23 16:02:34
 ===========================================================
 
 Authors:
@@ -89,7 +89,7 @@ class Robot(GenericRobot):
             output_max=10.0,
         ),
         heading=PidConfig(
-            kp=1.0,
+            kp=0.65,
             ki=0.0,
             kd=0.2,
             integral_max=10.0,
