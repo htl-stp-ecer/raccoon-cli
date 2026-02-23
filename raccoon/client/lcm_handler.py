@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from typing import Callable, Optional
 
 from websocket import WebSocket, create_connection
 from rich.console import Console
+
+from raccoon.server.services.lcm_spy import decode_lcm_message
 
 
 class LcmOutputHandler:
@@ -91,6 +94,17 @@ class LcmOutputHandler:
                     # Regular LCM message
                     self._message_count += 1
                     self._channels_seen.add(data.get("channel", ""))
+
+                    # Client-side decoding fallback if server didn't decode
+                    if not data.get("decoded") and data.get("data_base64"):
+                        try:
+                            raw = base64.b64decode(data["data_base64"])
+                            decoded = decode_lcm_message(raw, data.get("channel", ""))
+                            if decoded:
+                                data["decoded"] = decoded
+                        except Exception:
+                            pass
+
                     self._display_message(console, data)
                     if on_message:
                         on_message(data)
