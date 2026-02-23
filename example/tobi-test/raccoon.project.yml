@@ -42,7 +42,7 @@ robot:
       bemf_trust: 1.0
   motion_pid:
     distance:
-      kp: 1.0
+      kp: 1.25
       ki: 0.0
       kd: 0.5
       integral_max: 10.0
@@ -51,9 +51,9 @@ robot:
       output_min: -10.0
       output_max: 10.0
     heading:
-      kp: 0.65
+      kp: 1.7063
       ki: 0.0
-      kd: 0.2
+      kd: 0.25
       integral_max: 10.0
       integral_deadband: 0.01
       derivative_lpf_alpha: 0.5
