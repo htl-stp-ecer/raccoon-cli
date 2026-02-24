@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-24 09:00:15
+ Generated: 2026-02-24 09:17:01
 ===========================================================
 
 Authors:
@@ -68,7 +68,7 @@ class Robot(GenericRobot):
                 ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
             ),
             wz=AxisVelocityControlConfig(
-                pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
+                pid=PidGains(kp=0.026326, ki=0.538376, kd=0.004194),
                 ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
             ),
         ),
@@ -81,7 +81,7 @@ class Robot(GenericRobot):
         distance=PidConfig(
             kp=1.25,
             ki=0.0,
-            kd=0.5,
+            kd=0.4922,
             integral_max=10.0,
             integral_deadband=0.01,
             derivative_lpf_alpha=0.5,
@@ -89,7 +89,7 @@ class Robot(GenericRobot):
             output_max=10.0,
         ),
         heading=PidConfig(
-            kp=1.7063,
+            kp=2.1195,
             ki=0.0,
             kd=0.25,
             integral_max=10.0,
@@ -111,9 +111,13 @@ class Robot(GenericRobot):
         heading_recovery_rate=0.05,
         heading_saturation_error_rad=0.01,
         heading_recovery_error_rad=0.005,
-        linear=AxisConstraints(max_velocity=0.2, acceleration=0.2, deceleration=0.6),
+        linear=AxisConstraints(
+            max_velocity=0.2197, acceleration=0.3635, deceleration=2.982
+        ),
         lateral=AxisConstraints(max_velocity=0.2, acceleration=0.3, deceleration=0.6),
-        angular=AxisConstraints(max_velocity=1.0, acceleration=1.0, deceleration=4.0),
+        angular=AxisConstraints(
+            max_velocity=1.8428, acceleration=1.714, deceleration=4.0
+        ),
     )
     missions = [PotatoMission()]
     setup_mission = SetupMission()
