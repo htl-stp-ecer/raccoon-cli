@@ -75,7 +75,7 @@ robot:
     linear:
       max_velocity: 0.2076
       acceleration: 0.3414
-      deceleration: 0.3579
+      deceleration: 1.6579
     lateral:
       max_velocity: 0.2
       acceleration: 0.3
@@ -83,7 +83,7 @@ robot:
     angular:
       max_velocity: 1.7579
       acceleration: 4.1484
-      deceleration: 4.3428
+      deceleration: 16.3428
   physical:
     width_cm: 13.0
     length_cm: 19.0
