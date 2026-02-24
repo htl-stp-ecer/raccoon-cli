@@ -10,7 +10,7 @@ class PotatoMission(Mission):
             #turn_left(90),
             #turn_right(90),
             drive_forward(cm=50),
-            drive_backward(cm=50)
+            #drive_backward(cm=50)
             # auto_tune(),
             # tune_drive(),
             # characterize_drive(
