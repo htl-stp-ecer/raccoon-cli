@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-23 16:02:34
+ Generated: 2026-02-24 09:00:15
 ===========================================================
 
 Authors:
@@ -79,7 +79,7 @@ class Robot(GenericRobot):
     )
     motion_pid_config = UnifiedMotionPidConfig(
         distance=PidConfig(
-            kp=1.0,
+            kp=1.25,
             ki=0.0,
             kd=0.5,
             integral_max=10.0,
@@ -89,9 +89,9 @@ class Robot(GenericRobot):
             output_max=10.0,
         ),
         heading=PidConfig(
-            kp=0.65,
+            kp=1.7063,
             ki=0.0,
-            kd=0.2,
+            kd=0.25,
             integral_max=10.0,
             integral_deadband=0.01,
             derivative_lpf_alpha=0.5,

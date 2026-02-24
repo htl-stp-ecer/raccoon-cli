@@ -1,4 +1,4 @@
-from libstp import drive_forward, auto_tune, turn_right
+from libstp import turn_left
 from libstp.mission.api import Mission
 from libstp.step.sequential import Sequential, seq
 
