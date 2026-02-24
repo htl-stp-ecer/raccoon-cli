@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-24 16:27:41
+ Generated: 2026-02-24 16:29:37
 ===========================================================
 
 Authors:
@@ -99,7 +99,7 @@ class Robot(GenericRobot):
             output_max=10.0,
         ),
         velocity_ff=1.0,
-        distance_tolerance_m=0.005,
+        distance_tolerance_m=0.01,
         angle_tolerance_rad=0.017,
         saturation_derating_factor=0.85,
         saturation_min_scale=0.2,
