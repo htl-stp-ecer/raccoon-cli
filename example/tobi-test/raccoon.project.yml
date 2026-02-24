@@ -11,9 +11,9 @@ robot:
     vel_config:
       vx:
         pid:
-          kp: 1.0
-          ki: 0.0
-          kd: 0.0
+          kp: 0.000179
+          ki: 0.107165
+          kd: 0.000168
         ff:
           kS: 0.0
           kV: 1.0
@@ -42,18 +42,18 @@ robot:
       bemf_trust: 1.0
   motion_pid:
     distance:
-      kp: 1.25
+      kp: 2.3438
       ki: 0.0
-      kd: 0.4922
+      kd: 1.3536
       integral_max: 10.0
       integral_deadband: 0.01
       derivative_lpf_alpha: 0.5
       output_min: -10.0
       output_max: 10.0
     heading:
-      kp: 2.1195
+      kp: 2.6494
       ki: 0.0
-      kd: 0.25
+      kd: 0.3438
       integral_max: 10.0
       integral_deadband: 0.01
       derivative_lpf_alpha: 0.5
@@ -73,17 +73,17 @@ robot:
     heading_saturation_error_rad: 0.01
     heading_recovery_error_rad: 0.005
     linear:
-      max_velocity: 0.2197
-      acceleration: 0.3635
-      deceleration: 2.982
+      max_velocity: 0.2076
+      acceleration: 0.3414
+      deceleration: 0.3579
     lateral:
       max_velocity: 0.2
       acceleration: 0.3
       deceleration: 0.6
     angular:
-      max_velocity: 1.8428
-      acceleration: 1.714
-      deceleration: 4.0
+      max_velocity: 1.7579
+      acceleration: 4.1484
+      deceleration: 4.3428
   physical:
     width_cm: 13.0
     length_cm: 19.0
