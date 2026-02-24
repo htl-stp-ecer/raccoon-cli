@@ -29,9 +29,9 @@ robot:
           kA: 0.0
       wz:
         pid:
-          kp: 0.65
-          ki: 0.0
-          kd: 0.0
+          kp: 0.026326
+          ki: 0.538376
+          kd: 0.004194
         ff:
           kS: 0.0
           kV: 1.0
@@ -44,14 +44,14 @@ robot:
     distance:
       kp: 1.25
       ki: 0.0
-      kd: 0.5
+      kd: 0.4922
       integral_max: 10.0
       integral_deadband: 0.01
       derivative_lpf_alpha: 0.5
       output_min: -10.0
       output_max: 10.0
     heading:
-      kp: 1.7063
+      kp: 2.1195
       ki: 0.0
       kd: 0.25
       integral_max: 10.0
@@ -73,16 +73,16 @@ robot:
     heading_saturation_error_rad: 0.01
     heading_recovery_error_rad: 0.005
     linear:
-      max_velocity: 0.2
-      acceleration: 0.2
-      deceleration: 0.6
+      max_velocity: 0.2197
+      acceleration: 0.3635
+      deceleration: 2.982
     lateral:
       max_velocity: 0.2
       acceleration: 0.3
       deceleration: 0.6
     angular:
-      max_velocity: 1.0
-      acceleration: 1.0
+      max_velocity: 1.8428
+      acceleration: 1.714
       deceleration: 4.0
   physical:
     width_cm: 13.0
