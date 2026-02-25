@@ -73,17 +73,17 @@ robot:
     heading_saturation_error_rad: 0.01
     heading_recovery_error_rad: 0.005
     linear:
-      max_velocity: 0.2076
-      acceleration: 0.3414
+      max_velocity: 0.156
+      acceleration: 0.0574
       deceleration: 1.6579
     lateral:
       max_velocity: 0.2
       acceleration: 0.3
       deceleration: 0.6
     angular:
-      max_velocity: 1.7579
-      acceleration: 4.1484
-      deceleration: 16.3428
+      max_velocity: 1.6995
+      acceleration: 3.4553
+      deceleration: 7.4978
   physical:
     width_cm: 13.0
     length_cm: 19.0
