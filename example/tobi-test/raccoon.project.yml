@@ -83,7 +83,7 @@ robot:
     angular:
       max_velocity: 1.672
       acceleration: 6.1266
-      deceleration: 12.3094
+      deceleration: 4.3094
   physical:
     width_cm: 13.0
     length_cm: 19.0
