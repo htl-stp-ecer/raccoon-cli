@@ -1,11 +1,18 @@
-from libstp import turn_left, auto_tune, drive_forward, turn_right, drive_backward
+from libstp import turn_left, auto_tune, drive_forward, turn_right, drive_backward, follow_line
 from libstp.mission.api import Mission
 from libstp.step.sequential import Sequential, seq
+
+from hardware.defs import Defs
 
 
 class PotatoMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
+            follow_line(
+                Defs.front_left_ir_sensor,
+                Defs.front_right_ir_sensor,
+                distance_cm=50
+            )
             #auto_tune()
             #turn_left(90),
             #turn_right(90),
