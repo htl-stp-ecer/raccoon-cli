@@ -4,6 +4,7 @@ import libstp.foundation as logging
 
 class LoggingStep(Step):
     async def _execute_step(self, robot: "GenericRobot") -> None:
+        pass
         #logging.set_global_level(logging.Level.trace)
         #logging.set_file_level("LcmReader.cpp", logging.Level.info)
         # logging.set_file_level("turn_motion.cpp", logging.Level.trace)
