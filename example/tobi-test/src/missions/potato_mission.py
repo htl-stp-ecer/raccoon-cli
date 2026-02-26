@@ -9,7 +9,7 @@ from src.steps.logging_step import LoggingStep
 class PotatoMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
-            LoggingStep(),
+            #LoggingStep(),
             # follow_line(
             #     Defs.front_left_ir_sensor,
             #     Defs.front_right_ir_sensor,
