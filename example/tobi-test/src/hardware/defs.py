@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-26 16:21:45
+ Generated: 2026-02-26 16:29:40
 ===========================================================
 
 Authors:
@@ -20,7 +20,7 @@ class Defs:
     imu = Imu(
         gyro_orientation=[0, 0, -1, 1, 0, 0, 0, -1, 0],
         compass_orientation=[0, 0, -1, 0, 1, 0, 1, 0, 0],
-        axis_remap=[1, 0, 0, 0, 0, 1, 0, 1, 0],
+        axis_remap=[1, 0, 0, 0, 1, 0, 0, 0, 1],
     )
     button = DigitalSensor(port=10)
     front_left_motor = Motor(
