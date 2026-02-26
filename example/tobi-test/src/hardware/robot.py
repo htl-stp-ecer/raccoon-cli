@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-26 19:02:17
+ Generated: 2026-02-26 19:03:55
 ===========================================================
 
 Authors:
@@ -77,7 +77,7 @@ class Robot(GenericRobot):
     odometry = FusedOdometry(
         imu=defs.imu,
         kinematics=kinematics,
-        config=FusedOdometryConfig(bemf_trust=1.0, turn_axis="body_z"),
+        config=FusedOdometryConfig(bemf_trust=1.0, turn_axis="body_y"),
     )
     motion_pid_config = UnifiedMotionPidConfig(
         distance=PidConfig(
