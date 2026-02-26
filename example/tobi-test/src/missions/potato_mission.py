@@ -2,7 +2,7 @@ from libstp import turn_left, auto_tune, drive_forward, turn_right, drive_backwa
 from libstp.mission.api import Mission
 from libstp.step.sequential import Sequential, seq
 
-from hardware.defs import Defs
+from src.hardware.defs import Defs
 
 
 class PotatoMission(Mission):
