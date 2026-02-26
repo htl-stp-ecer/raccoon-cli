@@ -117,14 +117,14 @@ definitions:
     port: 0
     inverted: false
     calibration:
-      ticks_to_rad: 1.8923704914587742e-05
+      ticks_to_rad: 1.9043457414093067e-05
       vel_lpf_alpha: 1.0
   front_right_motor:
     type: Motor
     port: 1
     inverted: false
     calibration:
-      ticks_to_rad: 1.6748354256425945e-05
+      ticks_to_rad: 1.6848112241905584e-05
       vel_lpf_alpha: 1.0
   imu:
     type: IMU
