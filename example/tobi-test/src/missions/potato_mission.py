@@ -3,7 +3,7 @@ from libstp.mission.api import Mission
 from libstp.step.sequential import Sequential, seq
 
 from src.hardware.defs import Defs
-from steps.logging_step import LoggingStep
+from src.steps.logging_step import LoggingStep
 
 
 class PotatoMission(Mission):
