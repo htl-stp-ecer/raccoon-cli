@@ -40,9 +40,6 @@ robot:
     type: FusedOdometry
     config:
       bemf_trust: 1.0
-      world_x: body_x
-      world_y: body_z
-      world_z: body_y
   motion_pid:
     distance:
       kp: 2.3438
@@ -149,6 +146,16 @@ definitions:
     - 0
     - 1
     - 0
+    - 0
+    axis_remap:
+    - 1
+    - 0
+    - 0
+    - 0
+    - 0
+    - 1
+    - 0
+    - 1
     - 0
   front_left_ir_sensor:
     type: IRSensor

@@ -77,9 +77,7 @@ class Robot(GenericRobot):
     odometry = FusedOdometry(
         imu=defs.imu,
         kinematics=kinematics,
-        config=FusedOdometryConfig(
-            bemf_trust=1.0, world_x="body_x", world_y="body_z", world_z="body_y"
-        ),
+        config=FusedOdometryConfig(bemf_trust=1.0),
     )
     motion_pid_config = UnifiedMotionPidConfig(
         distance=PidConfig(

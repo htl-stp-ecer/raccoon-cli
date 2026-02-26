@@ -20,6 +20,7 @@ class Defs:
     imu = Imu(
         gyro_orientation=[0, 0, -1, 1, 0, 0, 0, -1, 0],
         compass_orientation=[0, 0, -1, 0, 1, 0, 1, 0, 0],
+        axis_remap=[1, 0, 0, 0, 0, 1, 0, 1, 0],
     )
     button = DigitalSensor(port=10)
     front_left_motor = Motor(
