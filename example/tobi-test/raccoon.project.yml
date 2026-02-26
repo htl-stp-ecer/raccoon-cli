@@ -73,17 +73,17 @@ robot:
     heading_saturation_error_rad: 0.01
     heading_recovery_error_rad: 0.005
     linear:
-      max_velocity: 0.1369
-      acceleration: 0.7735
+      max_velocity: 0.1439
+      acceleration: 1.514
       deceleration: 1.6579
     lateral:
       max_velocity: 0.2
       acceleration: 0.3
       deceleration: 0.6
     angular:
-      max_velocity: 1.7942
-      acceleration: 2.1476
-      deceleration: 12.9603
+      max_velocity: 1.672
+      acceleration: 6.1266
+      deceleration: 12.3094
   physical:
     width_cm: 13.0
     length_cm: 19.0
@@ -127,6 +127,26 @@ definitions:
       vel_lpf_alpha: 1.0
   imu:
     type: IMU
+    gyro_orientation:
+    - 1
+    - 0
+    - 0
+    - 0
+    - 0
+    - -1
+    - 0
+    - 1
+    - 0
+    compass_orientation:
+    - 1
+    - 0
+    - 0
+    - 0
+    - 1
+    - 0
+    - 0
+    - 0
+    - 1
   front_left_ir_sensor:
     type: IRSensor
     port: 0
@@ -134,7 +154,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 192.168.100.81
+  pi_address: 10.70.146.134
   pi_port: 8421
   pi_user: pi
   remote_path: null

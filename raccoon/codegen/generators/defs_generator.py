@@ -6,7 +6,7 @@ import logging
 from typing import Any, Dict
 
 from .base import BaseGenerator
-from ..builder import build_constructor_expr
+from ..builder import build_constructor_expr, build_literal_expr
 from ..class_builder import ClassBuilder
 from ..introspection import resolve_class
 from ..yaml_resolver import create_hardware_resolver
@@ -117,13 +117,18 @@ class DefsGenerator(BaseGenerator):
         self._ensure_analog_sensor_class()
         self._analog_sensor_fields = []
 
+        # Build IMU attribute — use config if provided, otherwise bare Imu()
+        imu_cfg = data.get("imu", {})
+        imu_params = {k: v for k, v in imu_cfg.items() if k != "type"}
+        if imu_params:
+            imu_expr = self._build_imu_expr(imu_params)
+        else:
+            imu_expr = "Imu()"
+
         # Build class attributes
-        attributes = [("imu", "Imu()")]
+        attributes = [("imu", imu_expr)]
         for field_name, hw_cfg in data.items():
             if field_name == "imu":
-                logger.info(
-                    "definitions.imu is generated automatically; ignoring configuration entry"
-                )
                 continue
 
             logger.info(f"Processing definition: {field_name}")
@@ -153,6 +158,13 @@ class DefsGenerator(BaseGenerator):
 
         # Use ClassBuilder to construct the class
         return ClassBuilder.build_simple_class(self.class_name, attributes)
+
+    def _build_imu_expr(self, params: Dict[str, Any]) -> str:
+        """Build IMU constructor expression from config params."""
+        pieces = []
+        for name, value in params.items():
+            pieces.append(f"{name}={build_literal_expr(value)}")
+        return "Imu(" + ", ".join(pieces) + ")"
 
     def _ensure_analog_sensor_class(self) -> None:
         """Resolve the AnalogSensor class for isinstance checking."""
