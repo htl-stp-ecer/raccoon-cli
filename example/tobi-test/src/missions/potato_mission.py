@@ -4,7 +4,6 @@ from libstp.step.sequential import Sequential, seq
 
 from src.hardware.defs import Defs
 
-
 class PotatoMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
