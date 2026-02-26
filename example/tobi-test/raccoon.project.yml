@@ -40,6 +40,7 @@ robot:
     type: FusedOdometry
     config:
       bemf_trust: 1.0
+      turn_axis: body_y
   motion_pid:
     distance:
       kp: 2.3438
@@ -116,14 +117,14 @@ definitions:
     port: 0
     inverted: false
     calibration:
-      ticks_to_rad: 1.7476089787969865e-05
+      ticks_to_rad: 1.763543279520186e-05
       vel_lpf_alpha: 1.0
   front_right_motor:
     type: Motor
     port: 1
     inverted: false
     calibration:
-      ticks_to_rad: 1.5446809791209224e-05
+      ticks_to_rad: 1.560544058108006e-05
       vel_lpf_alpha: 1.0
   imu:
     type: IMU
