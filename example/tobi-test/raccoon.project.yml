@@ -41,8 +41,8 @@ robot:
     config:
       bemf_trust: 1.0
       world_x: body_x
-      world_y: body_y
-      world_z: body_z
+      world_y: body_z
+      world_z: body_y
   motion_pid:
     distance:
       kp: 2.3438
