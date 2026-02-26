@@ -81,9 +81,9 @@ robot:
       acceleration: 0.3
       deceleration: 0.6
     angular:
-      max_velocity: 1.672
-      acceleration: 6.1266
-      deceleration: 4.3094
+      max_velocity: 1.0
+      acceleration: 6.0
+      deceleration: 4.0
   physical:
     width_cm: 13.0
     length_cm: 19.0
