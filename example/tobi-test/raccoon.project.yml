@@ -81,9 +81,9 @@ robot:
       acceleration: 0.3
       deceleration: 0.6
     angular:
-      max_velocity: 1.0
-      acceleration: 6.0
-      deceleration: 4.0
+      max_velocity: 0.5
+      acceleration: 1.0
+      deceleration: 1.0
   physical:
     width_cm: 13.0
     length_cm: 19.0
@@ -128,25 +128,25 @@ definitions:
   imu:
     type: IMU
     gyro_orientation:
+    - 0
+    - 0
+    - -1
     - 1
     - 0
     - 0
+    - 0
+    - -1
+    - 0
+    compass_orientation:
     - 0
     - 0
     - -1
     - 0
     - 1
     - 0
-    compass_orientation:
     - 1
     - 0
     - 0
-    - 0
-    - 1
-    - 0
-    - 0
-    - 0
-    - 1
   front_left_ir_sensor:
     type: IRSensor
     port: 0
