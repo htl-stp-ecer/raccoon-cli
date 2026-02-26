@@ -152,11 +152,11 @@ definitions:
     - 0
     - 0
     - 0
-    - 0
     - 1
     - 0
-    - 1
     - 0
+    - 0
+    - 1
   front_left_ir_sensor:
     type: IRSensor
     port: 0
