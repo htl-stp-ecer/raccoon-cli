@@ -40,7 +40,6 @@ robot:
     type: FusedOdometry
     config:
       bemf_trust: 1.0
-      turn_axis: -body_z
   motion_pid:
     distance:
       kp: 2.3438
