@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-27 12:29:48
+ Generated: 2026-02-28 18:55:48
 ===========================================================
 
 Authors:
@@ -17,7 +17,11 @@ from libstp import IMU as Imu
 
 
 class Defs:
-    imu = Imu()
+    imu = Imu(
+        gyro_orientation=[0, 0, -1, 1, 0, 0, 0, -1, 0],
+        compass_orientation=[0, 0, -1, 0, 1, 0, 1, 0, 0],
+        axis_remap=[1, 0, 0, 0, 1, 0, 0, 0, 1],
+    )
     button = DigitalSensor(port=10)
     front_left_motor = Motor(
         port=1,

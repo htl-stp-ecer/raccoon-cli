@@ -2,9 +2,9 @@
   "entries": {
     "defs.py": {
       "config_hash": "12a280dc243ace51dd70f99b25e6ee6768abef318a3a86bf976beda3aa1e61d6",
-      "fingerprint": "7f6f389b252e84c5f809ea6b7d991dbe5da5cf0df1bd8e1f09bf8dbdaa54ebb7",
+      "fingerprint": "dcdb5f12754e37f74d15669edf5035a604956128c9fad2650c03c1f8f25be840",
       "format_code": true,
-      "generator_source": "6b4454ea4f2c179dd093606039d35cf09f3628e5833f5674b66b16758bd47aac"
+      "generator_source": "71afd93fca2b4d121ca2ae1a018eed96371db1727b8f54b85b67d79ba1be80cd"
     },
     "robot.py": {
       "config_hash": "7c14023e968575ae4fe628983eeca2efe0fa4efd8aa652d5b30acaebbd206ca9",
