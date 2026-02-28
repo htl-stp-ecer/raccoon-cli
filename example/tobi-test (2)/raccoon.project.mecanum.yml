@@ -3,24 +3,27 @@ uuid: 21e5bb71-a37d-4a2f-99ed-ad10963fe875
 robot:
   drive:
     kinematics:
-      type: differential
-      wheel_radius: 0.035
-      wheelbase: 0.17
-      left_motor: front_left_motor
-      right_motor: front_right_motor
+      type: mecanum
+      wheel_radius: 0.0295
+      track_width: 0.19
+      wheelbase: 0.12
+      front_left_motor: front_left_motor
+      front_right_motor: front_right_motor
+      back_left_motor: rear_left_motor
+      back_right_motor: rear_right_motor
     vel_config:
       vx:
         pid:
-          kp: 0.000179
-          ki: 0.107165
-          kd: 0.000168
+          kp: 0.0
+          ki: 0.0
+          kd: 0.0
         ff:
           kS: 0.0
           kV: 1.0
           kA: 0.0
       vy:
         pid:
-          kp: 1.0
+          kp: 0.0
           ki: 0.0
           kd: 0.0
         ff:
@@ -29,9 +32,9 @@ robot:
           kA: 0.0
       wz:
         pid:
-          kp: 0.026326
-          ki: 0.538376
-          kd: 0.004194
+          kp: 0.65
+          ki: 0.0
+          kd: 0.0
         ff:
           kS: 0.0
           kV: 1.0
@@ -39,29 +42,28 @@ robot:
   odometry:
     type: FusedOdometry
     config:
-      bemf_trust: 1.0
-      turn_axis: -body_y
+      bemf_trust: 0.8
   motion_pid:
     distance:
-      kp: 2.3438
+      kp: 1.0
       ki: 0.0
-      kd: 1.3536
+      kd: 0.5
       integral_max: 10.0
       integral_deadband: 0.01
       derivative_lpf_alpha: 0.5
       output_min: -10.0
       output_max: 10.0
     heading:
-      kp: 2.6494
+      kp: 1.0
       ki: 0.0
-      kd: 0.3438
+      kd: 0.2
       integral_max: 10.0
       integral_deadband: 0.01
       derivative_lpf_alpha: 0.5
       output_min: -10.0
       output_max: 10.0
     velocity_ff: 1.0
-    distance_tolerance_m: 0.01
+    distance_tolerance_m: 0.005
     angle_tolerance_rad: 0.017
     saturation_derating_factor: 0.85
     saturation_min_scale: 0.2
@@ -74,23 +76,23 @@ robot:
     heading_saturation_error_rad: 0.01
     heading_recovery_error_rad: 0.005
     linear:
-      max_velocity: 0.1439
-      acceleration: 1.514
-      deceleration: 1.6579
+      max_velocity: 0.2153
+      acceleration: 0.3333
+      deceleration: 0.6229
     lateral:
-      max_velocity: 0.2
-      acceleration: 0.3
-      deceleration: 0.6
+      max_velocity: 0.2145
+      acceleration: 0.3922
+      deceleration: 0.6504
     angular:
-      max_velocity: 0.5
-      acceleration: 1.0
-      deceleration: 1.0
+      max_velocity: 1.5864
+      acceleration: 1.8933
+      deceleration: 7.754
   physical:
     width_cm: 13.0
     length_cm: 19.0
     sensors:
     - name: front_left_ir_sensor
-      x_cm: 3.2
+      x_cm: 3.0
       y_cm: 17.0
       clearance_cm: 1.0
     - name: front_right_ir_sensor
@@ -114,50 +116,34 @@ definitions:
     port: 10
   front_left_motor:
     type: Motor
-    port: 1
-    inverted: true
-    calibration:
-      ticks_to_rad: 1.9207186745891887e-05
-      vel_lpf_alpha: 1.0
-  front_right_motor:
-    type: Motor
     port: 0
     inverted: false
     calibration:
-      ticks_to_rad: 1.6985752418623237e-05
+      ticks_to_rad: 1.7623667680813118e-05
+      vel_lpf_alpha: 1.0
+  front_right_motor:
+    type: Motor
+    port: 1
+    inverted: false
+    calibration:
+      ticks_to_rad: 1.392706010079093e-05
+      vel_lpf_alpha: 1.0
+  rear_left_motor:
+    type: Motor
+    port: 2
+    inverted: false
+    calibration:
+      ticks_to_rad: 1.5823734931161142e-05
+      vel_lpf_alpha: 1.0
+  rear_right_motor:
+    type: Motor
+    port: 3
+    inverted: false
+    calibration:
+      ticks_to_rad: 1.734218369071362e-05
       vel_lpf_alpha: 1.0
   imu:
     type: IMU
-    gyro_orientation:
-    - 0
-    - 0
-    - -1
-    - 1
-    - 0
-    - 0
-    - 0
-    - -1
-    - 0
-    compass_orientation:
-    - 0
-    - 0
-    - -1
-    - 0
-    - 1
-    - 0
-    - 1
-    - 0
-    - 0
-    axis_remap:
-    - 1
-    - 0
-    - 0
-    - 0
-    - 1
-    - 0
-    - 0
-    - 0
-    - 1
   front_left_ir_sensor:
     type: IRSensor
     port: 0
