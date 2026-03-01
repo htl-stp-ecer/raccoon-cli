@@ -31,7 +31,7 @@ except ImportError:
 # Try to import exlcm types for message decoding
 EXLCM_TYPES: dict[str, Any] = {}
 try:
-    from raccoon_transport.types import exlcm
+    from raccoon_transport.types import raccoon as exlcm
 
     # Discover all message types in the exlcm module
     for name in dir(exlcm):

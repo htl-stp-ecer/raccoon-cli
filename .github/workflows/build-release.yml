@@ -4,9 +4,12 @@ on:
   push:
     branches: [main]
 
+env:
+  VERSION: "0.1.${{ github.run_number }}"
+
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: write
 
@@ -33,33 +36,66 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-${{ hashFiles('pyproject.toml') }}
+          key: pip-${{ hashFiles('pyproject.toml', 'raccoon-transport/python/pyproject.toml') }}
           restore-keys: pip-
 
       - name: Install build tools
         run: pip install build wheel setuptools
 
-      - name: Build wheel & sdist
-        run: python -m build
+      # --- Build raccoon-transport wheel first ---
+      # Patch version in submodule at build time (submodule files stay clean in git)
+      - name: Patch raccoon-transport version
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ env.VERSION }}"/' raccoon-transport/python/pyproject.toml
+
+      - name: Build raccoon-transport wheel
+        run: |
+          cd raccoon-transport/python
+          python -m build --wheel
+
+      - name: Install raccoon-transport (build dependency)
+        run: pip install raccoon-transport/python/dist/raccoon_transport-*.whl
+
+      # --- Build raccoon wheel (includes web-IDE) ---
+      - name: Build raccoon wheel
+        run: python -m build --wheel
         env:
           BUILD_NUMBER: ${{ github.run_number }}
 
-      - name: Bundle release
+      # --- Bundle server tarball (wheels + install.sh for Pi) ---
+      - name: Bundle server release
         run: |
-          mkdir -p release
-          cp dist/*.whl release/
-          cp dist/*.tar.gz release/ 2>/dev/null || true
-          cp install.sh release/ 2>/dev/null || true
-          cd release && tar czf ../raccoon-v${{ env.VERSION }}.tar.gz *
-        env:
-          VERSION: "0.1.${{ github.run_number }}"
+          mkdir -p server-release
+          cp raccoon-transport/python/dist/raccoon_transport-*.whl server-release/
+          cp dist/raccoon-*.whl server-release/
+          cp install.sh server-release/
+          cd server-release && tar czf ../raccoon-server-v${{ env.VERSION }}.tar.gz *
 
+      # --- Create GitHub Release ---
+      # Artifacts:
+      #   - raccoon-*.whl               (laptop: pip install <url>)
+      #   - raccoon_transport-*.whl      (laptop: pip install <url>)
+      #   - raccoon-server-v*.tar.gz     (Pi: extract + ./install.sh)
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.${{ github.run_number }}
-          name: v0.1.${{ github.run_number }}
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
           generate_release_notes: true
+          body: |
+            ## Install
+
+            **Laptop** (pip install from release):
+            ```bash
+            pip install https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/raccoon_transport-${{ env.VERSION }}-py3-none-any.whl https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/raccoon-${{ env.VERSION }}-py3-none-any.whl
+            ```
+
+            **Pi server** (download tarball, extract, run install.sh):
+            ```bash
+            tar xzf raccoon-server-v${{ env.VERSION }}.tar.gz
+            RPI_HOST=192.168.4.1 ./install.sh
+            ```
           files: |
-            raccoon-v0.1.${{ github.run_number }}.tar.gz
-            dist/*.whl
+            dist/raccoon-*.whl
+            raccoon-transport/python/dist/raccoon_transport-*.whl
+            raccoon-server-v${{ env.VERSION }}.tar.gz

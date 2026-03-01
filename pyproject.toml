@@ -28,8 +28,11 @@ dependencies = [
     # IDE backend dependencies
     "libcst>=1.0.0",
     "pydantic>=2.0",
-    # LCM message types & transport (from submodule)
-    "raccoon-transport @ file:raccoon-transport/python",
+    # LCM message types & transport
+    # Not listed here because pip resolves the name to the local raccoon-transport/
+    # directory which has no root pyproject.toml. Install separately:
+    #   pip install -e raccoon-transport/python
+    "lcm",
 ]
 
 [project.scripts]
