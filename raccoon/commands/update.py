@@ -247,8 +247,16 @@ def _update_laptop(
 
         result = subprocess.run(pip_args, capture_output=True, text=True)
         if result.returncode != 0:
-            console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
-            return
+            if "externally-managed-environment" in result.stderr:
+                console.print("[yellow]System Python detected — retrying with --break-system-packages[/yellow]")
+                pip_args.insert(2, "--break-system-packages")
+                result = subprocess.run(pip_args, capture_output=True, text=True)
+                if result.returncode != 0:
+                    console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
+                    return
+            else:
+                console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
+                return
 
         console.print("[green]Laptop packages updated successfully.[/green]")
 
