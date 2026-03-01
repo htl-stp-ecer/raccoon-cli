@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raccoon"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Toolchain CLI for libstp projects"
 requires-python = ">=3.8"
 dependencies = [
@@ -33,6 +33,9 @@ dependencies = [
 [project.scripts]
 raccoon = "raccoon.cli:main"
 raccoon-server = "raccoon.server.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "raccoon._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]

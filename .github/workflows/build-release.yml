@@ -1,0 +1,65 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web-ide/package-lock.json
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('pyproject.toml') }}
+          restore-keys: pip-
+
+      - name: Install build tools
+        run: pip install build wheel setuptools
+
+      - name: Build wheel & sdist
+        run: python -m build
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+
+      - name: Bundle release
+        run: |
+          mkdir -p release
+          cp dist/*.whl release/
+          cp dist/*.tar.gz release/ 2>/dev/null || true
+          cp install.sh release/ 2>/dev/null || true
+          cd release && tar czf ../raccoon-v${{ env.VERSION }}.tar.gz *
+        env:
+          VERSION: "0.1.${{ github.run_number }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.${{ github.run_number }}
+          name: v0.1.${{ github.run_number }}
+          generate_release_notes: true
+          files: |
+            raccoon-v0.1.${{ github.run_number }}.tar.gz
+            dist/*.whl
