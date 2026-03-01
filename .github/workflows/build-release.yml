@@ -85,13 +85,30 @@ jobs:
           body: |
             ## Install
 
-            **Laptop** (pip install from release):
+            ### Laptop
+
+            Download both `.whl` files from this release, then:
             ```bash
-            pip install https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/raccoon_transport-${{ env.VERSION }}-py3-none-any.whl https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/raccoon-${{ env.VERSION }}-py3-none-any.whl
+            pip install raccoon_transport-*.whl raccoon-*.whl
             ```
 
-            **Pi server** (download tarball, extract, run install.sh):
+            Or via `gh` CLI:
             ```bash
+            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "*.whl"
+            pip install raccoon_transport-*.whl raccoon-*.whl
+            ```
+
+            ### Pi server
+
+            Download `raccoon-server-v${{ env.VERSION }}.tar.gz` from this release, then:
+            ```bash
+            tar xzf raccoon-server-v${{ env.VERSION }}.tar.gz
+            RPI_HOST=192.168.4.1 ./install.sh
+            ```
+
+            Or via `gh` CLI:
+            ```bash
+            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "raccoon-server-*.tar.gz"
             tar xzf raccoon-server-v${{ env.VERSION }}.tar.gz
             RPI_HOST=192.168.4.1 ./install.sh
             ```
