@@ -151,10 +151,9 @@ class DefsGenerator(BaseGenerator):
             )
             attributes.append((field_name, hw_expr))
 
-        # Add analog_sensors list if there are any
-        if self._analog_sensor_fields:
-            analog_list = "[" + ", ".join(self._analog_sensor_fields) + "]"
-            attributes.append(("analog_sensors", analog_list))
+        # Always add analog_sensors list (empty if no analog sensors found)
+        analog_list = "[" + ", ".join(self._analog_sensor_fields) + "]"
+        attributes.append(("analog_sensors", analog_list))
 
         # Use ClassBuilder to construct the class
         return ClassBuilder.build_simple_class(self.class_name, attributes)
