@@ -46,7 +46,7 @@ jobs:
       # Patch version in submodule at build time (submodule files stay clean in git)
       - name: Patch raccoon-transport version
         run: |
-          sed -i 's/^version = ".*"/version = "${{ env.VERSION }}"/' raccoon-transport/python/pyproject.toml
+          python -c "import pathlib, re; f=pathlib.Path('raccoon-transport/python/pyproject.toml'); f.write_text(re.sub(r'^version = \".*\"', 'version = \"${{ env.VERSION }}\"', f.read_text(), flags=re.MULTILINE))"
 
       - name: Build raccoon-transport wheel
         run: |
