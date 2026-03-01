@@ -1,11 +1,10 @@
-"""Custom setup to build web IDE and generate LCM types during pip install.
+"""Custom setup to build web IDE during pip install.
 
 Environment variables:
     RACCOON_SKIP_WEBIDE: Set to skip web-ide build entirely (e.g., for server-only installs on Pi)
 """
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -36,72 +35,10 @@ class WebIDEBuildError(Exception):
     pass
 
 
-def generate_lcm_types():
-    """Generate Python LCM types from .lcm definitions into raccoon/exlcm/."""
-    types_dir = ROOT_DIR / "lcm-messages" / "types"
-    target = ROOT_DIR / "raccoon" / "exlcm"
-
-    if not types_dir.exists():
-        raise RuntimeError(
-            "lcm-messages submodule not initialized. "
-            "Run: git submodule update --init"
-        )
-
-    lcm_files = sorted(types_dir.glob("*.lcm"))
-    if not lcm_files:
-        raise RuntimeError("No .lcm files found in lcm-messages/types/")
-
-    # Try lcm-gen directly, fall back to pre-generated files in submodule
-    try:
-        subprocess.check_call(
-            ["lcm-gen", "--python", "--ppath", str(ROOT_DIR / "lcm-messages")]
-            + [str(f) for f in lcm_files]
-        )
-    except FileNotFoundError:
-        # lcm-gen not installed — use pre-generated files from submodule
-        src = ROOT_DIR / "lcm-messages" / "exlcm"
-        if not src.exists() or not any(src.glob("*.py")):
-            raise RuntimeError(
-                "lcm-gen is not installed and lcm-messages/exlcm/ has no "
-                "pre-generated files. Install lcm-gen or run "
-                "generate-python-files.sh in the submodule first."
-            )
-
-    # Copy generated files into raccoon/exlcm/
-    src = ROOT_DIR / "lcm-messages" / "exlcm"
-    target.mkdir(parents=True, exist_ok=True)
-
-    # Remove stale files that no longer exist in source
-    for old in target.glob("*.py"):
-        if not (src / old.name).exists():
-            old.unlink()
-
-    for py_file in src.glob("*.py"):
-        shutil.copy2(py_file, target / py_file.name)
-
-    # lcm-gen emits `import exlcm` for cross-type references, but the
-    # package lives at raccoon.exlcm so we rewrite the imports.
-    for py_file in target.glob("*.py"):
-        text = py_file.read_text()
-        patched = re.sub(
-            r"^import exlcm$",
-            "from raccoon import exlcm",
-            text,
-            flags=re.MULTILINE,
-        )
-        if patched != text:
-            py_file.write_text(patched)
-
-    print(f"LCM types: copied {len(list(src.glob('*.py')))} files to {target}")
-
-
 class BuildWithExtras(build_py):
-    """Custom build command that generates LCM types and builds the web IDE."""
+    """Custom build command that builds the web IDE."""
 
     def run(self):
-        # Always generate LCM types
-        generate_lcm_types()
-
         # Skip web IDE build if explicitly requested (e.g., server-only install on Pi)
         if os.environ.get("RACCOON_SKIP_WEBIDE"):
             print("RACCOON_SKIP_WEBIDE set, skipping web IDE build")

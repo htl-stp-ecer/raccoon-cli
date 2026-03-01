@@ -5,9 +5,6 @@ build
 __pycache__
 .idea
 
-# Generated LCM types (built from lcm-messages submodule)
-raccoon/exlcm
-
 # Web IDE build artifacts
 raccoon/web-ide-dist
 web-ide/node_modules

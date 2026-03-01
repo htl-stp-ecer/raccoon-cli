@@ -64,8 +64,7 @@ raccoon/
 │   ├── app.py             # FastAPI application
 │   ├── routes/            # HTTP API endpoints
 │   └── services/          # Business logic (executor, project manager)
-├── templates/             # Jinja2 project scaffolding
-└── exlcm/                 # LCM message type definitions
+└── templates/             # Jinja2 project scaffolding
 ```
 
 ### Key Patterns

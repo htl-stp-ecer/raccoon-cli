@@ -1,6 +1,6 @@
-[submodule "lcm-messages"]
-	path = lcm-messages
-	url = git@github.com:htl-stp-ecer/lcm-messages.git
 [submodule "web-ide"]
 	path = web-ide
 	url = git@github.com:htl-stp-ecer/WebIDE.git
+[submodule "raccoon-transport"]
+	path = raccoon-transport
+	url = git@github.com:htl-stp-ecer/raccoon-transport.git

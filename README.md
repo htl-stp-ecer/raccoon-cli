@@ -211,8 +211,7 @@ raccoon/
 │   └── generators/     # Pluggable generators
 ├── client/             # Laptop-side (SSH, SFTP, HTTP client)
 ├── server/             # Pi-side FastAPI daemon
-├── templates/          # Jinja2 project templates
-└── exlcm/              # LCM message definitions
+└── templates/          # Jinja2 project templates
 ```
 
 ### Key Concepts
