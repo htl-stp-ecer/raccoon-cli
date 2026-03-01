@@ -50,6 +50,7 @@ jobs:
 
       - name: Build raccoon-transport wheel
         run: |
+          rm -rf raccoon-transport/python/dist
           cd raccoon-transport/python
           python -m build --wheel
 
@@ -58,7 +59,9 @@ jobs:
 
       # --- Build raccoon wheel (includes web-IDE) ---
       - name: Build raccoon wheel
-        run: python -m build --wheel
+        run: |
+          rm -rf dist
+          python -m build --wheel
         env:
           BUILD_NUMBER: ${{ github.run_number }}
 
