@@ -42,7 +42,7 @@ scp "$TRANSPORT_WHL" "$RACCOON_WHL" "$USER@$HOST:$REMOTE_TMP/"
 
 # --- Install ---
 echo "Installing..."
-ssh "$USER@$HOST" "sudo pip3 install --break-system-packages --force-reinstall $REMOTE_TMP/raccoon_transport-*.whl $REMOTE_TMP/raccoon-*.whl"
+ssh "$USER@$HOST" "sudo pip3 install --break-system-packages --force-reinstall --no-deps $REMOTE_TMP/raccoon_transport-*.whl $REMOTE_TMP/raccoon-*.whl && sudo pip3 install --break-system-packages $REMOTE_TMP/raccoon-*.whl"
 
 # --- Install & start systemd service ---
 echo "Configuring systemd service..."
