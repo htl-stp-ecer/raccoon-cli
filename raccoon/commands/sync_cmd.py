@@ -5,8 +5,6 @@ from rich.console import Console
 
 from raccoon.client.connection import (
     get_connection_manager,
-    VersionMismatchError,
-    print_version_mismatch_error,
     ParamikoVersionError,
     print_paramiko_version_error,
 )
@@ -62,9 +60,6 @@ def do_sync(
                     success = False
         except ParamikoVersionError as e:
             print_paramiko_version_error(e, console)
-            raise SystemExit(1)
-        except VersionMismatchError as e:
-            print_version_mismatch_error(e, console)
             raise SystemExit(1)
 
         if not success:

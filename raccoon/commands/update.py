@@ -15,9 +15,7 @@ from raccoon.client.connection import (
     get_connection_manager,
     check_paramiko_version,
     ParamikoVersionError,
-    VersionMismatchError,
     print_paramiko_version_error,
-    print_version_mismatch_error,
 )
 from raccoon.project import find_project_root
 from raccoon.version_checker import (
@@ -176,9 +174,6 @@ def _get_ssh_client(console: Console):
         success = manager.connect_sync(pi_address, pi_port, pi_user)
         if success:
             return manager.get_ssh_client()
-    except VersionMismatchError as e:
-        print_version_mismatch_error(e, console)
-        return None
     except Exception as e:
         console.print(f"[yellow]Could not connect to Pi: {e}[/yellow]")
         return None

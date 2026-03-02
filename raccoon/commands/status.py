@@ -12,7 +12,6 @@ from raccoon.client.connection import (
     get_connection_manager,
     check_paramiko_version,
     ParamikoVersionError,
-    VersionMismatchError,
 )
 from raccoon.client.api import create_api_client
 from raccoon.project import find_project_root, load_project_config
@@ -150,7 +149,7 @@ def _try_auto_connect(console, manager, project_root):
     try:
         console.print(f"[dim]Connecting to {pi_address}...[/dim]")
         manager.connect_sync(pi_address, pi_port, pi_user)
-    except (VersionMismatchError, Exception):
+    except Exception:
         pass
 
 
