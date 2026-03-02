@@ -94,21 +94,21 @@ robot:
       x_cm: 12.0
       y_cm: 17.75
     sensors:
-      - name: rear_left_light_sensor
-        x_cm: 2.7000000000000006
-        y_cm: 4.499999999999998
-        clearance_cm: 0.5
-      - name: front_right_light_sensor
-        x_cm: 19.7
-        y_cm: 29.0
-        clearance_cm: 0.5
-      - name: front_left_light_sensor
-        x_cm: 2.7000000000000006
-        y_cm: 29.0
-        clearance_cm: 0.5
+    - name: rear_left_light_sensor
+      x_cm: 2.7000000000000006
+      y_cm: 4.499999999999998
+      clearance_cm: 0.5
+    - name: front_right_light_sensor
+      x_cm: 19.7
+      y_cm: 29.0
+      clearance_cm: 0.5
+    - name: front_left_light_sensor
+      x_cm: 2.7000000000000006
+      y_cm: 29.0
+      clearance_cm: 0.5
 missions:
-  - SetupMission: setup
-  - ShutdownMission: shutdown
+- SetupMission: setup
+- ShutdownMission: shutdown
 definitions:
   button:
     type: DigitalSensor
