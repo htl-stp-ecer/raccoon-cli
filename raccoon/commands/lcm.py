@@ -575,7 +575,7 @@ async def _show_status(console: Console, manager) -> None:
         lcm_avail = "[green]yes[/green]" if lcm_info.get("lcm_available") else "[red]no[/red]"
         decode_avail = "[green]yes[/green]" if lcm_info.get("decoding_available") else "[yellow]no[/yellow]"
         known_types = lcm_info.get("known_types", [])
-        types_str = ", ".join(known_types) if known_types else "[dim]none (install exlcm)[/dim]"
+        types_str = ", ".join(known_types) if known_types else "[dim]none (install raccoon-transport)[/dim]"
 
         console.print(
             Panel(

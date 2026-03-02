@@ -1,3 +1,3 @@
 """Raccoon - Toolchain CLI for libstp projects."""
 
-__version__ = "0.1.0"
+from raccoon._version import __version__

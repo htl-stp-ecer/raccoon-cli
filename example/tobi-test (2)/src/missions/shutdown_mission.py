@@ -17,14 +17,8 @@ Note: This header credits the scaffold and tooling only - no copyright is
 claimed over the generated code itself.
 """
 
-from libstp import Mission, Sequential, seq, calibrate, wait_for_button
+from libstp import Mission, Sequential, seq
 
-
-class SetupMission(Mission):
+class ShutdownMission(Mission):
     def sequence(self) -> Sequential:
-        return seq([
-            #calibrate(distance_cm=50),
-
-            # calibrate_wait_for_light(Defs.front_left_ir_sensor)
-            #wait_for_button()
-        ])
+        return seq([])

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -20,7 +21,9 @@ from raccoon.project import ProjectError, load_project_config, require_project
 logger = logging.getLogger("raccoon")
 
 
-def _run_local(ctx: click.Context, project_root: Path, config: dict, args: tuple) -> None:
+def _run_local(
+    ctx: click.Context, project_root: Path, config: dict, args: tuple, dev: bool = False
+) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
 
@@ -35,7 +38,11 @@ def _run_local(ctx: click.Context, project_root: Path, config: dict, args: tuple
     cmd_parts = [sys.executable, "-m", "src.main", *args]
     logger.info(f"Executing: {' '.join(cmd_parts)}")
 
-    result = subprocess.run(cmd_parts, cwd=project_root)
+    env = os.environ.copy()
+    if dev:
+        env["LIBSTP_DEV_MODE"] = "1"
+
+    result = subprocess.run(cmd_parts, cwd=project_root, env=env)
 
     exit_style = "bold green" if result.returncode == 0 else "bold red"
     console.print(
@@ -49,7 +56,9 @@ def _run_local(ctx: click.Context, project_root: Path, config: dict, args: tuple
         raise SystemExit(result.returncode)
 
 
-async def _run_remote(ctx: click.Context, project_root: Path, config: dict, args: tuple) -> None:
+async def _run_remote(
+    ctx: click.Context, project_root: Path, config: dict, args: tuple, dev: bool = False
+) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
 
@@ -75,7 +84,8 @@ async def _run_remote(ctx: click.Context, project_root: Path, config: dict, args
     # Start the run command on Pi
     async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
         try:
-            result = await client.run_project(project_uuid, args=list(args))
+            env = {"LIBSTP_DEV_MODE": "1"} if dev else {}
+            result = await client.run_project(project_uuid, args=list(args), env=env)
         except Exception as e:
             console.print(f"[red]Failed to start run on Pi: {e}[/red]")
             raise SystemExit(1)
@@ -129,10 +139,11 @@ async def _run_remote(ctx: click.Context, project_root: Path, config: dict, args
 
 @click.command(name="run")
 @click.argument("args", nargs=-1)
+@click.option("--dev", is_flag=True, help="Dev mode: use button instead of wait-for-light")
 @click.option("--local", "-l", is_flag=True, help="Force local execution (skip remote)")
 @click.option("--no-sync", is_flag=True, help="Skip syncing before remote run")
 @click.pass_context
-def run_command(ctx: click.Context, args: tuple, local: bool, no_sync: bool) -> None:
+def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool) -> None:
     """Run codegen and then execute src.main.
 
     If connected to a Pi, syncs the project and runs remotely.
@@ -188,7 +199,7 @@ def run_command(ctx: click.Context, args: tuple, local: bool, no_sync: bool) -> 
 
             if manager.is_connected:
                 # Run remotely
-                asyncio.run(_run_remote(ctx, project_root, config, args))
+                asyncio.run(_run_remote(ctx, project_root, config, args, dev=dev))
                 return
 
             console.print("[red]Remote execution requested, but no Pi connection is available.[/red]")
@@ -196,7 +207,7 @@ def run_command(ctx: click.Context, args: tuple, local: bool, no_sync: bool) -> 
             raise SystemExit(1)
 
         # Run locally
-        _run_local(ctx, project_root, config, args)
+        _run_local(ctx, project_root, config, args, dev=dev)
 
     except ProjectError as exc:
         logger.error(str(exc))

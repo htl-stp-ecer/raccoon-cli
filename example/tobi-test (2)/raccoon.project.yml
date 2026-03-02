@@ -40,6 +40,7 @@ robot:
     type: FusedOdometry
     config:
       bemf_trust: 1.0
+      turn_axis: -body_y
   motion_pid:
     distance:
       kp: 2.3438
@@ -113,20 +114,50 @@ definitions:
     port: 10
   front_left_motor:
     type: Motor
-    port: 0
-    inverted: false
+    port: 1
+    inverted: true
     calibration:
       ticks_to_rad: 1.9207186745891887e-05
       vel_lpf_alpha: 1.0
   front_right_motor:
     type: Motor
-    port: 1
+    port: 0
     inverted: false
     calibration:
       ticks_to_rad: 1.6985752418623237e-05
       vel_lpf_alpha: 1.0
   imu:
     type: IMU
+    gyro_orientation:
+    - 0
+    - 0
+    - -1
+    - 1
+    - 0
+    - 0
+    - 0
+    - -1
+    - 0
+    compass_orientation:
+    - 0
+    - 0
+    - -1
+    - 0
+    - 1
+    - 0
+    - 1
+    - 0
+    - 0
+    axis_remap:
+    - 1
+    - 0
+    - 0
+    - 0
+    - 1
+    - 0
+    - 0
+    - 0
+    - 1
   front_left_ir_sensor:
     type: IRSensor
     port: 0
@@ -134,7 +165,7 @@ definitions:
     type: IRSensor
     port: 1
 connection:
-  pi_address: 192.168.178.85
+  pi_address: 192.168.100.59
   pi_port: 8421
   pi_user: pi
   remote_path: null

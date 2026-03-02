@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   tobi-test
- Generated: 2026-02-28 18:57:47
+ Generated: 2026-02-27 12:29:48
 ===========================================================
 
 Authors:
@@ -20,14 +20,14 @@ class Defs:
     imu = Imu()
     button = DigitalSensor(port=10)
     front_left_motor = Motor(
-        port=0,
-        inverted=False,
+        port=1,
+        inverted=True,
         calibration=MotorCalibration(
             ticks_to_rad=1.9207186745891887e-05, vel_lpf_alpha=1.0
         ),
     )
     front_right_motor = Motor(
-        port=1,
+        port=0,
         inverted=False,
         calibration=MotorCalibration(
             ticks_to_rad=1.6985752418623237e-05, vel_lpf_alpha=1.0

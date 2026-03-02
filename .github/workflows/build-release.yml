@@ -1,0 +1,121 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+
+env:
+  VERSION: "0.1.${{ github.run_number }}"
+
+jobs:
+  build-and-release:
+    runs-on: self-hosted
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web-ide/package-lock.json
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('pyproject.toml', 'raccoon-transport/python/pyproject.toml') }}
+          restore-keys: pip-
+
+      - name: Install build tools
+        run: pip install build wheel setuptools
+
+      # --- Build raccoon-transport wheel first ---
+      # Patch version in submodule at build time (submodule files stay clean in git)
+      - name: Patch raccoon-transport version
+        run: |
+          python -c "import pathlib, re; f=pathlib.Path('raccoon-transport/python/pyproject.toml'); f.write_text(re.sub(r'^version = \".*\"', 'version = \"${{ env.VERSION }}\"', f.read_text(), flags=re.MULTILINE))"
+
+      - name: Build raccoon-transport wheel
+        run: |
+          rm -rf raccoon-transport/python/dist
+          cd raccoon-transport/python
+          python -m build --wheel
+
+      - name: Install raccoon-transport (build dependency)
+        run: pip install raccoon-transport/python/dist/raccoon_transport-*.whl
+
+      # --- Build raccoon wheel (includes web-IDE) ---
+      - name: Build raccoon wheel
+        run: |
+          rm -rf dist
+          python -m build --wheel
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+
+      # --- Bundle server tarball (wheels + install.sh for Pi) ---
+      - name: Bundle server release
+        run: |
+          mkdir -p server-release
+          cp raccoon-transport/python/dist/raccoon_transport-*.whl server-release/
+          cp dist/raccoon-*.whl server-release/
+          cp install.sh server-release/
+          cd server-release && tar czf ../raccoon-server-v${{ env.VERSION }}.tar.gz *
+
+      # --- Create GitHub Release ---
+      # Artifacts:
+      #   - raccoon-*.whl               (laptop: pip install <url>)
+      #   - raccoon_transport-*.whl      (laptop: pip install <url>)
+      #   - raccoon-server-v*.tar.gz     (Pi: extract + ./install.sh)
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ### Laptop
+
+            Download both `.whl` files from this release, then:
+            ```bash
+            pip install raccoon_transport-*.whl raccoon-*.whl
+            ```
+
+            Or via `gh` CLI:
+            ```bash
+            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "*.whl"
+            pip install raccoon_transport-*.whl raccoon-*.whl
+            ```
+
+            ### Pi server
+
+            Download `raccoon-server-v${{ env.VERSION }}.tar.gz` from this release, then:
+            ```bash
+            tar xzf raccoon-server-v${{ env.VERSION }}.tar.gz
+            RPI_HOST=192.168.4.1 ./install.sh
+            ```
+
+            Or via `gh` CLI:
+            ```bash
+            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "raccoon-server-*.tar.gz"
+            tar xzf raccoon-server-v${{ env.VERSION }}.tar.gz
+            RPI_HOST=192.168.4.1 ./install.sh
+            ```
+          files: |
+            dist/raccoon-*.whl
+            raccoon-transport/python/dist/raccoon_transport-*.whl
+            raccoon-server-v${{ env.VERSION }}.tar.gz

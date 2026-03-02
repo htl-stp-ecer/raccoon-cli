@@ -8,9 +8,15 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from raccoon.client.connection import get_connection_manager
+from raccoon.client.connection import (
+    get_connection_manager,
+    check_paramiko_version,
+    ParamikoVersionError,
+    VersionMismatchError,
+)
 from raccoon.client.api import create_api_client
 from raccoon.project import find_project_root, load_project_config
+from raccoon.version_checker import check_all_versions, check_gh_available, render_version_table
 
 
 @click.command(name="status")
@@ -25,10 +31,16 @@ def status_command(ctx: click.Context) -> None:
     """
     console: Console = ctx.obj.get("console", Console())
 
-    # Connection status
     manager = get_connection_manager()
+    project_root = find_project_root()
+
+    # Auto-reconnect from saved config before rendering anything
+    if not manager.is_connected:
+        _try_auto_connect(console, manager, project_root)
+
     state = manager.state
 
+    # Connection status
     if state.connected:
         auth_status = "[green]authenticated[/green]" if state.api_token else "[yellow]no token[/yellow]"
         console.print(
@@ -51,8 +63,6 @@ def status_command(ctx: click.Context) -> None:
         )
 
     # Local project status
-    project_root = find_project_root()
-
     if project_root:
         try:
             config = load_project_config(project_root)
@@ -104,6 +114,67 @@ def status_command(ctx: click.Context) -> None:
             )
 
         console.print(table)
+
+    # Package versions
+    _show_package_versions(console, manager)
+
+
+def _try_auto_connect(console, manager, project_root):
+    """Try to auto-connect to a Pi from saved project or global config."""
+    try:
+        check_paramiko_version()
+    except ParamikoVersionError:
+        return
+
+    pi_address = None
+    pi_port = 8421
+    pi_user = "pi"
+
+    if project_root:
+        project_conn = manager.load_from_project(project_root)
+        if project_conn and project_conn.pi_address:
+            pi_address = project_conn.pi_address
+            pi_port = project_conn.pi_port
+            pi_user = project_conn.pi_user
+
+    if not pi_address:
+        known_pis = manager.load_known_pis()
+        if known_pis:
+            pi = known_pis[0]
+            pi_address = pi.get("address")
+            pi_port = pi.get("port", 8421)
+
+    if not pi_address:
+        return
+
+    try:
+        console.print(f"[dim]Connecting to {pi_address}...[/dim]")
+        manager.connect_sync(pi_address, pi_port, pi_user)
+    except (VersionMismatchError, Exception):
+        pass
+
+
+def _show_package_versions(console: Console, manager) -> None:
+    """Show package version information."""
+    if not check_gh_available():
+        console.print()
+        console.print("[dim]Install the GitHub CLI (gh) to see package versions.[/dim]")
+        return
+
+    ssh_client = None
+    if manager.is_connected:
+        try:
+            ssh_client = manager.get_ssh_client()
+        except Exception:
+            pass
+
+    console.print()
+    statuses = check_all_versions(ssh_client=ssh_client)
+    any_outdated = render_version_table(console, statuses)
+
+    if any_outdated:
+        console.print()
+        console.print("Run [cyan]raccoon update[/cyan] to install updates.")
 
 
 async def _show_remote_status(console: Console, state, project_uuid: str) -> None:

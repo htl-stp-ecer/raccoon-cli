@@ -16,13 +16,13 @@ A toolchain CLI for Botball robot development on Raspberry Pi (Wombat). Raccoon 
 ### On Your Laptop (Development Machine)
 
 ```bash
-pip install raccoon
+pip install <>
 ```
 
 ### On Raspberry Pi (Robot)
 
 ```bash
-pip install raccoon
+pip install <>
 
 # Install and start the server daemon
 sudo raccoon-server install
@@ -211,8 +211,7 @@ raccoon/
 │   └── generators/     # Pluggable generators
 ├── client/             # Laptop-side (SSH, SFTP, HTTP client)
 ├── server/             # Pi-side FastAPI daemon
-├── templates/          # Jinja2 project templates
-└── exlcm/              # LCM message definitions
+└── templates/          # Jinja2 project templates
 ```
 
 ### Key Concepts

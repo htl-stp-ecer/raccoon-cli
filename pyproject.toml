@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raccoon"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Toolchain CLI for libstp projects"
 requires-python = ">=3.8"
 dependencies = [
@@ -28,15 +28,23 @@ dependencies = [
     # IDE backend dependencies
     "libcst>=1.0.0",
     "pydantic>=2.0",
+    # LCM message types & transport
+    # Not listed here because pip resolves the name to the local raccoon-transport/
+    # directory which has no root pyproject.toml. Install separately:
+    #   pip install -e raccoon-transport/python
+    "lcm",
 ]
 
 [project.scripts]
 raccoon = "raccoon.cli:main"
 raccoon-server = "raccoon.server.cli:main"
 
+[tool.setuptools.dynamic]
+version = {attr = "raccoon._version.__version__"}
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["raccoon*", "raccoon.exlcm"]
+include = ["raccoon*"]
 
 [tool.setuptools.package-data]
 raccoon = [
