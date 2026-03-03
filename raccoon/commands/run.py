@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from raccoon.checkpoint import create_checkpoint
 from raccoon.codegen import create_pipeline
 from raccoon.project import ProjectError, load_project_config, require_project
 
@@ -26,6 +27,10 @@ def _run_local(
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
+
+    result = create_checkpoint(project_root, label="pre-run")
+    if result.created:
+        console.print(f"[dim]Checkpoint {result.short_sha} saved[/dim]")
 
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
@@ -61,6 +66,10 @@ async def _run_remote(
 ) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
+
+    result = create_checkpoint(project_root, label="pre-run")
+    if result.created:
+        console.print(f"[dim]Checkpoint {result.short_sha} saved[/dim]")
 
     from raccoon.client.connection import get_connection_manager
     from raccoon.client.api import create_api_client

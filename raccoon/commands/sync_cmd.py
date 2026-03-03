@@ -8,8 +8,8 @@ from raccoon.client.connection import (
     ParamikoVersionError,
     print_paramiko_version_error,
 )
+from raccoon.checkpoint import create_checkpoint
 from raccoon.client.sftp_sync import create_sync, SyncDirection, SyncOptions, load_raccoonignore
-from raccoon.git_history import create_pre_sync_snapshot
 from raccoon.project import find_project_root, load_project_config
 
 
@@ -79,21 +79,15 @@ def do_sync(
 
     console.print(f"[cyan]Syncing '{project_name}' ({direction_str} {state.pi_hostname})...[/cyan]")
 
-    snapshot_result = create_pre_sync_snapshot(
-        project_root=project_root,
-        direction=direction.value,
-        target=f"{state.pi_user}@{state.pi_address}:{remote_path}",
-    )
-    if snapshot_result.created:
-        console.print(
-            f"[dim]Saved pre-sync snapshot {snapshot_result.commit_sha} ({snapshot_result.summary})[/dim]"
-        )
-    elif snapshot_result.reason == "not_git_repo":
-        console.print("[dim]Local history snapshot skipped (no .git repository).[/dim]")
-    elif snapshot_result.reason == "git_unavailable":
-        console.print("[dim]Local history snapshot skipped (git not installed).[/dim]")
-    elif snapshot_result.reason not in {"no_changes", ""}:
-        console.print(f"[yellow]Warning: local history snapshot failed ({snapshot_result.error})[/yellow]")
+    checkpoint_result = create_checkpoint(project_root, label=f"pre-{direction.value}")
+    if checkpoint_result.created:
+        console.print(f"[dim]Checkpoint {checkpoint_result.short_sha} saved[/dim]")
+    elif checkpoint_result.reason == "not_git_repo":
+        console.print("[dim]Checkpoint skipped (no .git repository).[/dim]")
+    elif checkpoint_result.reason == "git_unavailable":
+        console.print("[dim]Checkpoint skipped (git not installed).[/dim]")
+    elif checkpoint_result.reason not in {"no_changes", ""}:
+        console.print(f"[yellow]Warning: checkpoint failed ({checkpoint_result.error})[/yellow]")
 
     # Perform sync
     try:

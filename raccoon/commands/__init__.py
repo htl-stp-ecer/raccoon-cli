@@ -14,6 +14,7 @@ from .lcm import lcm_group
 from .completion import completion_group, prompt_completion_setup
 from .web import web_command
 from .update import update_command
+from .checkpoint import checkpoint_group
 
 __all__ = [
     "calibrate_command",
@@ -32,4 +33,5 @@ __all__ = [
     "prompt_completion_setup",
     "web_command",
     "update_command",
+    "checkpoint_group",
 ]
