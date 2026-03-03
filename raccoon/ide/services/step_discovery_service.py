@@ -1,3 +1,5 @@
+"""Discover available DSL steps for the IDE and maintain a libstp cache."""
+
 import json
 import threading
 from datetime import datetime, timezone
@@ -10,7 +12,7 @@ from raccoon.ide.services.project_service import ProjectService
 
 
 class StepDiscoveryService:
-    """Service for discovering and returning available DSL steps"""
+    """Collect step definitions from cached library data and project source."""
 
     def __init__(self, project_service: ProjectService):
         self.project_service = project_service
@@ -86,6 +88,7 @@ class StepDiscoveryService:
         return project_steps
 
     def import_libstp_cache(self, steps: List[Dict[str, Any]], last_indexed_at: Optional[str] = None) -> None:
+        """Replace the cached libstp step index with data fetched elsewhere."""
         cache_dir = self._libstp_cache_path.parent
         cache_dir.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -99,6 +102,7 @@ class StepDiscoveryService:
             self._libstp_last_error = None
 
     def get_libstp_cache_status(self) -> Dict[str, Any]:
+        """Return cache health metadata used by the IDE refresh workflow."""
         with self._libstp_lock:
             status = "ready" if self._libstp_cache else "empty"
             if self._libstp_last_error:
@@ -111,6 +115,7 @@ class StepDiscoveryService:
             }
 
     def clear_libstp_cache(self) -> None:
+        """Drop the cached libstp step index from memory and disk."""
         with self._libstp_lock:
             self._clear_libstp_cache_locked()
 

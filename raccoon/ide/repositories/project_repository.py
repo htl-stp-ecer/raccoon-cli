@@ -1,3 +1,5 @@
+"""Filesystem-backed repository for IDE project metadata and config files."""
+
 import os
 from pathlib import Path
 
@@ -9,6 +11,8 @@ from raccoon.ide.schemas.project import ProjectCreate, ProjectInDB, ProjectConne
 
 
 class ProjectRepository:
+    """Persist and discover project records rooted under a workspace directory."""
+
     CONFIG_FILENAME = "raccoon.project.yml"
 
     def __init__(self, project_root: str | Path):

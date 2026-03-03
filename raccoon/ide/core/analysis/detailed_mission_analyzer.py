@@ -1,3 +1,9 @@
+"""Parse mission source files into rich mission-detail schema objects.
+
+This module uses ``libcst`` so the IDE can recover mission structure, step
+arguments, and source positions without executing user code.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

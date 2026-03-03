@@ -1,3 +1,5 @@
+"""Application service for CRUD access to IDE-managed projects."""
+
 from typing import List, Optional
 from uuid import UUID
 
@@ -7,6 +9,8 @@ from raccoon.ide.schemas.project import ProjectCreate, ProjectInDB
 
 
 class ProjectService:
+    """Thin orchestration layer over the project repository."""
+
     def __init__(
         self,
         project_repository: ProjectRepository,
