@@ -65,13 +65,13 @@ jobs:
         env:
           BUILD_NUMBER: ${{ github.run_number }}
 
-      # --- Bundle server tarball (wheels + install.sh for Pi) ---
+      # --- Bundle server tarball (wheels + install.py for Pi) ---
       - name: Bundle server release
         run: |
           mkdir -p server-release
           cp raccoon-transport/python/dist/raccoon_transport-*.whl server-release/
           cp dist/raccoon-*.whl server-release/
-          cp install.sh server-release/
+          cp install.py server-release/
           cd server-release && tar czf ../raccoon-server-v${{ env.VERSION }}.tar.gz *
 
       # --- Resolve artifact filenames ---
@@ -108,7 +108,7 @@ jobs:
             ### Pi server
 
             ```bash
-            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "${{ steps.artifacts.outputs.server_tar }}" && tar xzf ${{ steps.artifacts.outputs.server_tar }} && RPI_HOST=192.168.4.1 ./install.sh
+            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "${{ steps.artifacts.outputs.server_tar }}" && tar xzf ${{ steps.artifacts.outputs.server_tar }} && RPI_HOST=192.168.4.1 python3 install.py
             ```
           files: |
             dist/raccoon-*.whl
