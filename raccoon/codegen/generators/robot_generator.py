@@ -233,6 +233,11 @@ class RobotGenerator(BaseGenerator):
                     " - skipping motion_pid config generation"
                 )
 
+        # Add shutdown_in (required by GenericRobot)
+        shutdown_in = data.get("shutdown_in")
+        if shutdown_in is not None:
+            builder.add_class_attribute("shutdown_in", repr(shutdown_in))
+
         # Add missions from full config
         if hasattr(self, '_full_config'):
             self._add_missions_to_builder(builder, self._full_config)
