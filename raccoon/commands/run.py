@@ -28,9 +28,10 @@ def _run_local(
     """Run the project locally."""
     console: Console = ctx.obj["console"]
 
-    result = create_checkpoint(project_root, label="pre-run")
-    if result.created:
-        console.print(f"[dim]Checkpoint {result.short_sha} saved[/dim]")
+    if config.get("auto_checkpoints", True):
+        result = create_checkpoint(project_root, label="pre-run")
+        if result.created:
+            console.print(f"[dim]Checkpoint {result.short_sha} saved[/dim]")
 
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
@@ -67,9 +68,10 @@ async def _run_remote(
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
 
-    result = create_checkpoint(project_root, label="pre-run")
-    if result.created:
-        console.print(f"[dim]Checkpoint {result.short_sha} saved[/dim]")
+    if config.get("auto_checkpoints", True):
+        result = create_checkpoint(project_root, label="pre-run")
+        if result.created:
+            console.print(f"[dim]Checkpoint {result.short_sha} saved[/dim]")
 
     from raccoon.client.connection import get_connection_manager
     from raccoon.client.api import create_api_client

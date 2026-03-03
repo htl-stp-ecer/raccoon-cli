@@ -5,6 +5,7 @@ import webbrowser
 from pathlib import Path
 
 import click
+import yaml
 from rich.console import Console
 from rich.panel import Panel
 
@@ -12,6 +13,31 @@ from rich.panel import Panel
 def get_web_ide_dist_path() -> Path:
     """Get the path to the bundled web IDE static files."""
     return Path(__file__).parent.parent / "web-ide-dist"
+
+
+def _detect_project(cwd: Path) -> tuple[Path, str | None]:
+    """Detect if cwd is inside a project and return (project_root, project_uuid).
+
+    If raccoon.project.yml is found in cwd (or a parent), sets project_root
+    to the parent of the project directory so the backend can discover it,
+    and returns the project UUID for direct navigation.
+
+    Returns:
+        (project_root, project_uuid) - project_uuid is None if not in a project.
+    """
+    project_file = cwd / "raccoon.project.yml"
+    if not project_file.exists():
+        return cwd, None
+
+    try:
+        with open(project_file, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        if isinstance(config, dict) and config.get("uuid"):
+            return cwd.parent, str(config["uuid"])
+    except Exception:
+        pass
+
+    return cwd, None
 
 
 @click.command(name="web")
@@ -22,9 +48,9 @@ def web_command(ctx: click.Context, port: int, no_open: bool) -> None:
     """Start the Web IDE with full backend support.
 
     Serves the web IDE with a full API backend on a local port.
-    The project root is the current working directory.
 
-    Projects will be stored in and loaded from the current directory.
+    When run inside a project directory (containing raccoon.project.yml),
+    the browser opens directly to that project.
 
     Automatically opens the browser unless --no-open is specified.
 
@@ -67,13 +93,19 @@ def web_command(ctx: click.Context, port: int, no_open: bool) -> None:
         )
         raise SystemExit(1)
 
-    # Create the FastAPI app with current directory as project root
+    # Detect if we're inside a project directory
+    project_root, project_uuid = _detect_project(Path.cwd())
+
+    # Create the FastAPI app
     from raccoon.ide.app import create_app
 
-    project_root = Path.cwd()
     app = create_app(project_root=project_root)
 
-    url = f"http://localhost:{port}/WebIDE/"
+    # Build URL - navigate directly to project if detected
+    if project_uuid:
+        url = f"http://localhost:{port}/WebIDE/projects/{project_uuid}"
+    else:
+        url = f"http://localhost:{port}/WebIDE/"
 
     console.print(
         Panel(

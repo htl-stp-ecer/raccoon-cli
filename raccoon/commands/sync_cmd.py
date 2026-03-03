@@ -79,15 +79,16 @@ def do_sync(
 
     console.print(f"[cyan]Syncing '{project_name}' ({direction_str} {state.pi_hostname})...[/cyan]")
 
-    checkpoint_result = create_checkpoint(project_root, label=f"pre-{direction.value}")
-    if checkpoint_result.created:
-        console.print(f"[dim]Checkpoint {checkpoint_result.short_sha} saved[/dim]")
-    elif checkpoint_result.reason == "not_git_repo":
-        console.print("[dim]Checkpoint skipped (no .git repository).[/dim]")
-    elif checkpoint_result.reason == "git_unavailable":
-        console.print("[dim]Checkpoint skipped (git not installed).[/dim]")
-    elif checkpoint_result.reason not in {"no_changes", ""}:
-        console.print(f"[yellow]Warning: checkpoint failed ({checkpoint_result.error})[/yellow]")
+    if config.get("auto_checkpoints", True):
+        checkpoint_result = create_checkpoint(project_root, label=f"pre-{direction.value}")
+        if checkpoint_result.created:
+            console.print(f"[dim]Checkpoint {checkpoint_result.short_sha} saved[/dim]")
+        elif checkpoint_result.reason == "not_git_repo":
+            console.print("[dim]Checkpoint skipped (no .git repository).[/dim]")
+        elif checkpoint_result.reason == "git_unavailable":
+            console.print("[dim]Checkpoint skipped (git not installed).[/dim]")
+        elif checkpoint_result.reason not in {"no_changes", ""}:
+            console.print(f"[yellow]Warning: checkpoint failed ({checkpoint_result.error})[/yellow]")
 
     # Perform sync
     try:
