@@ -94,13 +94,15 @@ jobs:
 
             ### Laptop
 
+            Via `gh` CLI:
             ```bash
-            pip install "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/${{ steps.artifacts.outputs.transport_whl }}" "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/${{ steps.artifacts.outputs.raccoon_whl }}"
+            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "*.whl"
+            pip install ${{ steps.artifacts.outputs.transport_whl }} ${{ steps.artifacts.outputs.raccoon_whl }}
             ```
 
-            Or via `gh` CLI:
+            Or if you downloaded the `.whl` files manually:
             ```bash
-            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "*.whl" && pip install ${{ steps.artifacts.outputs.transport_whl }} ${{ steps.artifacts.outputs.raccoon_whl }}
+            pip install ${{ steps.artifacts.outputs.transport_whl }} ${{ steps.artifacts.outputs.raccoon_whl }}
             ```
 
             ### Pi server
