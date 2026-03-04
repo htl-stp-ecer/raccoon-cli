@@ -1,4 +1,4 @@
-"""Tests for sync functionality (rsync + SFTP fallback)."""
+"""Tests for sync functionality (rsync + SFTP)."""
 
 import os
 import sys
@@ -161,23 +161,13 @@ class TestRaccoonIgnore:
         patterns = load_raccoonignore(tmp_path)
         assert patterns == []
 
+    def test_strips_backslash_suffix(self, tmp_path: Path):
+        """Trailing backslash should also be stripped (Windows editors)."""
+        ignore_file = tmp_path / ".raccoonignore"
+        ignore_file.write_text("build\\\n")
 
-# ── RsyncSync not found ──────────────────────────────────────────────────
-
-class TestRsyncNotFound:
-    """Test behavior when rsync is not installed."""
-
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value=None)
-    def test_rsync_not_found_returns_error(self, mock_which):
-        """Should return failure with helpful message when rsync is missing."""
-        sync = RsyncSync(host="192.168.4.1", user="pi")
-
-        result = sync.sync(Path("/tmp/proj"), "/remote")
-
-        assert result.success is False
-        assert len(result.errors) == 1
-        assert "rsync not found" in result.errors[0]
-        assert "sudo apt install rsync" in result.errors[0]
+        patterns = load_raccoonignore(tmp_path)
+        assert "build" in patterns
 
 
 # ── RsyncSync execution + parsing ────────────────────────────────────────
@@ -185,9 +175,8 @@ class TestRsyncNotFound:
 class TestRsyncExecution:
     """Test rsync execution and result parsing."""
 
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
     @patch("raccoon.client.sftp_sync.subprocess.run")
-    def test_successful_push(self, mock_run, mock_which):
+    def test_successful_push(self, mock_run):
         """Successful push should parse stats correctly."""
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -207,9 +196,8 @@ class TestRsyncExecution:
         assert result.files_downloaded == 0
         assert result.bytes_transferred == 4096
 
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
     @patch("raccoon.client.sftp_sync.subprocess.run")
-    def test_successful_pull(self, mock_run, mock_which):
+    def test_successful_pull(self, mock_run):
         """Successful pull should count files as downloaded."""
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -228,9 +216,8 @@ class TestRsyncExecution:
         assert result.files_downloaded == 5
         assert result.files_uploaded == 0
 
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
     @patch("raccoon.client.sftp_sync.subprocess.run")
-    def test_rsync_failure(self, mock_run, mock_which):
+    def test_rsync_failure(self, mock_run):
         """Non-zero exit code should return failure."""
         mock_run.return_value = MagicMock(
             returncode=12,
@@ -244,9 +231,8 @@ class TestRsyncExecution:
         assert result.success is False
         assert "exit 12" in result.errors[0]
 
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
     @patch("raccoon.client.sftp_sync.subprocess.run")
-    def test_deleted_files_parsed(self, mock_run, mock_which):
+    def test_deleted_files_parsed(self, mock_run):
         """Deleted file count should be parsed from stats."""
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -263,9 +249,8 @@ class TestRsyncExecution:
 
         assert result.files_deleted == 2
 
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
     @patch("raccoon.client.sftp_sync.subprocess.run")
-    def test_nothing_transferred(self, mock_run, mock_which):
+    def test_nothing_transferred(self, mock_run):
         """Zero transfers should still be success."""
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -283,9 +268,8 @@ class TestRsyncExecution:
         assert result.files_uploaded == 0
         assert result.files_downloaded == 0
 
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
     @patch("raccoon.client.sftp_sync.subprocess.run", side_effect=TimeoutError)
-    def test_timeout_handling(self, mock_run, mock_which):
+    def test_timeout_handling(self, mock_run):
         """Timeout should be caught and reported."""
         from subprocess import TimeoutExpired
 
@@ -336,6 +320,10 @@ class TestShouldExclude:
     def test_no_match(self):
         assert _should_exclude("src/main.py", [".git", "*.pyc"]) is False
 
+    def test_windows_backslash(self):
+        """Backslash paths should be normalized and matched."""
+        assert _should_exclude("src\\__pycache__\\foo.pyc", ["__pycache__"]) is True
+
 
 # ── SftpSync ──────────────────────────────────────────────────────────────
 
@@ -353,8 +341,7 @@ class TestSftpSync:
         mock_paramiko.AutoAddPolicy.return_value = "policy"
         return mock_paramiko, mock_client, mock_sftp
 
-    @patch("raccoon.client.sftp_sync._REMOTE_DIR_CACHE", new_callable=set)
-    def test_push_uploads_files(self, _cache, tmp_path):
+    def test_push_uploads_files(self, tmp_path):
         """Push should sftp.put every non-excluded file."""
         (tmp_path / "main.py").write_text("print('hi')")
         (tmp_path / "sub").mkdir()
@@ -372,8 +359,7 @@ class TestSftpSync:
         assert result.bytes_transferred > 0
         assert mock_sftp.put.call_count == 2
 
-    @patch("raccoon.client.sftp_sync._REMOTE_DIR_CACHE", new_callable=set)
-    def test_push_excludes_patterns(self, _cache, tmp_path):
+    def test_push_excludes_patterns(self, tmp_path):
         """Push should skip files matching exclude patterns."""
         (tmp_path / "main.py").write_text("ok")
         (tmp_path / "debug.log").write_text("noise")
@@ -387,8 +373,7 @@ class TestSftpSync:
 
         assert result.files_uploaded == 1  # only main.py
 
-    @patch("raccoon.client.sftp_sync._REMOTE_DIR_CACHE", new_callable=set)
-    def test_push_deletes_remote_extras(self, _cache, tmp_path):
+    def test_push_deletes_remote_extras(self, tmp_path):
         """Push with delete=True should remove remote files not present locally."""
         (tmp_path / "main.py").write_text("ok")
 
@@ -408,8 +393,7 @@ class TestSftpSync:
         assert result.files_deleted == 1
         mock_sftp.remove.assert_called_once()
 
-    @patch("raccoon.client.sftp_sync._REMOTE_DIR_CACHE", new_callable=set)
-    def test_pull_downloads_files(self, _cache, tmp_path):
+    def test_pull_downloads_files(self, tmp_path):
         """Pull should sftp.get remote files to local."""
         mock_paramiko, mock_client, mock_sftp = self._make_mock_paramiko()
 
@@ -458,16 +442,25 @@ class TestSftpSync:
 class TestCreateSync:
     """Test the create_sync factory function."""
 
+    @patch("raccoon.client.sftp_sync.sys")
     @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
-    def test_returns_rsync_when_available(self, mock_which):
+    def test_returns_rsync_on_linux(self, mock_which, mock_sys):
+        mock_sys.platform = "linux"
         sync = create_sync(host="192.168.4.1", user="pi")
         assert isinstance(sync, RsyncSync)
-        assert sync.host == "192.168.4.1"
-        assert sync.user == "pi"
 
+    @patch("raccoon.client.sftp_sync.sys")
     @patch("raccoon.client.sftp_sync.shutil.which", return_value=None)
-    def test_returns_sftp_when_rsync_missing(self, mock_which):
+    def test_returns_sftp_when_rsync_missing(self, mock_which, mock_sys):
+        mock_sys.platform = "linux"
         sync = create_sync(host="192.168.4.1", user="pi", ssh_port=2222)
         assert isinstance(sync, SftpSync)
-        assert sync.host == "192.168.4.1"
         assert sync.ssh_port == 2222
+
+    @patch("raccoon.client.sftp_sync.sys")
+    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
+    def test_returns_sftp_on_windows(self, mock_which, mock_sys):
+        """Windows should always use SFTP even if rsync is somehow on PATH."""
+        mock_sys.platform = "win32"
+        sync = create_sync(host="192.168.4.1", user="pi")
+        assert isinstance(sync, SftpSync)

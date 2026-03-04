@@ -1,9 +1,8 @@
-"""File synchronization: rsync primary, paramiko SFTP fallback.
+"""File synchronization: rsync on Linux/macOS, SFTP on Windows.
 
 This module provides unidirectional synchronization between local project folders
-and remote Pi folders.  The preferred backend is rsync (fast delta-transfer);
-on systems where rsync is not available (e.g. plain Windows) a pure-paramiko
-SFTP implementation is used instead.
+and remote Pi folders.  On Linux/macOS rsync is used for efficient delta-transfer.
+On Windows (where rsync is never available) SFTP copies every file with a progress bar.
 
 Use ``create_sync()`` to get the right backend automatically.
 """
@@ -15,6 +14,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -59,8 +59,8 @@ def load_raccoonignore(project_root: Path) -> list[str]:
                 # Skip empty lines and comments
                 if not line or line.startswith("#"):
                     continue
-                # Strip trailing slashes for directory patterns
-                patterns.append(line.rstrip("/"))
+                # Strip trailing slashes for directory patterns (/ and \)
+                patterns.append(line.rstrip("/\\"))
     except Exception:
         # If we can't read the file, just return empty list
         pass
@@ -107,20 +107,11 @@ class SyncOptions:
 
 
 # ---------------------------------------------------------------------------
-# rsync backend (primary)
+# rsync backend (Linux / macOS)
 # ---------------------------------------------------------------------------
 
 class RsyncSync:
-    """
-    File synchronization using rsync over SSH.
-
-    Features:
-    - Efficient delta-transfer algorithm
-    - Proper change detection (timestamps + checksums)
-    - Exclusion patterns
-    - Optional deletion of extraneous files
-    - Progress reporting
-    """
+    """File synchronization using rsync over SSH."""
 
     def __init__(self, host: str, user: str = "pi", ssh_port: int = 22):
         self.host = host
@@ -134,17 +125,6 @@ class RsyncSync:
         options: Optional[SyncOptions] = None,
     ) -> SyncResult:
         options = options or SyncOptions()
-
-        if not shutil.which("rsync"):
-            return SyncResult(
-                success=False,
-                errors=[
-                    "rsync not found. Install it with:\n"
-                    "  Linux:  sudo apt install rsync\n"
-                    "  macOS:  brew install rsync\n"
-                    "  Windows: use WSL or Git Bash"
-                ],
-            )
 
         cmd = self._build_command(local_path, remote_path, options)
         logger.debug(f"rsync command: {' '.join(cmd)}")
@@ -225,15 +205,15 @@ class RsyncSync:
 
 
 # ---------------------------------------------------------------------------
-# Paramiko SFTP backend (fallback for Windows)
+# SFTP backend (Windows)
 # ---------------------------------------------------------------------------
 
 class SftpSync:
     """
     File synchronization using paramiko SFTP.
 
-    No delta-transfer — copies every file unconditionally.  Good enough for
-    the small projects typical in Botball.
+    Copies every file unconditionally with a progress bar.
+    Simple and reliable for the small projects typical in Botball.
     """
 
     def __init__(self, host: str, user: str = "pi", ssh_port: int = 22):
@@ -288,41 +268,66 @@ class SftpSync:
         remote_path: str,
         options: SyncOptions,
     ) -> SyncResult:
-        result = SyncResult(success=True)
-        pushed_rel: set[str] = set()
+        from rich.progress import Progress, BarColumn, TextColumn, TransferSpeedColumn
 
+        result = SyncResult(success=True)
+
+        # Collect all files to upload
+        files: list[tuple[str, str, str]] = []  # (local_abs, remote_abs, rel_posix)
         for dirpath, dirnames, filenames in os.walk(local_path):
             rel_dir = os.path.relpath(dirpath, local_path)
             if rel_dir == ".":
                 rel_dir = ""
 
-            # prune excluded directories in-place
+            # Prune excluded directories in-place
             dirnames[:] = [
                 d for d in dirnames
                 if not _should_exclude(
-                    os.path.join(rel_dir, d) if rel_dir else d,
+                    f"{rel_dir}/{d}" if rel_dir else d,
                     options.exclude_patterns,
                 )
             ]
 
             for fname in filenames:
-                rel_file = os.path.join(rel_dir, fname) if rel_dir else fname
-                if _should_exclude(rel_file, options.exclude_patterns):
+                rel_posix = f"{rel_dir}/{fname}" if rel_dir else fname
+                rel_posix = rel_posix.replace("\\", "/")
+                if _should_exclude(rel_posix, options.exclude_patterns):
                     continue
 
                 local_file = os.path.join(dirpath, fname)
-                remote_file = str(PurePosixPath(remote_path) / rel_file.replace(os.sep, "/"))
+                remote_file = str(PurePosixPath(remote_path) / rel_posix)
+                files.append((local_file, remote_file, rel_posix))
 
-                _ensure_remote_dir(sftp, str(PurePosixPath(remote_file).parent))
+        # Create directories and upload with progress bar
+        created_dirs: set[str] = set()
+
+        with Progress(
+            TextColumn("[cyan]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total} files"),
+            TransferSpeedColumn(),
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Uploading", total=len(files))
+
+            for local_file, remote_file, rel_posix in files:
+                # Ensure remote directory exists
+                remote_dir = str(PurePosixPath(remote_file).parent)
+                if remote_dir not in created_dirs:
+                    _ensure_remote_dir(sftp, remote_dir, created_dirs)
+
                 sftp.put(local_file, remote_file)
+                size = os.path.getsize(local_file)
                 result.files_uploaded += 1
-                result.bytes_transferred += os.path.getsize(local_file)
-                pushed_rel.add(rel_file.replace(os.sep, "/"))
+                result.bytes_transferred += size
+                progress.advance(task)
 
+        # Delete remote files not present locally
+        pushed_set = {f[2] for f in files}
         if options.delete:
             remote_files = _list_remote_recursive(sftp, remote_path)
             for rf in remote_files:
-                if rf not in pushed_rel:
+                if rf not in pushed_set:
                     try:
                         sftp.remove(str(PurePosixPath(remote_path) / rf))
                         result.files_deleted += 1
@@ -340,22 +345,37 @@ class SftpSync:
         remote_path: str,
         options: SyncOptions,
     ) -> SyncResult:
+        from rich.progress import Progress, BarColumn, TextColumn, TransferSpeedColumn
+
         result = SyncResult(success=True)
         pulled_rel: set[str] = set()
 
         remote_files = _list_remote_recursive(sftp, remote_path)
-        for rel_file in remote_files:
-            if _should_exclude(rel_file, options.exclude_patterns):
-                continue
+        # Filter excluded
+        remote_files = [
+            rf for rf in remote_files
+            if not _should_exclude(rf, options.exclude_patterns)
+        ]
 
-            remote_file = str(PurePosixPath(remote_path) / rel_file)
-            local_file = local_path / rel_file.replace("/", os.sep)
-            local_file.parent.mkdir(parents=True, exist_ok=True)
+        with Progress(
+            TextColumn("[cyan]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total} files"),
+            TransferSpeedColumn(),
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Downloading", total=len(remote_files))
 
-            sftp.get(remote_file, str(local_file))
-            result.files_downloaded += 1
-            result.bytes_transferred += local_file.stat().st_size
-            pulled_rel.add(rel_file)
+            for rel_file in remote_files:
+                remote_file = str(PurePosixPath(remote_path) / rel_file)
+                local_file = local_path / rel_file.replace("/", os.sep)
+                local_file.parent.mkdir(parents=True, exist_ok=True)
+
+                sftp.get(remote_file, str(local_file))
+                result.files_downloaded += 1
+                result.bytes_transferred += local_file.stat().st_size
+                pulled_rel.add(rel_file)
+                progress.advance(task)
 
         if options.delete:
             for dirpath, _dirnames, filenames in os.walk(local_path):
@@ -363,8 +383,8 @@ class SftpSync:
                 if rel_dir == ".":
                     rel_dir = ""
                 for fname in filenames:
-                    rel_file = os.path.join(rel_dir, fname) if rel_dir else fname
-                    rel_posix = rel_file.replace(os.sep, "/")
+                    rel_posix = f"{rel_dir}/{fname}" if rel_dir else fname
+                    rel_posix = rel_posix.replace("\\", "/")
                     if rel_posix not in pulled_rel and not _should_exclude(rel_posix, options.exclude_patterns):
                         try:
                             os.remove(os.path.join(dirpath, fname))
@@ -393,23 +413,23 @@ def _should_exclude(rel_path: str, patterns: list[str]) -> bool:
     return False
 
 
-_REMOTE_DIR_CACHE: set[str] = set()
+def _ensure_remote_dir(sftp, path: str, cache: set[str]) -> None:
+    """Create *path* on the remote side, recursively.
 
-
-def _ensure_remote_dir(sftp, path: str) -> None:
-    """Create *path* on the remote side, recursively."""
-    if path in _REMOTE_DIR_CACHE or path in ("", "/"):
+    Uses the provided *cache* set (per-sync-session) to avoid redundant stat calls.
+    """
+    if path in cache or path in ("", "/"):
         return
     parts = PurePosixPath(path).parts
     for i in range(1, len(parts) + 1):
         partial = str(PurePosixPath(*parts[:i]))
-        if partial in _REMOTE_DIR_CACHE:
+        if partial in cache:
             continue
         try:
             sftp.stat(partial)
         except FileNotFoundError:
             sftp.mkdir(partial)
-        _REMOTE_DIR_CACHE.add(partial)
+        cache.add(partial)
 
 
 def _list_remote_recursive(sftp, remote_root: str) -> list[str]:
@@ -439,12 +459,11 @@ def _list_remote_recursive(sftp, remote_root: str) -> list[str]:
 def create_sync(host: str, user: str = "pi", ssh_port: int = 22):
     """Return the best available sync backend.
 
-    Uses ``RsyncSync`` when rsync is on PATH, otherwise falls back to
-    ``SftpSync`` (paramiko).
+    Uses rsync on Linux/macOS, SFTP on Windows.
     """
-    if shutil.which("rsync"):
+    if sys.platform != "win32" and shutil.which("rsync"):
         logger.info("Using rsync backend for file sync")
         return RsyncSync(host=host, user=user, ssh_port=ssh_port)
     else:
-        logger.info("rsync not found — falling back to SFTP sync")
+        logger.info("Using SFTP backend for file sync")
         return SftpSync(host=host, user=user, ssh_port=ssh_port)

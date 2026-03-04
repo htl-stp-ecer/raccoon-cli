@@ -38,7 +38,7 @@ from raccoon.client.api import (
     EncoderReading,
 )
 
-# Rsync sync
+# Sync
 from raccoon.client.sftp_sync import (
     RsyncSync,
     SftpSync,
