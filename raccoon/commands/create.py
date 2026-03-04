@@ -189,8 +189,9 @@ def _add_mission_to_project_config(project_root: Path, mission_class: str) -> No
         config['missions'] = missions
         
         # Write back to file
-        with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.safe_dump(config, f, sort_keys=False)
+        from raccoon.yaml_utils import save_yaml
+
+        save_yaml(config, config_path)
 
 
 

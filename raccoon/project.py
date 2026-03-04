@@ -72,17 +72,20 @@ def load_project_config(project_root: Path | None = None) -> Dict[str, Any]:
     project_file = project_root / "raccoon.project.yml"
 
     try:
-        with open(project_file, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+        from raccoon.yaml_utils import load_yaml
+
+        config = load_yaml(project_file)
 
         if not isinstance(config, dict):
             raise ProjectError("raccoon.project.yml must contain a YAML mapping")
 
         return config
-    except yaml.YAMLError as e:
-        raise ProjectError(f"Invalid YAML in raccoon.project.yml: {e}")
     except OSError as e:
         raise ProjectError(f"Cannot read raccoon.project.yml: {e}")
+    except Exception as e:
+        if isinstance(e, ProjectError):
+            raise
+        raise ProjectError(f"Invalid YAML in raccoon.project.yml: {e}")
 
 
 def require_project() -> Path:

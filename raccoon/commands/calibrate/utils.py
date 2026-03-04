@@ -121,6 +121,7 @@ def find_motor_by_port(config: Dict[str, Any], port: int) -> str | None:
 
 def save_project_config(config: Dict[str, Any], project_root: "Path") -> None:
     """Save project configuration to YAML file."""
+    from raccoon.yaml_utils import save_yaml
+
     config_path = project_root / "raccoon.project.yml"
-    with open(config_path, "w", encoding="utf-8") as handle:
-        yaml.safe_dump(config, handle, sort_keys=False, default_flow_style=False)
+    save_yaml(config, config_path)

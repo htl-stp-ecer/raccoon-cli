@@ -319,8 +319,9 @@ class ConnectionManager:
             pi_user=self._state.pi_user,
         ).to_dict()
 
-        with open(config_path, "w") as f:
-            yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+        from raccoon.yaml_utils import save_yaml
+
+        save_yaml(config, config_path)
 
     def load_from_project(self, project_path: Path) -> Optional[ConnectionConfig]:
         """Load connection config from project's raccoon.project.yml."""
@@ -328,8 +329,9 @@ class ConnectionManager:
         if not config_path.exists():
             return None
 
-        with open(config_path) as f:
-            config = yaml.safe_load(f) or {}
+        from raccoon.yaml_utils import load_yaml
+
+        config = load_yaml(config_path)
 
         connection_data = config.get("connection")
         if connection_data:
@@ -342,9 +344,10 @@ class ConnectionManager:
         self.GLOBAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
         # Load existing config
+        from raccoon.yaml_utils import load_yaml
+
         if self.GLOBAL_CONFIG_PATH.exists():
-            with open(self.GLOBAL_CONFIG_PATH) as f:
-                config = yaml.safe_load(f) or {}
+            config = load_yaml(self.GLOBAL_CONFIG_PATH)
         else:
             config = {}
 
@@ -371,8 +374,9 @@ class ConnectionManager:
         config["known_pis"] = known_pis
         config["default_pi_user"] = self._state.pi_user
 
-        with open(self.GLOBAL_CONFIG_PATH, "w") as f:
-            yaml.safe_dump(config, f, default_flow_style=False)
+        from raccoon.yaml_utils import save_yaml
+
+        save_yaml(config, self.GLOBAL_CONFIG_PATH)
 
     def load_known_pis(self) -> list[dict]:
         """Load known Pis from global config."""

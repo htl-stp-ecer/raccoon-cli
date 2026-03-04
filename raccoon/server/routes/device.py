@@ -129,16 +129,17 @@ def _load_project_config(project_path: Path) -> dict:
     if not config_path.exists():
         return {}
 
-    with open(config_path) as f:
-        return yaml.safe_load(f) or {}
+    from raccoon.yaml_utils import load_yaml
+
+    return load_yaml(config_path)
 
 
 def _save_project_config(project_path: Path, config: dict) -> None:
     """Save the project YAML configuration."""
-    config_path = project_path / "raccoon.project.yml"
+    from raccoon.yaml_utils import save_yaml
 
-    with open(config_path, "w") as f:
-        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    config_path = project_path / "raccoon.project.yml"
+    save_yaml(config, config_path)
 
 
 def _get_hostname() -> str:

@@ -40,11 +40,12 @@ class ProjectRepository:
         return project_path / self.CONFIG_FILENAME
 
     def _load_project_config(self, project_uuid: uuid.UUID) -> Dict[str, Any] | None:
+        from raccoon.yaml_utils import load_yaml
+
         config_path = self.get_project_config_path(project_uuid)
         if not config_path.exists():
             return None
-        with config_path.open("r", encoding="utf-8") as stream:
-            data = yaml.safe_load(stream) or {}
+        data = load_yaml(config_path)
         if not isinstance(data, dict):
             return None
         return data
@@ -62,8 +63,9 @@ class ProjectRepository:
                     normalized[key] = value
             return normalized
 
-        with config_path.open("w", encoding="utf-8") as stream:
-            yaml.safe_dump(_normalize(data), stream, sort_keys=False)
+        from raccoon.yaml_utils import save_yaml
+
+        save_yaml(_normalize(data), config_path)
 
     def read_project_config(self, project_uuid: uuid.UUID) -> Dict[str, Any]:
         return self._load_project_config(project_uuid) or {}
