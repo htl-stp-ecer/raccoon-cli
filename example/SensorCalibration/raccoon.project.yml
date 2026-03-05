@@ -165,7 +165,7 @@ definitions:
     type: Servo
     port: 3
 connection:
-  pi_address: 10.70.146.232
+  pi_address: 10.79.35.232
   pi_port: 8421
   pi_user: pi
   remote_path: null
