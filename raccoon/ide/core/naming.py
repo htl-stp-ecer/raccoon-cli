@@ -1,3 +1,5 @@
+"""Helpers for normalizing user-facing mission names into code-safe forms."""
+
 import re
 from dataclasses import dataclass
 
@@ -7,12 +9,15 @@ _SEP_NORMALIZE = re.compile(r'[_\-\s]+')
 
 @dataclass(frozen=True)
 class NormalizedName:
+    """Canonical spellings of a user-provided mission name."""
+
     raw: str
     snake: str
     pascal: str  # Correct naming: PascalCase
 
 
 def normalize_name(s: str, strip_suffix: str = "mission") -> NormalizedName:
+    """Normalize a mission name into ``snake_case`` and ``PascalCase`` variants."""
     raw = s.strip()
     if _CAMEL_SPLIT.search(raw) and " " not in raw and "_" not in raw and "-" not in raw:
         tokens = [t.lower() for t in _CAMEL_SPLIT.split(raw)]

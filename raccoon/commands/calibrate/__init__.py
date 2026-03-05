@@ -43,8 +43,6 @@ def _require_remote_connection(console: Console, project_root: Path) -> None:
     """Ensure remote connection is available, fail hard if not."""
     from raccoon.client.connection import (
         get_connection_manager,
-        VersionMismatchError,
-        print_version_mismatch_error,
         ParamikoVersionError,
         print_paramiko_version_error,
     )
@@ -62,9 +60,6 @@ def _require_remote_connection(console: Console, project_root: Path) -> None:
             except ParamikoVersionError as e:
                 print_paramiko_version_error(e, console)
                 raise SystemExit(1)
-            except VersionMismatchError as e:
-                print_version_mismatch_error(e, console)
-                raise SystemExit(1)
             except Exception as e:
                 console.print(f"[red]Failed to connect to Pi at {project_conn.pi_address}: {e}[/red]")
                 console.print("[yellow]Use --local to run on this machine instead.[/yellow]")
@@ -79,9 +74,6 @@ def _require_remote_connection(console: Console, project_root: Path) -> None:
                     manager.connect_sync(pi.get("address"), pi.get("port", 8421))
                 except ParamikoVersionError as e:
                     print_paramiko_version_error(e, console)
-                    raise SystemExit(1)
-                except VersionMismatchError as e:
-                    print_version_mismatch_error(e, console)
                     raise SystemExit(1)
                 except Exception as e:
                     console.print(f"[red]Failed to connect to Pi at {pi.get('address')}: {e}[/red]")

@@ -1,3 +1,9 @@
+"""Mission management service used by the IDE API layer.
+
+The service bridges persisted project configuration, source-code analysis, JSON
+mission editing, breakpoint-driven execution, and simulation data generation.
+"""
+
 from __future__ import annotations
 
 from typing import List, Optional, AsyncIterator, Dict, Any
@@ -37,6 +43,8 @@ logger = logging.getLogger(__name__)
 
 
 class MissionService:
+    """Coordinate mission discovery, editing, execution, and simulation."""
+
     _STEP_LAYOUT_FILENAME = "mission_layouts.json"
     _MISSION_SNAPSHOT_DIRNAME = ".mission_snapshots"
 

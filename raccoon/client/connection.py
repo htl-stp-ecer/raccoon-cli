@@ -212,7 +212,6 @@ class ConnectionManager:
 
         Raises:
             ParamikoVersionError: If paramiko version is too old
-            VersionMismatchError: If client/server versions don't match
         """
         import httpx
 
@@ -229,10 +228,10 @@ class ConnectionManager:
         except Exception:
             return False
 
-        # HARD VERSION CHECK: client and server must match
+        # Version check: warn if client and server don't match
         server_version = data.get("version")
         if server_version != CLIENT_VERSION:
-            raise VersionMismatchError(CLIENT_VERSION, server_version)
+            _warn_version_mismatch(CLIENT_VERSION, server_version)
 
         # Fetch API token via SSH
         api_token = self._fetch_api_token_via_ssh(address, user)
@@ -320,8 +319,9 @@ class ConnectionManager:
             pi_user=self._state.pi_user,
         ).to_dict()
 
-        with open(config_path, "w") as f:
-            yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+        from raccoon.yaml_utils import save_yaml
+
+        save_yaml(config, config_path)
 
     def load_from_project(self, project_path: Path) -> Optional[ConnectionConfig]:
         """Load connection config from project's raccoon.project.yml."""
@@ -329,8 +329,9 @@ class ConnectionManager:
         if not config_path.exists():
             return None
 
-        with open(config_path) as f:
-            config = yaml.safe_load(f) or {}
+        from raccoon.yaml_utils import load_yaml
+
+        config = load_yaml(config_path)
 
         connection_data = config.get("connection")
         if connection_data:
@@ -343,9 +344,10 @@ class ConnectionManager:
         self.GLOBAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
         # Load existing config
+        from raccoon.yaml_utils import load_yaml
+
         if self.GLOBAL_CONFIG_PATH.exists():
-            with open(self.GLOBAL_CONFIG_PATH) as f:
-                config = yaml.safe_load(f) or {}
+            config = load_yaml(self.GLOBAL_CONFIG_PATH)
         else:
             config = {}
 
@@ -372,8 +374,9 @@ class ConnectionManager:
         config["known_pis"] = known_pis
         config["default_pi_user"] = self._state.pi_user
 
-        with open(self.GLOBAL_CONFIG_PATH, "w") as f:
-            yaml.safe_dump(config, f, default_flow_style=False)
+        from raccoon.yaml_utils import save_yaml
+
+        save_yaml(config, self.GLOBAL_CONFIG_PATH)
 
     def load_known_pis(self) -> list[dict]:
         """Load known Pis from global config."""
@@ -398,35 +401,27 @@ def get_connection_manager() -> ConnectionManager:
     return _connection_manager
 
 
-def print_version_mismatch_error(error: VersionMismatchError, console=None) -> None:
-    """
-    Print a formatted version mismatch error to the console.
-
-    Args:
-        error: The VersionMismatchError that was raised
-        console: Optional Rich console (will create one if not provided)
-    """
-    if console is None:
-        from rich.console import Console
-        console = Console()
+def _warn_version_mismatch(client_version: str, server_version: str) -> None:
+    """Print a version mismatch warning during connection."""
+    from rich.console import Console
+    console = Console(stderr=True)
 
     console.print()
-    console.print("[red bold]VERSION MISMATCH ERROR[/red bold]")
-    console.print()
-    console.print(f"  Client version: [cyan]{error.client_version}[/cyan]")
-    console.print(f"  Server version: [cyan]{error.server_version}[/cyan]")
-    console.print()
-    if error.client_version > error.server_version:
-        console.print("[yellow]The Pi server is running an older version.[/yellow]")
-        console.print("Update the server by running on the Pi:")
-        console.print("  [cyan]pip install --upgrade raccoon[/cyan]")
-        console.print("  [cyan]sudo systemctl restart raccoon-server[/cyan]")
+    console.print("[yellow bold]Warning: version mismatch[/yellow bold]")
+    console.print(f"  Client: [cyan]{client_version}[/cyan]  Server: [cyan]{server_version}[/cyan]")
+    if client_version > server_version:
+        console.print("  Run [cyan]raccoon update[/cyan] to update the Pi.")
     else:
-        console.print("[yellow]Your client is running an older version.[/yellow]")
-        console.print("Update your client by running:")
-        console.print("  [cyan]pip install --upgrade raccoon[/cyan]")
+        console.print("  Run [cyan]raccoon update[/cyan] to update your client.")
+    console.print(
+        "  [dim]Things may break — if they do, update both sides to the same version.[/dim]"
+    )
     console.print()
-    console.print("[red]Connection refused due to version mismatch.[/red]")
+
+
+def print_version_mismatch_error(error: VersionMismatchError, console=None) -> None:
+    """Deprecated: version mismatch is now a warning printed during connect()."""
+    pass
 
 
 def print_paramiko_version_error(error: ParamikoVersionError, console=None) -> None:

@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 class CreateMissionRequest(BaseModel):
+    """Payload for creating a new mission source file and config entry."""
+
     name: str = Field(..., min_length=1, max_length=200, description="Mission name")
 
     @field_validator('name')
@@ -30,6 +32,8 @@ class CreateMissionRequest(BaseModel):
 
 
 class UpdateMissionOrderRequest(BaseModel):
+    """Payload for reordering a mission within project configuration."""
+
     mission_name: str = Field(..., min_length=1, description="Mission name")
     order: int = Field(..., ge=0, description="New order position (0-based)")
 
@@ -42,6 +46,8 @@ class UpdateMissionOrderRequest(BaseModel):
 
 
 class RenameMissionRequest(BaseModel):
+    """Payload for renaming a mission class, file, and config references."""
+
     old_name: str = Field(..., min_length=1, description="Existing mission name")
     new_name: str = Field(..., min_length=1, max_length=200, description="New mission name")
 
@@ -71,6 +77,7 @@ async def get_project_missions(
         project_uuid: UUID,
         svc: MissionService = Depends(get_mission_service),
 ):
+    """List missions declared for a project."""
     try:
         missions = svc.get_project_missions(project_uuid)
         return missions
@@ -85,6 +92,7 @@ async def parse_mission_detailed(
         mission_name: str,
         svc: MissionService = Depends(get_mission_service),
 ):
+    """Return the fully parsed mission document used by the visual editor."""
     if not mission_name or not mission_name.strip():
         raise HTTPException(status_code=400, detail="Mission name cannot be empty")
 
@@ -198,6 +206,7 @@ async def delete_mission(
         mission_name: str,
         svc: MissionService = Depends(get_mission_service),
 ):
+    """Delete a mission and remove its project references."""
     try:
         if not mission_name or not mission_name.strip():
             raise HTTPException(status_code=400, detail="Mission name cannot be empty")
@@ -224,6 +233,7 @@ async def rename_mission(
         request: RenameMissionRequest,
         svc: MissionService = Depends(get_mission_service),
 ):
+    """Rename a mission across source files, snapshots, and config."""
     try:
         success = svc.rename_mission(project_uuid, request.old_name, request.new_name)
         if not success:
@@ -355,6 +365,7 @@ async def stop_mission(
         project_uuid: UUID,
         svc: MissionService = Depends(get_mission_service),
 ):
+    """Stop the currently running mission for the project, if any."""
     try:
         result = await svc.stop_mission(project_uuid)
         return result

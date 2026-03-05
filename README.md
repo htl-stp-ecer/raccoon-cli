@@ -13,27 +13,22 @@ A toolchain CLI for Botball robot development on Raspberry Pi (Wombat). Raccoon 
 
 ## Installation
 
-### On Your Laptop (Development Machine)
+The repository currently documents source installs, not a published PyPI workflow. The previous placeholder `pip install <>` commands were removed because they were not actionable.
 
-```bash
-pip install <>
-```
-
-### On Raspberry Pi (Robot)
-
-```bash
-pip install <>
-
-# Install and start the server daemon
-sudo raccoon-server install
-```
-
-### Development Installation
+### Source Installation
 
 ```bash
 git clone <repository-url>
 cd toolchain
 pip install -e .
+```
+
+### Transport Package
+
+If you need the shared Python LCM transport package during development, install it separately:
+
+```bash
+pip install -e raccoon-transport/python
 ```
 
 ## Quick Start
@@ -104,6 +99,7 @@ raccoon sync --force   # Re-upload all files
 ```
 
 See [Remote Development Guide](docs/REMOTE_DEVELOPMENT.md) for detailed setup instructions.
+See [Python API Reference](docs/PYTHON_API.md) for maintained package- and module-level docs.
 
 ## Project Structure
 

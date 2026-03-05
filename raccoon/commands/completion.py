@@ -28,9 +28,10 @@ def _load_state() -> dict:
 
 def _save_state(state: dict) -> None:
     """Save CLI state to file."""
+    from raccoon.yaml_utils import save_yaml
+
     STATE_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(STATE_FILE_PATH, "w") as f:
-        yaml.safe_dump(state, f, default_flow_style=False)
+    save_yaml(state, STATE_FILE_PATH)
 
 
 def completion_already_offered() -> bool:

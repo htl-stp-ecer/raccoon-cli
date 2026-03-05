@@ -65,20 +65,24 @@ jobs:
         env:
           BUILD_NUMBER: ${{ github.run_number }}
 
-      # --- Bundle server tarball (wheels + install.sh for Pi) ---
+      # --- Bundle server tarball (wheels + install.py for Pi) ---
       - name: Bundle server release
         run: |
           mkdir -p server-release
           cp raccoon-transport/python/dist/raccoon_transport-*.whl server-release/
           cp dist/raccoon-*.whl server-release/
-          cp install.sh server-release/
+          cp install.py server-release/
           cd server-release && tar czf ../raccoon-server-v${{ env.VERSION }}.tar.gz *
 
+      # --- Resolve artifact filenames ---
+      - name: Resolve artifact filenames
+        id: artifacts
+        run: |
+          echo "raccoon_whl=$(basename dist/raccoon-*.whl)" >> "$GITHUB_OUTPUT"
+          echo "transport_whl=$(basename raccoon-transport/python/dist/raccoon_transport-*.whl)" >> "$GITHUB_OUTPUT"
+          echo "server_tar=raccoon-server-v${{ env.VERSION }}.tar.gz" >> "$GITHUB_OUTPUT"
+
       # --- Create GitHub Release ---
-      # Artifacts:
-      #   - raccoon-*.whl               (laptop: pip install <url>)
-      #   - raccoon_transport-*.whl      (laptop: pip install <url>)
-      #   - raccoon-server-v*.tar.gz     (Pi: extract + ./install.sh)
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -90,30 +94,21 @@ jobs:
 
             ### Laptop
 
-            Download both `.whl` files from this release, then:
-            ```bash
-            pip install raccoon_transport-*.whl raccoon-*.whl
-            ```
-
-            Or via `gh` CLI:
+            Via `gh` CLI:
             ```bash
             gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "*.whl"
-            pip install raccoon_transport-*.whl raccoon-*.whl
+            pip install ${{ steps.artifacts.outputs.transport_whl }} ${{ steps.artifacts.outputs.raccoon_whl }}
+            ```
+
+            Or if you downloaded the `.whl` files manually:
+            ```bash
+            pip install ${{ steps.artifacts.outputs.transport_whl }} ${{ steps.artifacts.outputs.raccoon_whl }}
             ```
 
             ### Pi server
 
-            Download `raccoon-server-v${{ env.VERSION }}.tar.gz` from this release, then:
             ```bash
-            tar xzf raccoon-server-v${{ env.VERSION }}.tar.gz
-            RPI_HOST=192.168.4.1 ./install.sh
-            ```
-
-            Or via `gh` CLI:
-            ```bash
-            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "raccoon-server-*.tar.gz"
-            tar xzf raccoon-server-v${{ env.VERSION }}.tar.gz
-            RPI_HOST=192.168.4.1 ./install.sh
+            gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "${{ steps.artifacts.outputs.server_tar }}" && tar xzf ${{ steps.artifacts.outputs.server_tar }} && RPI_HOST=192.168.4.1 python3 install.py
             ```
           files: |
             dist/raccoon-*.whl

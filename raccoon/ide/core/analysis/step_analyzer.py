@@ -1,3 +1,5 @@
+"""Discover DSL-decorated step functions and classes from Python source."""
+
 import ast
 from pathlib import Path
 from typing import List, Dict, Any, Optional

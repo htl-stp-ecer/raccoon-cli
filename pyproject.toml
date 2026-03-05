@@ -9,6 +9,7 @@ description = "Toolchain CLI for libstp projects"
 requires-python = ">=3.8"
 dependencies = [
     "pyyaml",
+    "ruamel.yaml>=0.17",
     "click>=8.0",
     "black",
     "rich>=10.0",

@@ -585,7 +585,8 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
         return
 
     config_path = project_root / "raccoon.project.yml"
-    with open(config_path, "w", encoding="utf-8") as handle:
-        yaml.safe_dump(config, handle, sort_keys=False)
+    from raccoon.yaml_utils import save_yaml
+
+    save_yaml(config, config_path)
 
     console.print(f"[green]Updated {config_path.relative_to(project_root)} with wizard output.[/green]")

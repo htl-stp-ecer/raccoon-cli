@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 class StepIndexPayload(BaseModel):
+    """Request body for importing a step index produced by another backend."""
+
     steps: List[Dict[str, Any]] = Field(default_factory=list)
     last_indexed_at: str | None = None
 
@@ -29,6 +31,7 @@ async def get_available_steps(
         project_uuid: UUID = Query(None, description="Project UUID to include project-specific steps"),
         svc: StepDiscoveryService = Depends(get_step_discovery_service),
 ) -> List[Dict[str, Any]]:
+    """Return cached library steps plus project-local steps when requested."""
     return svc.get_all_available_steps(project_uuid)
 
 
@@ -36,6 +39,7 @@ async def get_available_steps(
 async def get_step_index_status(
         svc: StepDiscoveryService = Depends(get_step_discovery_service),
 ) -> Dict[str, Any]:
+    """Return the current libstp step-cache status."""
     return svc.get_libstp_cache_status()
 
 
@@ -86,6 +90,7 @@ async def refresh_step_index(
 async def clear_step_index(
         svc: StepDiscoveryService = Depends(get_step_discovery_service),
 ) -> Dict[str, Any]:
+    """Clear the cached libstp step index."""
     svc.clear_libstp_cache()
     return svc.get_libstp_cache_status()
 
@@ -95,5 +100,6 @@ async def import_step_index(
         payload: StepIndexPayload,
         svc: StepDiscoveryService = Depends(get_step_discovery_service),
 ) -> Dict[str, Any]:
+    """Import a previously generated step index into the local cache."""
     svc.import_libstp_cache(payload.steps, payload.last_indexed_at)
     return svc.get_libstp_cache_status()

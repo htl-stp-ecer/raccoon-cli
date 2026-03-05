@@ -70,9 +70,10 @@ class ServerConfig:
 
     def save(self, path: Path) -> None:
         """Save configuration to a YAML file."""
+        from raccoon.yaml_utils import save_yaml
+
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            yaml.safe_dump(self.to_dict(), f, default_flow_style=False)
+        save_yaml(self.to_dict(), path)
 
 
 # Default config file locations

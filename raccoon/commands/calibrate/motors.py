@@ -616,8 +616,9 @@ def calibrate_motors_local(
     config_path = project_root / "raccoon.project.yml"
 
     try:
-        with open(config_path, "w", encoding="utf-8") as handle:
-            yaml.safe_dump(config, handle, sort_keys=False, default_flow_style=False)
+        from raccoon.yaml_utils import save_yaml
+
+        save_yaml(config, config_path)
 
         console.print(f"\n[green]✓ Calibration results saved to {config_path.relative_to(project_root)}[/green]")
     except Exception as exc:

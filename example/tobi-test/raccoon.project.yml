@@ -1,6 +1,7 @@
 name: tobi-test
 uuid: 21e5bb71-a37d-4a2f-99ed-ad10963fe875
 robot:
+  shutdown_in: 120
   drive:
     kinematics:
       type: differential

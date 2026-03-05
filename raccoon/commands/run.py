@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from raccoon.checkpoint import create_checkpoint
 from raccoon.codegen import create_pipeline
 from raccoon.project import ProjectError, load_project_config, require_project
 
@@ -26,6 +27,11 @@ def _run_local(
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
+
+    if config.get("auto_checkpoints", True):
+        result = create_checkpoint(project_root, label="pre-run")
+        if result.created:
+            console.print(f"[dim]Checkpoint {result.short_sha} saved[/dim]")
 
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
@@ -61,6 +67,11 @@ async def _run_remote(
 ) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
+
+    if config.get("auto_checkpoints", True):
+        result = create_checkpoint(project_root, label="pre-run")
+        if result.created:
+            console.print(f"[dim]Checkpoint {result.short_sha} saved[/dim]")
 
     from raccoon.client.connection import get_connection_manager
     from raccoon.client.api import create_api_client
@@ -164,8 +175,6 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
         if not local:
             from raccoon.client.connection import (
                 get_connection_manager,
-                VersionMismatchError,
-                print_version_mismatch_error,
                 ParamikoVersionError,
                 print_paramiko_version_error,
             )
@@ -189,9 +198,6 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
                             manager.connect_sync(pi.get("address"), pi.get("port", 8421))
                 except ParamikoVersionError as e:
                     print_paramiko_version_error(e, console)
-                    raise SystemExit(1)
-                except VersionMismatchError as e:
-                    print_version_mismatch_error(e, console)
                     raise SystemExit(1)
                 except Exception as e:
                     console.print(f"[red]Failed to connect to Pi: {e}[/red]")

@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
+import tarfile
 import tempfile
 
 import click
@@ -15,9 +17,7 @@ from raccoon.client.connection import (
     get_connection_manager,
     check_paramiko_version,
     ParamikoVersionError,
-    VersionMismatchError,
     print_paramiko_version_error,
-    print_version_mismatch_error,
 )
 from raccoon.project import find_project_root
 from raccoon.version_checker import (
@@ -176,9 +176,6 @@ def _get_ssh_client(console: Console):
         success = manager.connect_sync(pi_address, pi_port, pi_user)
         if success:
             return manager.get_ssh_client()
-    except VersionMismatchError as e:
-        print_version_mismatch_error(e, console)
-        return None
     except Exception as e:
         console.print(f"[yellow]Could not connect to Pi: {e}[/yellow]")
         return None
@@ -299,10 +296,10 @@ def _update_pi_repo(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         if repo == "htl-stp-ecer/raccoon-cli":
-            # raccoon-cli has a server tarball with install.sh
+            # raccoon-cli has a server tarball with install script
             _update_pi_raccoon_cli(console, ssh_client, tmpdir, repo, pi_host, pi_user, force)
         else:
-            # Other repos have tarballs with install.sh
+            # Other repos have tarballs with install script
             _update_pi_tarball(console, ssh_client, tmpdir, repo, repo_short, pi_host, pi_user)
 
         # Track versions for non-pip packages
@@ -330,25 +327,26 @@ def _update_pi_raccoon_cli(
 
     tarball = tarballs[0]
     console.print(f"[dim]Extracting {os.path.basename(tarball)}...[/dim]")
-    subprocess.run(["tar", "xzf", tarball, "-C", tmpdir], check=True)
+    with tarfile.open(tarball, "r:gz") as tf:
+        tf.extractall(tmpdir)
 
-    install_sh = _find_install_sh(tmpdir)
-    if not install_sh:
-        console.print("[red]install.sh not found in tarball.[/red]")
+    install_script = _find_install_script(tmpdir)
+    if not install_script:
+        console.print("[red]install script not found in tarball.[/red]")
         return
 
-    console.print(f"[dim]Running install.sh for Pi ({pi_host})...[/dim]")
+    console.print(f"[dim]Running {os.path.basename(install_script)} for Pi ({pi_host})...[/dim]")
     env = os.environ.copy()
     env["RPI_HOST"] = pi_host
     env["RPI_USER"] = pi_user
 
     result = subprocess.run(
-        ["bash", install_sh],
+        [sys.executable, install_script],
         env=env,
-        cwd=os.path.dirname(install_sh),
+        cwd=os.path.dirname(install_script),
     )
     if result.returncode != 0:
-        console.print("[red]install.sh failed.[/red]")
+        console.print(f"[red]{os.path.basename(install_script)} failed.[/red]")
         return
 
     console.print("[green]raccoon server updated on Pi.[/green]")
@@ -363,7 +361,7 @@ def _update_pi_tarball(
     pi_host: str,
     pi_user: str,
 ) -> None:
-    """Update a Pi package by downloading its tarball and running install.sh."""
+    """Update a Pi package by downloading its tarball and running its install script."""
     console.print(f"[dim]Downloading release assets from {repo}...[/dim]")
     tarballs = download_release_assets(repo, "*.tar.gz", tmpdir)
     if not tarballs:
@@ -372,37 +370,38 @@ def _update_pi_tarball(
 
     tarball = tarballs[0]
     console.print(f"[dim]Extracting {os.path.basename(tarball)}...[/dim]")
-    subprocess.run(["tar", "xzf", tarball, "-C", tmpdir], check=True)
+    with tarfile.open(tarball, "r:gz") as tf:
+        tf.extractall(tmpdir)
 
-    install_sh = _find_install_sh(tmpdir)
-    if not install_sh:
-        console.print(f"[red]install.sh not found in {repo_short} tarball.[/red]")
+    install_script = _find_install_script(tmpdir)
+    if not install_script:
+        console.print(f"[red]install script not found in {repo_short} tarball.[/red]")
         return
 
-    console.print(f"[dim]Running install.sh for {repo_short}...[/dim]")
+    console.print(f"[dim]Running {os.path.basename(install_script)} for {repo_short}...[/dim]")
     env = os.environ.copy()
     env["RPI_HOST"] = pi_host
     env["RPI_USER"] = pi_user
 
     result = subprocess.run(
-        ["bash", install_sh],
+        [sys.executable, install_script],
         env=env,
-        cwd=os.path.dirname(install_sh),
+        cwd=os.path.dirname(install_script),
     )
     if result.returncode != 0:
-        console.print(f"[red]install.sh failed for {repo_short}.[/red]")
+        console.print(f"[red]{os.path.basename(install_script)} failed for {repo_short}.[/red]")
         return
 
     console.print(f"[green]{repo_short} updated on Pi.[/green]")
 
 
-def _find_install_sh(tmpdir: str) -> str | None:
-    """Find install.sh at top level or one directory deep in tmpdir."""
-    candidate = os.path.join(tmpdir, "install.sh")
+def _find_install_script(tmpdir: str) -> str | None:
+    """Find install.py at top level or one directory deep in tmpdir."""
+    candidate = os.path.join(tmpdir, "install.py")
     if os.path.exists(candidate):
         return candidate
     for entry in os.listdir(tmpdir):
-        candidate = os.path.join(tmpdir, entry, "install.sh")
+        candidate = os.path.join(tmpdir, entry, "install.py")
         if os.path.exists(candidate):
             return candidate
     return None

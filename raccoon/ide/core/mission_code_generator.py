@@ -1,3 +1,5 @@
+"""Generate mission Python source code from parsed IDE mission models."""
+
 import importlib.util
 from pathlib import Path
 from collections import defaultdict
@@ -9,9 +11,7 @@ from raccoon.ide.schemas.mission_detail import ParsedMission, ParsedStep, StepAr
 
 
 class MissionCodeGenerator:
-    """
-    Generates mission code from ParsedMission JSON structure.
-    """
+    """Render ``ParsedMission`` payloads back into importable Python code."""
 
     _dynamic_import_cache: Optional[Dict[str, str]] = None
 

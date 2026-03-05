@@ -252,8 +252,6 @@ def codegen_command(
         if not local and not no_sync:
             from raccoon.client.connection import (
                 get_connection_manager,
-                VersionMismatchError,
-                print_version_mismatch_error,
                 ParamikoVersionError,
                 print_paramiko_version_error,
             )
@@ -275,9 +273,6 @@ def codegen_command(
                             manager.connect_sync(pi.get("address"), pi.get("port", 8421))
                 except ParamikoVersionError as e:
                     print_paramiko_version_error(e, console)
-                    raise SystemExit(1)
-                except VersionMismatchError as e:
-                    print_version_mismatch_error(e, console)
                     raise SystemExit(1)
                 except Exception as e:
                     console.print(f"[red]Failed to connect to Pi: {e}[/red]")
