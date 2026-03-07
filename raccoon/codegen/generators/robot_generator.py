@@ -235,8 +235,11 @@ class RobotGenerator(BaseGenerator):
 
         # Add shutdown_in (required by GenericRobot)
         shutdown_in = data.get("shutdown_in")
-        if shutdown_in is not None:
-            builder.add_class_attribute("shutdown_in", repr(shutdown_in))
+        if shutdown_in is None:
+            raise ValueError(
+                "Missing required 'shutdown_in' in raccoon.project.yml"
+            )
+        builder.add_class_attribute("shutdown_in", repr(shutdown_in))
 
         # Add missions from full config
         if hasattr(self, '_full_config'):
