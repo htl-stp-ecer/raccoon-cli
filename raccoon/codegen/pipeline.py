@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from .generators.registry import GeneratorRegistry
 from .generators.defs_generator import DefsGenerator
+from .generators.defs_stub_generator import DefsStubGenerator
 from .generators.robot_generator import RobotGenerator
 
 logger = logging.getLogger("raccoon")
@@ -30,6 +31,9 @@ class CodegenPipeline:
         """Register default generators."""
         # Register hardware definitions generator
         self.registry.register("defs", DefsGenerator(class_name="Defs"))
+
+        # Register type stub for IDE autocomplete (ServoPreset positions etc.)
+        self.registry.register("defs_stub", DefsStubGenerator(class_name="Defs"))
 
         # Register robot configuration generator
         self.registry.register("robot", RobotGenerator(class_name="Robot"))

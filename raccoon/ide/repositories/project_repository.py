@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import yaml
+from raccoon.yaml_utils import load_yaml
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
@@ -131,7 +132,7 @@ class ProjectRepository:
             if not config_path.exists():
                 continue
             try:
-                data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                data = load_yaml(config_path)
             except Exception:
                 continue
             if not isinstance(data, dict):
@@ -156,7 +157,7 @@ class ProjectRepository:
             if not config_path.exists():
                 continue
             try:
-                data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                data = load_yaml(config_path)
             except Exception:
                 continue
             if not isinstance(data, dict):

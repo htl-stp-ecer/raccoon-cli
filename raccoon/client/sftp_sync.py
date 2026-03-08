@@ -86,6 +86,7 @@ class SyncOptions:
 
     direction: SyncDirection = SyncDirection.PUSH
     delete: bool = True  # Delete extraneous files on destination
+    update: bool = False  # Skip files that are newer on the destination
     exclude_patterns: list[str] = field(
         default_factory=lambda: [
             ".git",
@@ -168,6 +169,9 @@ class RsyncSync:
 
         if options.delete:
             cmd.append("--delete")
+
+        if options.update:
+            cmd.append("--update")
 
         for pattern in options.exclude_patterns:
             cmd.extend(["--exclude", pattern])
@@ -370,6 +374,17 @@ class SftpSync:
                 remote_file = str(PurePosixPath(remote_path) / rel_file)
                 local_file = local_path / rel_file.replace("/", os.sep)
                 local_file.parent.mkdir(parents=True, exist_ok=True)
+
+                # Skip files that are newer locally (user edits during run)
+                if options.update and local_file.exists():
+                    local_mtime = local_file.stat().st_mtime
+                    try:
+                        remote_mtime = sftp.stat(remote_file).st_mtime
+                    except Exception:
+                        remote_mtime = 0
+                    if local_mtime > remote_mtime:
+                        progress.advance(task)
+                        continue
 
                 sftp.get(remote_file, str(local_file))
                 result.files_downloaded += 1

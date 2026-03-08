@@ -27,9 +27,9 @@ class MissionAnalyzer:
             return []
 
         try:
-            with config_path.open("r", encoding="utf-8") as stream:
-                data = yaml.safe_load(stream) or {}
-        except yaml.YAMLError:
+            from raccoon.yaml_utils import load_yaml
+            data = load_yaml(config_path)
+        except Exception:
             return []
 
         if not isinstance(data, dict):

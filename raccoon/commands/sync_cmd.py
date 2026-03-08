@@ -18,6 +18,7 @@ def do_sync(
     console: Console,
     direction: SyncDirection = SyncDirection.PUSH,
     delete: bool = True,
+    update: bool = False,
 ) -> bool:
     """
     Core sync logic - performs sync using rsync.
@@ -100,6 +101,7 @@ def do_sync(
         options = SyncOptions(
             direction=direction,
             delete=delete,
+            update=update,
         )
         if ignore_patterns:
             options.exclude_patterns = options.exclude_patterns + ignore_patterns
@@ -187,6 +189,7 @@ def sync_project_interactive(
     project_root,
     console: Console = None,
     direction: SyncDirection = SyncDirection.PUSH,
+    update: bool = False,
 ) -> bool:
     """
     Sync project with Pi.
@@ -197,9 +200,10 @@ def sync_project_interactive(
         project_root: Path to the project root
         console: Rich console for output
         direction: Sync direction (default PUSH)
+        update: Skip files newer on destination (preserve local edits during pull)
 
     Returns:
         True if sync successful
     """
     console = console or Console()
-    return do_sync(project_root, console, direction=direction)
+    return do_sync(project_root, console, direction=direction, update=update)

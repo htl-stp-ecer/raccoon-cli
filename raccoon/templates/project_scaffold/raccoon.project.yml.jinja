@@ -100,3 +100,25 @@ definitions:
   button:
     type: "DigitalSensor"
     port: 10
+
+  # Uncomment and configure IR sensors for line detection:
+  # front_left_light_sensor:
+  #   type: "IRSensor"
+  #   port: 4
+  # front_right_light_sensor:
+  #   type: "IRSensor"
+  #   port: 5
+
+  # Sensor groups bind sensor pairs for lineup, line-follow, and sensor-triggered
+  # motion steps. Each group gets a SensorGroup attribute on Defs with methods
+  # like .drive_until_black(), .lineup_on_black(), .follow_right_edge(cm), etc.
+  # front:
+  #   type: SensorGroup
+  #   left: front_left_light_sensor
+  #   right: front_right_light_sensor
+  #   threshold: 0.7        # optional: default confidence threshold
+  #   speed: 1.0            # optional: default motion speed
+  #   follow_speed: 0.8     # optional: line-follow speed
+  #   follow_kp: 0.5        # optional: line-follow PID gains
+  #   follow_ki: 0.02
+  #   follow_kd: 0.0
