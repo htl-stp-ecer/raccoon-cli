@@ -56,8 +56,8 @@ class ProjectManager:
             config_path = item / "raccoon.project.yml"
             if config_path.exists():
                 try:
-                    with open(config_path) as f:
-                        config = yaml.safe_load(f) or {}
+                    from raccoon.yaml_utils import load_yaml
+                    config = load_yaml(config_path)
                     if config.get("uuid") == project_id:
                         return self._get_project_info(item)
                 except Exception:
@@ -137,8 +137,8 @@ class ProjectManager:
 
         if has_config:
             try:
-                with open(config_path) as f:
-                    config = yaml.safe_load(f) or {}
+                from raccoon.yaml_utils import load_yaml
+                config = load_yaml(config_path)
                 name = config.get("name", project_path.name)
                 project_id = config.get("uuid", project_path.name)
             except Exception:

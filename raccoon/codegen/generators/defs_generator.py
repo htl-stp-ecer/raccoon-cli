@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseGenerator
 from ..builder import build_constructor_expr, build_literal_expr
@@ -12,6 +12,14 @@ from ..introspection import resolve_class
 from ..yaml_resolver import create_hardware_resolver
 
 logger = logging.getLogger("raccoon")
+
+# SensorGroup field references (emitted as bare attribute names, not strings).
+_SENSOR_GROUP_REF_KEYS = frozenset({"left", "right"})
+# SensorGroup optional numeric parameters.
+_SENSOR_GROUP_PARAM_KEYS = frozenset({
+    "threshold", "speed",
+    "follow_speed", "follow_kp", "follow_ki", "follow_kd",
+})
 
 
 class DefsGenerator(BaseGenerator):
@@ -87,6 +95,10 @@ class DefsGenerator(BaseGenerator):
                     f"definitions.{field_name}: missing required 'type' field"
                 )
 
+            # Validate SensorGroup references
+            if hw_cfg.get("type") == "SensorGroup":
+                self._validate_sensor_group(field_name, hw_cfg, data)
+
         # Require button definition
         if "button" not in data:
             raise ValueError(
@@ -133,10 +145,25 @@ class DefsGenerator(BaseGenerator):
 
             logger.info(f"Processing definition: {field_name}")
 
+            type_name = hw_cfg.get("type", "")
+
+            # Handle SensorGroup specially — left/right are field references,
+            # not constructor params that go through the hardware resolver.
+            if type_name == "SensorGroup":
+                hw_expr = self._build_sensor_group_expr(hw_cfg)
+                attributes.append((field_name, hw_expr))
+                logger.info(f"Generated SensorGroup '{field_name}'")
+                continue
+
+            # Check for servo preset (positions key on a Servo type)
+            preset_info = self._extract_servo_preset(hw_cfg)
+
             # Resolve type and extract parameters using the unified resolver
+            # Strip preset-only keys before passing to the hardware resolver
+            resolved_cfg = {k: v for k, v in hw_cfg.items() if k not in ("positions", "offset")}
             try:
-                hw_class, hw_params = self.resolver.resolve_from_config(hw_cfg, type_key="type")
-                logger.info(f"Resolved type '{hw_cfg['type']}' to {hw_class.__name__} for {field_name}")
+                hw_class, hw_params = self.resolver.resolve_from_config(resolved_cfg, type_key="type")
+                logger.info(f"Resolved type '{type_name}' to {hw_class.__name__} for {field_name}")
             except ValueError as e:
                 raise ValueError(f"definitions.{field_name}: {e}")
 
@@ -149,6 +176,13 @@ class DefsGenerator(BaseGenerator):
             hw_expr = build_constructor_expr(
                 hw_class, hw_params, f"definitions.{field_name}", self.imports
             )
+
+            # Wrap in ServoPreset if positions were defined
+            if preset_info is not None:
+                positions, offset = preset_info
+                hw_expr = self._build_servo_preset_expr(hw_expr, positions, offset)
+                logger.info(f"Wrapping '{field_name}' as ServoPreset with {len(positions)} positions (offset={offset})")
+
             attributes.append((field_name, hw_expr))
 
         # Always add analog_sensors list (empty if no analog sensors found)
@@ -157,6 +191,37 @@ class DefsGenerator(BaseGenerator):
 
         # Use ClassBuilder to construct the class
         return ClassBuilder.build_simple_class(self.class_name, attributes)
+
+    @staticmethod
+    def _extract_servo_preset(hw_cfg: Dict[str, Any]) -> Optional[Tuple[Dict[str, float], float]]:
+        """
+        Check if a hardware definition includes servo preset positions.
+
+        Returns:
+            (positions_dict, offset) if positions are defined, None otherwise.
+        """
+        if hw_cfg.get("type") != "Servo":
+            return None
+        positions = hw_cfg.get("positions")
+        if not positions:
+            return None
+        if not isinstance(positions, dict):
+            return None
+        offset = float(hw_cfg.get("offset", 0))
+        return positions, offset
+
+    def _build_servo_preset_expr(
+        self,
+        servo_expr: str,
+        positions: Dict[str, float],
+        offset: float,
+    ) -> str:
+        """Build a ServoPreset(...) expression wrapping a Servo constructor."""
+        self.imports._entries.add(("libstp.step.servo.preset", "ServoPreset"))
+        positions_literal = build_literal_expr(positions)
+        if offset:
+            return f"ServoPreset({servo_expr}, positions={positions_literal}, offset={build_literal_expr(offset)})"
+        return f"ServoPreset({servo_expr}, positions={positions_literal})"
 
     def _build_imu_expr(self, params: Dict[str, Any]) -> str:
         """Build IMU constructor expression from config params."""
@@ -224,6 +289,48 @@ class DefsGenerator(BaseGenerator):
             "Defaulting to 'from libstp import IMU as Imu'; ensure the target "
             "environment provides a compatible IMU class."
         )
+
+    @staticmethod
+    def _validate_sensor_group(
+        field_name: str, hw_cfg: Dict[str, Any], data: Dict[str, Any]
+    ) -> None:
+        """Validate a SensorGroup definition entry."""
+        # At least one of left/right must be specified
+        if "left" not in hw_cfg and "right" not in hw_cfg:
+            raise ValueError(
+                f"definitions.{field_name}: "
+                "SensorGroup must specify at least 'left' or 'right'"
+            )
+        # Validate sensor references point to existing definitions
+        hw_fields = {k for k in data if k != field_name}
+        for side in ("left", "right"):
+            ref = hw_cfg.get(side)
+            if ref is not None and ref not in hw_fields:
+                raise ValueError(
+                    f"definitions.{field_name}.{side}: "
+                    f"'{ref}' does not match any definition. "
+                    f"Available: {', '.join(sorted(hw_fields))}"
+                )
+
+    def _build_sensor_group_expr(self, hw_cfg: Dict[str, Any]) -> str:
+        """Build a SensorGroup(...) constructor expression."""
+        self.imports._entries.add(
+            ("libstp.step.motion.sensor_group", "SensorGroup")
+        )
+
+        pieces: List[str] = []
+        # left/right are bare field references (class attribute names)
+        for key in ("left", "right"):
+            ref = hw_cfg.get(key)
+            if ref is not None:
+                pieces.append(f"{key}={ref}")
+        # Optional numeric parameters
+        for key in sorted(_SENSOR_GROUP_PARAM_KEYS):
+            val = hw_cfg.get(key)
+            if val is not None:
+                pieces.append(f"{key}={build_literal_expr(val)}")
+
+        return "SensorGroup(" + ", ".join(pieces) + ")"
 
     def generate_imports(self) -> str:
         """Generate import statements, ensuring Imu is always imported."""

@@ -30,8 +30,8 @@ def _detect_project(cwd: Path) -> tuple[Path, str | None]:
         return cwd, None
 
     try:
-        with open(project_file, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
+        from raccoon.yaml_utils import load_yaml
+        config = load_yaml(project_file)
         if isinstance(config, dict) and config.get("uuid"):
             return cwd.parent, str(config["uuid"])
     except Exception:

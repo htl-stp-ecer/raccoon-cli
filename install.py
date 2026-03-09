@@ -78,6 +78,14 @@ def main() -> None:
     ssh(host, user, f"rm -rf {remote_tmp} && mkdir -p {remote_tmp}")
     scp([transport_whl, raccoon_whl], f"{user}@{host}:{remote_tmp}/")
 
+    # --- Remove stale user-level install that would shadow the system-wide one ---
+    print("Removing stale user-level install (if any)...")
+    ssh(
+        host,
+        user,
+        "python3 -m pip uninstall raccoon -y --break-system-packages 2>/dev/null || true",
+    )
+
     # --- Install ---
     print("Installing...")
     ssh(

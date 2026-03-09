@@ -126,10 +126,10 @@ async def _run_remote(
         finally:
             signal.signal(signal.SIGINT, original_handler)
 
-        # Sync changes back from Pi
+        # Sync changes back from Pi (preserve locally-edited files)
         console.print()
         console.print("[dim]Syncing changes from Pi...[/dim]")
-        sync_project_interactive(project_root, console, direction=SyncDirection.PULL)
+        sync_project_interactive(project_root, console, direction=SyncDirection.PULL, update=True)
 
         # Display final status
         exit_code = final_status.get("exit_code", -1)
