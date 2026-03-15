@@ -1,0 +1,108 @@
+shutdown_in: 120
+drive:
+  kinematics:
+    type: differential
+    wheel_radius: 0.03
+    wheelbase: 0.16
+    left_motor: left_motor
+    right_motor: right_motor
+  vel_config:
+    vx:
+      pid:
+        kp: 0.0
+        ki: 0.0
+        kd: 0.0
+      ff:
+        kS: 0.0
+        kV: 1.0
+        kA: 0.0
+    vy:
+      pid:
+        kp: 0.0
+        ki: 0.0
+        kd: 0.0
+      ff:
+        kS: 0.0
+        kV: 1.0
+        kA: 0.0
+    wz:
+      pid:
+        kp: 0.0
+        ki: 0.0
+        kd: 0.0
+      ff:
+        kS: 0.0
+        kV: 1.0
+        kA: 0.0
+odometry:
+  type: FusedOdometry
+  config:
+    bemf_trust: 1.0
+motion_pid:
+  # Distance/Position PID
+  distance:
+    kp: 2.0
+    ki: 0.0
+    kd: 0.0
+    integral_max: 10.0
+    integral_deadband: 0.01
+    derivative_lpf_alpha: 0.1
+    output_min: -10.0
+    output_max: 10.0
+
+  # Heading/Angular PID
+  heading:
+    kp: 3.0
+    ki: 0.0
+    kd: 0.0
+    integral_max: 10.0
+    integral_deadband: 0.01
+    derivative_lpf_alpha: 0.1
+    output_min: -10.0
+    output_max: 10.0
+
+  # Profiled PID velocity feedforward
+  velocity_ff: 1.0
+
+  # Tolerances
+  distance_tolerance_m: 0.01
+  angle_tolerance_rad: 0.02
+
+  # Saturation handling
+  saturation_derating_factor: 0.85
+  saturation_min_scale: 0.1
+  saturation_recovery_rate: 0.02
+  saturation_hold_cycles: 5
+  saturation_recovery_threshold: 0.95
+
+  # Heading-specific saturation
+  heading_saturation_derating_factor: 0.85
+  heading_min_scale: 0.25
+  heading_recovery_rate: 0.05
+  heading_saturation_error_rad: 0.01
+  heading_recovery_error_rad: 0.005
+
+  # Per-axis motion profile constraints (populated by characterize_drive)
+  # linear:
+  #   max_velocity: 0.0
+  #   acceleration: 0.0
+  #   deceleration: 0.0
+  # lateral:
+  #   max_velocity: 0.0
+  #   acceleration: 0.0
+  #   deceleration: 0.0
+  # angular:
+  #   max_velocity: 0.0
+  #   acceleration: 0.0
+  #   deceleration: 0.0
+physical:
+  width_cm: 15.0
+  length_cm: 15.0
+  sensors: []
+  rotation_center:
+    x_cm: 7.5
+    y_cm: 7.5
+  start_pose:
+    x_cm: 30.0
+    y_cm: 20.0
+    theta_deg: 90.0

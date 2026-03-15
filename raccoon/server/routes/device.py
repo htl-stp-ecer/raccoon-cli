@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from raccoon.server.auth import require_auth
 
-router = APIRouter(prefix="/api/v1/device", tags=["device"], dependencies=[Depends(require_auth)])
+router = APIRouter(prefix="/api/v1/device", tags=["device"])
 
 
 # =============================================================================
@@ -270,7 +270,7 @@ async def get_device_info():
     return _build_connection_info(project_path)
 
 
-@router.put("/hostname", response_model=ConnectionInfo)
+@router.put("/hostname", response_model=ConnectionInfo, dependencies=[Depends(require_auth)])
 async def update_hostname(request: HostnameRequest):
     """Update the system hostname."""
     new_hostname = request.hostname.strip()
@@ -289,7 +289,7 @@ async def update_hostname(request: HostnameRequest):
     return _build_connection_info(project_path)
 
 
-@router.put("/dimensions", response_model=ConnectionInfo)
+@router.put("/dimensions", response_model=ConnectionInfo, dependencies=[Depends(require_auth)])
 async def update_dimensions(request: DimensionsRequest):
     """Update robot dimensions."""
     if request.width_cm <= 0 or request.length_cm <= 0:
@@ -309,7 +309,7 @@ async def update_dimensions(request: DimensionsRequest):
     return _build_connection_info(project_path)
 
 
-@router.put("/sensors", response_model=ConnectionInfo)
+@router.put("/sensors", response_model=ConnectionInfo, dependencies=[Depends(require_auth)])
 async def update_sensors(request: SensorsRequest):
     """Update sensor positions."""
     project_path = _get_project_path()
@@ -337,7 +337,7 @@ async def update_sensors(request: SensorsRequest):
     return _build_connection_info(project_path)
 
 
-@router.put("/rotation-center", response_model=ConnectionInfo)
+@router.put("/rotation-center", response_model=ConnectionInfo, dependencies=[Depends(require_auth)])
 async def update_rotation_center(request: RotationCenterRequest):
     """Update rotation center position."""
     project_path = _get_project_path()
@@ -359,7 +359,7 @@ async def update_rotation_center(request: RotationCenterRequest):
     return _build_connection_info(project_path)
 
 
-@router.put("/start-pose", response_model=ConnectionInfo)
+@router.put("/start-pose", response_model=ConnectionInfo, dependencies=[Depends(require_auth)])
 async def update_start_pose(request: StartPoseRequest):
     """Update starting pose on the table."""
     project_path = _get_project_path()
@@ -391,7 +391,7 @@ async def get_table_map():
     return {"image": physical.get("table_map")}
 
 
-@router.put("/table-map")
+@router.put("/table-map", dependencies=[Depends(require_auth)])
 async def update_table_map(request: TableMapRequest):
     """Update the table map image."""
     project_path = _get_project_path()

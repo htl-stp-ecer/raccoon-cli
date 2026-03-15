@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from raccoon.server.auth import require_auth
 
-router = APIRouter(prefix="/api/v1/projects", tags=["projects"], dependencies=[Depends(require_auth)])
+router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
 
 class ProjectInfo(BaseModel):
@@ -83,7 +83,7 @@ async def get_project(project_id: str):
     )
 
 
-@router.delete("/{project_id}")
+@router.delete("/{project_id}", dependencies=[Depends(require_auth)])
 async def delete_project(project_id: str):
     """
     Delete a project from the Pi.

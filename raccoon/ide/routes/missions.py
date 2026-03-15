@@ -79,7 +79,7 @@ async def get_project_missions(
 ):
     """List missions declared for a project."""
     try:
-        missions = svc.get_project_missions(project_uuid)
+        missions = await asyncio.to_thread(svc.get_project_missions, project_uuid)
         return missions
     except Exception as e:
         logger.error(f"Failed to get missions for project {project_uuid}: {str(e)}")
@@ -99,7 +99,7 @@ async def parse_mission_detailed(
     mission_name = mission_name.strip()
 
     try:
-        mission = svc.get_detailed_mission_by_name(project_uuid, mission_name)
+        mission = await asyncio.to_thread(svc.get_detailed_mission_by_name, project_uuid, mission_name)
         if not mission:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_name}' not found or could not be parsed")
         return mission
@@ -381,7 +381,7 @@ async def get_all_missions_simulation(
 ):
     """Get simulation data for all missions in a project."""
     try:
-        missions_data = svc.get_all_missions_simulation_data(project_uuid)
+        missions_data = await asyncio.to_thread(svc.get_all_missions_simulation_data, project_uuid)
         return ProjectSimulationData(missions=missions_data)
     except Exception as e:
         logger.error(f"Failed to get simulation data for project {project_uuid}: {str(e)}")
@@ -401,7 +401,7 @@ async def get_mission_simulation(
     mission_name = mission_name.strip()
 
     try:
-        sim_data = svc.get_mission_simulation_data(project_uuid, mission_name)
+        sim_data = await asyncio.to_thread(svc.get_mission_simulation_data, project_uuid, mission_name)
         if not sim_data:
             raise HTTPException(status_code=404, detail=f"Mission '{mission_name}' not found or could not be analyzed")
         return sim_data

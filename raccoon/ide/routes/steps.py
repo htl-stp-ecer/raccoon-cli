@@ -1,5 +1,6 @@
 """Step discovery API routes."""
 
+import asyncio
 import logging
 import httpx
 from typing import List, Dict, Any
@@ -32,7 +33,7 @@ async def get_available_steps(
         svc: StepDiscoveryService = Depends(get_step_discovery_service),
 ) -> List[Dict[str, Any]]:
     """Return cached library steps plus project-local steps when requested."""
-    return svc.get_all_available_steps(project_uuid)
+    return await asyncio.to_thread(svc.get_all_available_steps, project_uuid)
 
 
 @router.get("/index/status")
