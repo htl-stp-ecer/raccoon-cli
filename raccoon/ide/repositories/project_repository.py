@@ -19,6 +19,8 @@ class ProjectRepository:
     def __init__(self, project_root: str | Path):
         self.project_root = str(project_root)
         os.makedirs(self.project_root, exist_ok=True)
+        # Cache: uuid -> resolved Path (avoids re-walking the filesystem)
+        self._uuid_path_cache: Dict[uuid.UUID, Path] = {}
 
         def uuid_constructor(loader, node):
             return uuid.UUID(loader.construct_scalar(node))
@@ -28,11 +30,18 @@ class ProjectRepository:
         )
 
     def get_project_path(self, project_uuid: uuid.UUID) -> Path:
+        # Fast path: already resolved
+        cached = self._uuid_path_cache.get(project_uuid)
+        if cached is not None and cached.exists():
+            return cached
+
         uuid_path = Path(os.path.join(self.project_root, str(project_uuid)))
         if uuid_path.exists():
+            self._uuid_path_cache[project_uuid] = uuid_path
             return uuid_path
         resolved = self._find_project_path_by_uuid(project_uuid)
         if resolved:
+            self._uuid_path_cache[project_uuid] = resolved
             return resolved
         return uuid_path
 
@@ -142,9 +151,19 @@ class ProjectRepository:
                 projects.append(project)
         return projects
 
-    def _iter_project_dirs(self) -> List[Path]:
+    def _iter_project_dirs(self, max_depth: int = 3) -> List[Path]:
         dirs: List[Path] = []
+        root_depth = self.project_root.count(os.sep)
         for root, dirnames, _ in os.walk(self.project_root):
+            depth = root.count(os.sep) - root_depth
+            if depth >= max_depth:
+                dirnames.clear()
+                continue
+            # Skip hidden dirs, __pycache__, node_modules, .git etc.
+            dirnames[:] = [
+                d for d in dirnames
+                if not d.startswith('.') and d not in ('__pycache__', 'node_modules', '.git', 'venv', '.venv')
+            ]
             for dirname in dirnames:
                 candidate = Path(root) / dirname
                 if (candidate / self.CONFIG_FILENAME).exists():

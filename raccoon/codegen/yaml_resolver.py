@@ -152,7 +152,7 @@ def create_kinematics_resolver() -> YamlResolver:
 
 def create_odometry_resolver() -> YamlResolver:
     """Create a resolver configured for odometry types."""
-    resolver = YamlResolver(default_namespaces=["libstp.odometry"])
+    resolver = YamlResolver(default_namespaces=["libstp.odometry", "libstp"])
     resolver.add_type_mapping("imuodometry", "libstp.odometry_imu.ImuOdometry")
     resolver.add_type_mapping("imu", "libstp.odometry_imu.ImuOdometry")
     resolver.add_type_mapping("fusedodometry", "libstp.odometry_fused.FusedOdometry")

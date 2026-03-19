@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -14,6 +15,9 @@ from raccoon.ide.services.project_service import ProjectService
 class StepDiscoveryService:
     """Collect step definitions from cached library data and project source."""
 
+    # How long discovered file-based steps stay cached (seconds).
+    _DISCOVERY_TTL = 10.0
+
     def __init__(self, project_service: ProjectService):
         self.project_service = project_service
         self._libstp_cache_path = Path.cwd() / ".raccoon" / "libstp_step_cache.json"
@@ -22,15 +26,19 @@ class StepDiscoveryService:
         self._libstp_last_indexed_at: Optional[str] = None
         self._libstp_lock = threading.Lock()
         self._load_libstp_cache()
+        # In-memory cache for file-based discovery results
+        self._library_steps_cache: Optional[List[StepFunction]] = None
+        self._library_steps_ts: float = 0.0
+        self._project_steps_cache: Dict[UUID, tuple[float, List[StepFunction]]] = {}
 
     def get_all_available_steps(self, project_uuid: UUID = None) -> List[Dict[str, Any]]:
         """Get all available steps for a project (library + scoped project steps)"""
         steps: List[StepFunction] = []
         steps.extend(self._default_library_steps())
-        steps.extend(self._discover_library_files())
+        steps.extend(self._discover_library_files_cached())
 
         if project_uuid:
-            steps.extend(self._get_project_specific_steps(project_uuid))
+            steps.extend(self._get_project_specific_steps_cached(project_uuid))
 
         return self._deduplicate_steps(steps)
 
@@ -43,6 +51,26 @@ class StepDiscoveryService:
     def get_project_steps(self, project_uuid: UUID) -> List[Dict[str, Any]]:
         """Get steps specific to a project"""
         return self._deduplicate_steps(self._get_project_specific_steps(project_uuid))
+
+    def _discover_library_files_cached(self) -> List[StepFunction]:
+        """Return library steps, re-scanning only when TTL has expired."""
+        now = time.monotonic()
+        if self._library_steps_cache is not None and (now - self._library_steps_ts) < self._DISCOVERY_TTL:
+            return list(self._library_steps_cache)
+        result = self._discover_library_files()
+        self._library_steps_cache = result
+        self._library_steps_ts = now
+        return result
+
+    def _get_project_specific_steps_cached(self, project_uuid: UUID) -> List[StepFunction]:
+        """Return project steps, re-scanning only when TTL has expired."""
+        now = time.monotonic()
+        cached = self._project_steps_cache.get(project_uuid)
+        if cached is not None and (now - cached[0]) < self._DISCOVERY_TTL:
+            return list(cached[1])
+        result = self._get_project_specific_steps(project_uuid)
+        self._project_steps_cache[project_uuid] = (now, result)
+        return result
 
     def _discover_library_files(self) -> List[StepFunction]:
         steps: List[StepFunction] = []

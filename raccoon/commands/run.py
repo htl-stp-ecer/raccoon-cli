@@ -23,7 +23,8 @@ logger = logging.getLogger("raccoon")
 
 
 def _run_local(
-    ctx: click.Context, project_root: Path, config: dict, args: tuple, dev: bool = False
+    ctx: click.Context, project_root: Path, config: dict, args: tuple,
+    dev: bool = False, no_calibrate: bool = False,
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
@@ -47,6 +48,8 @@ def _run_local(
     env = os.environ.copy()
     if dev:
         env["LIBSTP_DEV_MODE"] = "1"
+    if no_calibrate:
+        env["LIBSTP_NO_CALIBRATE"] = "1"
 
     result = subprocess.run(cmd_parts, cwd=project_root, env=env)
 
@@ -63,7 +66,8 @@ def _run_local(
 
 
 async def _run_remote(
-    ctx: click.Context, project_root: Path, config: dict, args: tuple, dev: bool = False
+    ctx: click.Context, project_root: Path, config: dict, args: tuple,
+    dev: bool = False, no_calibrate: bool = False,
 ) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
@@ -95,7 +99,11 @@ async def _run_remote(
     # Start the run command on Pi
     async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
         try:
-            env = {"LIBSTP_DEV_MODE": "1"} if dev else {}
+            env = {}
+            if dev:
+                env["LIBSTP_DEV_MODE"] = "1"
+            if no_calibrate:
+                env["LIBSTP_NO_CALIBRATE"] = "1"
             result = await client.run_project(project_uuid, args=list(args), env=env)
         except Exception as e:
             console.print(f"[red]Failed to start run on Pi: {e}[/red]")
@@ -153,8 +161,9 @@ async def _run_remote(
 @click.option("--dev", is_flag=True, help="Dev mode: use button instead of wait-for-light")
 @click.option("--local", "-l", is_flag=True, help="Force local execution (skip remote)")
 @click.option("--no-sync", is_flag=True, help="Skip syncing before remote run")
+@click.option("--no-calibrate", is_flag=True, help="Skip calibration steps, use stored values")
 @click.pass_context
-def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool) -> None:
+def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool) -> None:
     """Run codegen and then execute src.main.
 
     If connected to a Pi, syncs the project and runs remotely.
@@ -205,7 +214,7 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
 
             if manager.is_connected:
                 # Run remotely
-                asyncio.run(_run_remote(ctx, project_root, config, args, dev=dev))
+                asyncio.run(_run_remote(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate))
                 return
 
             console.print("[red]Remote execution requested, but no Pi connection is available.[/red]")
@@ -213,7 +222,7 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
             raise SystemExit(1)
 
         # Run locally
-        _run_local(ctx, project_root, config, args, dev=dev)
+        _run_local(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate)
 
     except ProjectError as exc:
         logger.error(str(exc))

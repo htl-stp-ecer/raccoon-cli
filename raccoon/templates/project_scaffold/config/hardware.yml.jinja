@@ -1,0 +1,24 @@
+button:
+  type: DigitalSensor
+  port: 10
+imu:
+  type: IMU
+
+# Uncomment and configure IR sensors for line detection:
+# front_left_ir_sensor:
+#   type: IRSensor
+#   port: 4
+# front_right_ir_sensor:
+#   type: IRSensor
+#   port: 5
+
+# Sensor groups bind sensor pairs for lineup, line-follow, and sensor-triggered
+# motion steps. Each group gets a SensorGroup attribute on Defs with methods
+# like .drive_until_black(), .lineup_on_black(), .follow_right_edge(cm), etc.
+# front:
+#   type: SensorGroup
+#   left: front_left_ir_sensor
+#   right: front_right_ir_sensor
+
+_motors: !include-merge 'motors.yml'
+_servos: !include-merge 'servos.yml'

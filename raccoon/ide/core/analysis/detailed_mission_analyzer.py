@@ -211,46 +211,86 @@ class DetailedMissionExtractor(cst.CSTVisitor):
 class DetailedMissionAnalyzer:
     """
     Analyzes mission files to extract detailed step information.
+
+    Results are cached by (file_path, mtime) so repeated lookups for the same
+    unchanged file skip the expensive libcst parse.
     """
 
+    def __init__(self) -> None:
+        # Cache: file_path -> (mtime_ns, {mission_name: ParsedMission})
+        self._cache: Dict[Path, tuple[int, Dict[str, ParsedMission]]] = {}
+
     def analyze_mission_file(self, mission_file_path: Path) -> Optional[ParsedMission]:
-        """Analyze a single mission file."""
+        """Analyze a single mission file (cached by mtime)."""
+        missions = self._analyze_mission_file_all(mission_file_path)
+        if missions:
+            return next(iter(missions.values()))
+        return None
+
+    def _analyze_mission_file_all(self, mission_file_path: Path) -> Dict[str, ParsedMission]:
+        """Parse all missions in a file, returning them keyed by class name.
+
+        Uses an mtime-based cache to skip re-parsing unchanged files.
+        """
         if not mission_file_path.exists():
-            return None
+            return {}
+
+        try:
+            mtime_ns = mission_file_path.stat().st_mtime_ns
+        except OSError:
+            return {}
+
+        cached = self._cache.get(mission_file_path)
+        if cached is not None and cached[0] == mtime_ns:
+            return cached[1]
 
         try:
             code = mission_file_path.read_text(encoding="utf-8")
             module = cst.parse_module(code)
-
-            # Create wrapper with metadata
             wrapper = cst.metadata.MetadataWrapper(module)
-
             visitor = DetailedMissionExtractor()
             wrapper.visit(visitor)
-
-            # Return the first mission found
-            if visitor.missions:
-                return list(visitor.missions.values())[0]
-
+            result = dict(visitor.missions)
         except Exception as e:
             print(f"Error analyzing mission file {mission_file_path}: {e}")
+            result = {}
 
-        return None
+        self._cache[mission_file_path] = (mtime_ns, result)
+        return result
 
     def analyze_mission_by_name(self, project_root: Path, mission_name: str) -> Optional[ParsedMission]:
-        """Analyze a specific mission by name."""
+        """Analyze a specific mission by name.
+
+        Uses a naming-convention shortcut to try the expected file first,
+        then falls back to scanning all files if needed.
+        """
         missions_dir = project_root / "src" / "missions"
 
         if not missions_dir.exists():
             return None
 
-        # Look for mission files
+        # Build candidate filenames from the mission class name.
+        # Convention: class "M01DriveToConeMission" -> file "m01_drive_to_cone_mission.py"
+        import re
+        snake = re.sub(r'(?<!^)(?=[A-Z])', '_', mission_name).lower()
+        candidates = [
+            missions_dir / f"{snake}.py",
+            missions_dir / f"{mission_name}.py",
+            missions_dir / f"{mission_name.lower()}.py",
+        ]
+        # Try likely filenames first (avoids scanning all files)
+        for candidate in candidates:
+            if candidate.exists():
+                missions = self._analyze_mission_file_all(candidate)
+                if mission_name in missions:
+                    return missions[mission_name]
+
+        # Fallback: scan all files (cache will prevent re-parsing)
         for mission_file in missions_dir.glob("*.py"):
             if mission_file.name == "__init__.py":
                 continue
-
-            mission = self.analyze_mission_file(mission_file)
-            if mission and mission.name == mission_name:
-                return mission
+            missions = self._analyze_mission_file_all(mission_file)
+            if mission_name in missions:
+                return missions[mission_name]
 
         return None

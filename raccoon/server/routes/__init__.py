@@ -5,5 +5,6 @@ from raccoon.server.routes.commands import router as commands_router
 from raccoon.server.routes.projects import router as projects_router
 from raccoon.server.routes.hardware import router as hardware_router
 from raccoon.server.routes.device import router as device_router
+from raccoon.server.routes.steps import router as steps_router
 
-__all__ = ["health_router", "commands_router", "projects_router", "hardware_router", "device_router"]
+__all__ = ["health_router", "commands_router", "projects_router", "hardware_router", "device_router", "steps_router"]

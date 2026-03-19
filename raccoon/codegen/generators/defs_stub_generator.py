@@ -66,7 +66,7 @@ class DefsStubGenerator(BaseGenerator):
 
         # Always need these
         imports.add("from typing import List")
-        imports.add("from libstp.step.servo.preset import ServoPreset")
+        imports.add("from libstp.step.servo.preset import ServoPreset, _PresetPosition")
 
         # Collect field info
         fields: List[Tuple[str, str]] = []  # (name, type_str)
@@ -93,7 +93,6 @@ class DefsStubGenerator(BaseGenerator):
                     _build_preset_class(class_name, positions)
                 )
                 fields.append((field_name, class_name))
-                imports.add("from libstp.step import Step")
             else:
                 # Regular hardware type
                 import_name = _TYPE_IMPORTS.get(type_name, type_name)
@@ -132,7 +131,7 @@ def _build_preset_class(class_name: str, positions: Dict[str, float]) -> str:
     """Build a typed ServoPreset subclass stub with position methods."""
     lines = [f"class {class_name}(ServoPreset):"]
     for pos_name in positions:
-        lines.append(f"    def {pos_name}(self, speed: float | None = None) -> Step: ...")
+        lines.append(f"    {pos_name}: _PresetPosition")
     # Also expose .device property
     lines.append("    @property")
     lines.append("    def device(self) -> 'Servo': ...")
