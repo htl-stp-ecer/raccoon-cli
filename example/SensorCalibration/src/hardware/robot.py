@@ -1,7 +1,7 @@
 """
 ===========================================================
  Project:   SensorCalibration
- Generated: 2026-02-23 08:59:42
+ Generated: 2026-03-09 07:17:53
 ===========================================================
 
 Authors:
@@ -62,7 +62,7 @@ class Robot(GenericRobot):
         kinematics=kinematics,
         vel_config=_build_chassis_vel_config(
             vx=AxisVelocityControlConfig(
-                pid=PidGains(kp=0.0, ki=0.0, kd=0.0),
+                pid=PidGains(kp=0.137793, ki=1.108274, kd=0.010895),
                 ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
             ),
             vy=AxisVelocityControlConfig(
@@ -70,7 +70,7 @@ class Robot(GenericRobot):
                 ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
             ),
             wz=AxisVelocityControlConfig(
-                pid=PidGains(kp=0.65, ki=0.0, kd=0.0),
+                pid=PidGains(kp=0.0, ki=0.0, kd=0.0),
                 ff=Feedforward(kS=0.0, kV=1.0, kA=0.0),
             ),
         ),
@@ -81,9 +81,9 @@ class Robot(GenericRobot):
     )
     motion_pid_config = UnifiedMotionPidConfig(
         distance=PidConfig(
-            kp=1.0,
+            kp=0.9375,
             ki=0.0,
-            kd=0.5,
+            kd=0.1562,
             integral_max=10.0,
             integral_deadband=0.01,
             derivative_lpf_alpha=0.5,
@@ -91,7 +91,7 @@ class Robot(GenericRobot):
             output_max=10.0,
         ),
         heading=PidConfig(
-            kp=1.0,
+            kp=2.0625,
             ki=0.0,
             kd=0.2,
             integral_max=10.0,
@@ -114,30 +114,31 @@ class Robot(GenericRobot):
         heading_saturation_error_rad=0.01,
         heading_recovery_error_rad=0.005,
         linear=AxisConstraints(
-            max_velocity=0.2331, acceleration=0.4327, deceleration=0.4856
+            max_velocity=0.2139, acceleration=0.9402, deceleration=1.6644
         ),
         lateral=AxisConstraints(
             max_velocity=0.2209, acceleration=0.6485, deceleration=0.4498
         ),
         angular=AxisConstraints(
-            max_velocity=1.8105, acceleration=2.8187, deceleration=7.8611
+            max_velocity=1.8027, acceleration=2.4758, deceleration=17.4353
         ),
     )
+    shutdown_in = 120
     setup_mission = SetupMission()
     shutdown_mission = ShutdownMission()
-    width_cm = 28.5
+    width_cm = 23.5
     length_cm = 29.6
-    rotation_center_forward_cm = 2.95
-    rotation_center_strafe_cm = 2.25
+    rotation_center_forward_cm = 3.7
+    rotation_center_strafe_cm = 0.0
     _sensor_positions = {
-        defs.rear_left_light_sensor: SensorPosition(
-            forward_cm=-10.3, strafe_cm=11.55, clearance_cm=0.5
+        defs.rear_right_light_sensor: SensorPosition(
+            forward_cm=-12.2, strafe_cm=-12.25, clearance_cm=0
         ),
         defs.front_right_light_sensor: SensorPosition(
-            forward_cm=14.2, strafe_cm=-5.45, clearance_cm=0.5
+            forward_cm=14.2, strafe_cm=-3.55, clearance_cm=0
         ),
         defs.front_left_light_sensor: SensorPosition(
-            forward_cm=14.2, strafe_cm=11.55, clearance_cm=0.5
+            forward_cm=14.2, strafe_cm=7.75, clearance_cm=0
         ),
     }
     _wheel_positions = {

@@ -1,0 +1,31 @@
+shild:
+  type: Servo
+  port: 0
+  positions:
+    up: 86
+    down: 156
+pom_arm:
+  type: Servo
+  port: 1
+  positions:
+    down: 0
+    above_pom: 50
+    up: 90
+    start: 140
+    high_up: 145
+shild_graber:
+  type: Servo
+  port: 2
+  positions:
+    open: 90
+    closed: 17
+pom_grab:
+  type: Servo
+  port: 3
+  positions:
+    closed: 0
+    start: 30
+    pom_width: 55
+    slightly_open: 75
+    open: 90
+    wide_open: 125

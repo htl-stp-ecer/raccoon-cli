@@ -222,6 +222,16 @@ def _build_robot_config(
     }
 
 
+def to_builtin(obj):
+    if isinstance(obj, dict):
+        return {k: to_builtin(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [to_builtin(v) for v in obj]
+    elif hasattr(obj, "__dict__"):
+        return to_builtin(vars(obj))
+    else:
+        return obj
+
 def _render_summary(console: Console, config: Dict[str, object]) -> None:
     """Pretty-print the resulting configuration summary."""
     robot = config.get("robot", {})
@@ -233,8 +243,7 @@ def _render_summary(console: Console, config: Dict[str, object]) -> None:
 
     table.add_row("Project", f"name: {config.get('name', 'Unnamed Project')}\nuuid: {config.get('uuid', '—')}")
     table.add_row("Drive", yaml.safe_dump(robot, sort_keys=False))
-    table.add_row("Definitions", yaml.safe_dump(definitions, sort_keys=False))
-
+    table.add_row("Definitions", yaml.safe_dump(to_builtin(definitions), sort_keys=False))
     console.print(Panel(table, border_style="green"))
 
 
@@ -578,10 +587,6 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
 
     if dry_run:
         console.print("[yellow]Dry run enabled — raccoon.project.yml was not updated.[/yellow]")
-        return
-
-    if not click.confirm("Write these values to raccoon.project.yml?", default=True):
-        console.print("[yellow]Aborted without writing changes.[/yellow]")
         return
 
     config_path = project_root / "raccoon.project.yml"
