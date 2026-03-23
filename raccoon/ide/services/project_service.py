@@ -20,11 +20,7 @@ class ProjectService:
         self.project_code_gen = project_code_gen
 
     def create_project(self, project_create: ProjectCreate) -> ProjectInDB:
-        """Create a new project entry.
-
-        Note: This only creates the project entry in the repository.
-        Project scaffolding should be done via 'raccoon create project'.
-        """
+        """Create a new scaffolded project via the local backend."""
         project = self.project_repository.create_project(project_create)
         if not project:
             raise ValueError("Failed to create project")

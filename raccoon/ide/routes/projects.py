@@ -21,9 +21,13 @@ async def create_project(
         project_create: ProjectCreate,
         svc: ProjectService = Depends(get_project_service),
 ):
-    """Create a project record in the IDE backend."""
+    """Create a scaffolded project in the IDE backend."""
     try:
         return svc.create_project(project_create)
+    except FileExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

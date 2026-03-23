@@ -1,10 +1,9 @@
 """Project management endpoints."""
 
-from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 
 from raccoon.server.auth import require_auth
 
@@ -28,6 +27,27 @@ class ProjectListResponse(BaseModel):
     count: int
 
 
+class CreateProjectRequest(BaseModel):
+    """Create-project request payload."""
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-zA-Z0-9_\-\s]+$",
+    )
+
+
+def _serialize_project(project: dict) -> ProjectInfo:
+    return ProjectInfo(
+        id=project["id"],
+        name=project["name"],
+        path=str(project["path"]),
+        has_config=project["has_config"],
+        last_modified=project.get("last_modified"),
+    )
+
+
 @router.get("", response_model=ProjectListResponse)
 async def list_projects():
     """
@@ -45,18 +65,34 @@ async def list_projects():
     projects = manager.list_projects()
 
     return ProjectListResponse(
-        projects=[
-            ProjectInfo(
-                id=p["id"],
-                name=p["name"],
-                path=str(p["path"]),
-                has_config=p["has_config"],
-                last_modified=p.get("last_modified"),
-            )
-            for p in projects
-        ],
+        projects=[_serialize_project(project) for project in projects],
         count=len(projects),
     )
+
+
+@router.post("", response_model=ProjectInfo, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_auth)])
+async def create_project(request: CreateProjectRequest):
+    """
+    Create a new project on the Pi.
+
+    Uses `raccoon create project` in non-interactive mode.
+    """
+    from raccoon.server.app import get_config
+    from raccoon.server.services.project_manager import ProjectManager
+
+    config = get_config()
+    manager = ProjectManager(config.projects_dir)
+
+    try:
+        project = manager.create_project(request.name)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    return _serialize_project(project)
 
 
 @router.get("/{project_id}", response_model=ProjectInfo)
@@ -74,13 +110,7 @@ async def get_project(project_id: str):
     if not project:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 
-    return ProjectInfo(
-        id=project["id"],
-        name=project["name"],
-        path=str(project["path"]),
-        has_config=project["has_config"],
-        last_modified=project.get("last_modified"),
-    )
+    return _serialize_project(project)
 
 
 @router.delete("/{project_id}", dependencies=[Depends(require_auth)])

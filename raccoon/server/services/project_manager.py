@@ -1,11 +1,15 @@
 """Project management service."""
 
+import logging
+import re
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import yaml
+logger = logging.getLogger("raccoon")
+PROJECT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\s]+$")
 
 
 class ProjectManager:
@@ -103,6 +107,57 @@ class ProjectManager:
             return True
 
         return False
+
+    def create_project(self, name: str) -> dict:
+        """
+        Create a new project via the raccoon CLI.
+
+        Args:
+            name: Display name and directory name for the new project
+
+        Returns:
+            Project info dict for the created project
+        """
+        project_name = name.strip()
+        if not project_name:
+            raise ValueError("Project name cannot be empty")
+        if len(project_name) > 100 or not PROJECT_NAME_PATTERN.fullmatch(project_name):
+            raise ValueError("Project name may only contain letters, numbers, spaces, underscores, and hyphens")
+
+        project_path = self.projects_dir / project_name
+        if project_path.exists():
+            raise FileExistsError(f"Project '{project_name}' already exists")
+
+        try:
+            result = subprocess.run(
+                [
+                    "raccoon",
+                    "create",
+                    "project",
+                    project_name,
+                    "--path",
+                    str(self.projects_dir),
+                    "--no-wizard",
+                    "--no-open-ide",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("The 'raccoon' command is not available on the server") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            stdout = (exc.stdout or "").strip()
+            message = stderr or stdout or f"Failed to create project '{project_name}'"
+            raise RuntimeError(message) from exc
+
+        project = self._get_project_info(project_path)
+        if not project:
+            stdout = (result.stdout or "").strip()
+            raise RuntimeError(stdout or f"Project '{project_name}' was created but could not be loaded")
+
+        return project
 
     def create_project_dir(self, project_id: str) -> Path:
         """

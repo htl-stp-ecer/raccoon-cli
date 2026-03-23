@@ -1,6 +1,7 @@
 """Filesystem-backed repository for IDE project metadata and config files."""
 
 import os
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -97,11 +98,52 @@ class ProjectRepository:
         return updated
 
     def create_project(self, project_create: ProjectCreate) -> ProjectInDB:
-        new_uuid = uuid.uuid4()
-        project_path = self.get_project_path(new_uuid)
-        project_path.mkdir(parents=True, exist_ok=True)
+        project_name = project_create.name.strip()
+        if not project_name:
+            raise ValueError("Project name cannot be empty")
 
-        return ProjectInDB(uuid=new_uuid, name=project_create.name)
+        project_path = Path(self.project_root) / project_name
+        if project_path.exists():
+            raise FileExistsError(f"Project '{project_name}' already exists")
+
+        try:
+            subprocess.run(
+                [
+                    "raccoon",
+                    "create",
+                    "project",
+                    project_name,
+                    "--path",
+                    self.project_root,
+                    "--no-wizard",
+                    "--no-open-ide",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("The 'raccoon' command is not available on the local backend") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            stdout = (exc.stdout or "").strip()
+            message = stderr or stdout or f"Failed to create project '{project_name}'"
+            raise RuntimeError(message) from exc
+
+        config_path = project_path / self.CONFIG_FILENAME
+        if not config_path.exists():
+            raise RuntimeError(f"Project '{project_name}' was created but {self.CONFIG_FILENAME} is missing")
+
+        data = load_yaml(config_path)
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Project '{project_name}' was created but its config could not be read")
+
+        project = self._project_from_config(data, fallback_uuid=None)
+        if not project:
+            raise RuntimeError(f"Project '{project_name}' was created but its config is invalid")
+
+        self._uuid_path_cache[project.uuid] = project_path
+        return project
 
     def get_project(self, project_uuid: uuid.UUID) -> Optional[ProjectInDB]:
         data = self._load_project_config(project_uuid)

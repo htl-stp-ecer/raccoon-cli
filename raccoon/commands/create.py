@@ -267,8 +267,9 @@ def create_command() -> None:
 @click.argument("name")
 @click.option("--path", type=click.Path(), default=".", help="Directory to create project in")
 @click.option("--no-wizard", is_flag=True, help="Skip the setup wizard (not recommended)")
+@click.option("--no-open-ide", is_flag=True, help="Do not launch PyCharm after creating the project")
 @click.pass_context
-def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: bool) -> None:
+def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: bool, no_open_ide: bool) -> None:
     """Create a new raccoon project with the given NAME."""
     console: Console = ctx.obj["console"]
 
@@ -344,6 +345,10 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
         console.print(f"\n[green]✓ Project '{name}' finalized successfully![/green]")
     else:
         console.print(f"\n[yellow]Wizard skipped. Run 'cd {target_dir} && raccoon wizard' to configure your project.[/yellow]")
+
+    if no_open_ide:
+        console.print("[dim]Skipping IDE launch.[/dim]")
+        return
 
     # Open PyCharm and show setup instructions
     _open_pycharm_with_instructions(console, target_dir)
@@ -421,4 +426,3 @@ def create_mission_command(ctx: click.Context, name: str) -> None:
     console.print(f"[green]✓ Mission '{mission_class}' created successfully[/green]")
     console.print(f"[cyan]  File: {mission_file.relative_to(project_root)}[/cyan]")
     console.print(f"[cyan]  Added to raccoon.project.yml[/cyan]")
-
