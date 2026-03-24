@@ -32,7 +32,7 @@ class ImportSet:
         self._entries: Set[Tuple[str, str]] = set()
 
     def add(self, cls: type) -> None:
-        """Add a class to the import set."""
+        """Add a class (or ClassProxy) to the import set."""
         if cls.__module__ == "builtins":
             return
         self._entries.add((cls.__module__, cls.__name__))
