@@ -275,8 +275,14 @@ class DSLStepAnalyzer:
             # Get type annotation
             type_name, type_import, is_optional = self._resolve_type_annotation(arg.annotation, imports)
 
+            default_node = self._get_default_node(arg_name, args)
+            if type_name == "Any" and default_node is not None:
+                inferred_type = self._infer_type_from_default(default_node)
+                if inferred_type is not None:
+                    type_name = inferred_type
+
             # Get default value
-            default_value = self._get_default_value(arg_name, args)
+            default_value = self._format_default_value(default_node)
 
             return StepArgument(
                 name=arg_name,
@@ -356,8 +362,8 @@ class DSLStepAnalyzer:
         except Exception:
             return "Any", None, False
 
-    def _get_default_value(self, arg_name: str, args: ast.arguments) -> Optional[str]:
-        """Get default value for an argument if it exists"""
+    def _get_default_node(self, arg_name: str, args: ast.arguments) -> Optional[ast.AST]:
+        """Get the AST node for an argument default if it exists."""
         # Match argument position with defaults
         arg_names = [arg.arg for arg in args.args]
         if arg_name in arg_names:
@@ -366,14 +372,45 @@ class DSLStepAnalyzer:
             defaults_start = len(arg_names) - len(args.defaults)
             if arg_index >= defaults_start:
                 default_index = arg_index - defaults_start
-                default_node = args.defaults[default_index]
-                try:
-                    if isinstance(default_node, ast.Constant):
-                        return repr(default_node.value)
-                    else:
-                        return ast.unparse(default_node)
-                except Exception:
-                    return "..."
+                return args.defaults[default_index]
+        return None
+
+    def _format_default_value(self, default_node: Optional[ast.AST]) -> Optional[str]:
+        """Convert a default AST node into the serialized value used by the IDE."""
+        if default_node is None:
+            return None
+        try:
+            if isinstance(default_node, ast.Constant):
+                return repr(default_node.value)
+            return ast.unparse(default_node)
+        except Exception:
+            return "..."
+
+    def _infer_type_from_default(self, default_node: ast.AST) -> Optional[str]:
+        """Infer a simple scalar type from a literal default value."""
+        if isinstance(default_node, ast.Constant):
+            value = default_node.value
+            if isinstance(value, bool):
+                return "bool"
+            if isinstance(value, int):
+                return "int"
+            if isinstance(value, float):
+                return "float"
+            if isinstance(value, str):
+                return "str"
+            return None
+
+        if isinstance(default_node, ast.UnaryOp) and isinstance(default_node.op, (ast.UAdd, ast.USub)):
+            operand = default_node.operand
+            if isinstance(operand, ast.Constant):
+                value = operand.value
+                if isinstance(value, bool):
+                    return None
+                if isinstance(value, int):
+                    return "int"
+                if isinstance(value, float):
+                    return "float"
+
         return None
 
     def _generate_import_path(self, file_path: Path) -> str:
