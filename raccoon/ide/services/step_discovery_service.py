@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 
-from raccoon.ide.core.analysis.step_analyzer import DSLStepAnalyzer, StepFunction, StepArgument
+from raccoon.ide.core.analysis.step_analyzer import DSLStepAnalyzer, StepFunction, StepArgument, StepChainMethod
 from raccoon.ide.services.project_service import ProjectService
 
 
@@ -201,6 +201,11 @@ class StepDiscoveryService:
                     default_value=arg.get("default"),
                 )
             )
+        chain_methods = []
+        for method in entry.get("chain_methods", []) or []:
+            parsed_method = self._chain_method_from_dict(method)
+            if parsed_method:
+                chain_methods.append(parsed_method)
         # Extract tags from cached entry
         tags_raw = entry.get("tags")
         tags = [t for t in tags_raw if isinstance(t, str)] if isinstance(tags_raw, list) else None
@@ -210,6 +215,40 @@ class StepDiscoveryService:
             arguments=args,
             file_path=file_path,
             tags=tags if tags else None,
+            chain_methods=chain_methods if chain_methods else None,
+        )
+
+    def _chain_method_from_dict(self, entry: Dict[str, Any]) -> Optional[StepChainMethod]:
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            return None
+
+        args = []
+        for arg in entry.get("arguments", []) or []:
+            if not isinstance(arg, dict):
+                continue
+            args.append(
+                StepArgument(
+                    name=arg.get("name"),
+                    type_name=arg.get("type", "Any"),
+                    type_import=arg.get("import"),
+                    is_optional=bool(arg.get("optional", False)),
+                    default_value=arg.get("default"),
+                )
+            )
+
+        child_methods = []
+        for method in entry.get("chain_methods", []) or []:
+            if not isinstance(method, dict):
+                continue
+            parsed = self._chain_method_from_dict(method)
+            if parsed:
+                child_methods.append(parsed)
+
+        return StepChainMethod(
+            name=name,
+            arguments=args,
+            chain_methods=child_methods if child_methods else None,
         )
 
     def _deduplicate_steps(self, steps: List[StepFunction]) -> List[Dict[str, Any]]:

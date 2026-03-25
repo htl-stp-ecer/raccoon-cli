@@ -26,6 +26,22 @@ class StepArgument:
 
 
 @dataclass
+class StepChainMethod:
+    """Represents a chainable method that can be appended to a step builder."""
+
+    name: str
+    arguments: List[StepArgument]
+    chain_methods: List['StepChainMethod'] | None = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "arguments": [arg.to_dict() for arg in self.arguments],
+            "chain_methods": [method.to_dict() for method in (self.chain_methods or [])],
+        }
+
+
+@dataclass
 class StepFunction:
     """Represents a DSL-decorated function or class"""
     name: str
@@ -33,6 +49,7 @@ class StepFunction:
     arguments: List[StepArgument]
     file_path: str
     tags: List[str] | None = None
+    chain_methods: List[StepChainMethod] | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -41,6 +58,7 @@ class StepFunction:
             "arguments": [arg.to_dict() for arg in self.arguments],
             "file": self.file_path,
             "tags": self.tags or [],
+            "chain_methods": [method.to_dict() for method in (self.chain_methods or [])],
         }
 
 
@@ -253,6 +271,7 @@ class DSLStepAnalyzer:
                 arguments=arguments,
                 file_path=str(file_path),
                 tags=tags or None,
+                chain_methods=self._infer_chain_methods(step_name, tags or []),
             )
 
         except Exception as e:
@@ -429,3 +448,39 @@ class DSLStepAnalyzer:
         except ValueError:
             # File is not under project root
             return str(file_path.stem)
+
+    def _infer_chain_methods(self, step_name: str, tags: List[str]) -> List[StepChainMethod] | None:
+        normalized_name = (step_name or "").strip().lower()
+        normalized_tags = {tag.strip().lower() for tag in (tags or []) if isinstance(tag, str)}
+
+        methods: List[StepChainMethod] = []
+
+        if "follow_line_single" in normalized_name:
+            methods.append(
+                StepChainMethod(
+                    name="until",
+                    arguments=[StepArgument("condition", "str", None, False, None)],
+                )
+            )
+            methods.append(
+                StepChainMethod(
+                    name="distance_cm",
+                    arguments=[StepArgument("distance_cm", "float", None, False, None)],
+                )
+            )
+            return methods
+
+        is_motion_like = (
+            "motion" in normalized_tags or
+            "line-follow" in normalized_tags or
+            any(token in normalized_name for token in ("drive", "strafe", "follow_line"))
+        )
+        if is_motion_like:
+            methods.append(
+                StepChainMethod(
+                    name="until",
+                    arguments=[StepArgument("condition", "str", None, False, None)],
+                )
+            )
+
+        return methods or None
