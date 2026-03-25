@@ -1,19 +1,16 @@
 """Offline type index for libstp — enables codegen without live hardware imports.
 
 The index is a JSON file that captures class metadata (init params, bases,
-docstrings) from pybind11 .so modules.  It is generated once via
-``raccoon index`` and then used as a fallback when live ``import libstp``
-would segfault or is unavailable.
+docstrings) from .pyi stub files.  It is auto-generated on first access
+and used as a fallback when live ``import libstp`` is unavailable.
 """
 
 from __future__ import annotations
 
-import importlib.util
+import ast
 import inspect
 import json
 import logging
-import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -23,31 +20,13 @@ logger = logging.getLogger("raccoon")
 INDEX_VERSION = 1
 DEFAULT_INDEX_PATH = Path.home() / ".raccoon" / "libstp_type_index.json"
 
-# pybind11 .so modules that contain types used by codegen.
-# Order matters: foundation must load before hal (hal depends on it).
-_SO_MODULES: List[str] = [
-    "libstp._core",
-    "libstp.foundation",
-    "libstp.hal",
-    "libstp.kinematics",
-    "libstp.odometry",
-    "libstp.drive",
-    "libstp.motion",
-    "libstp.kinematics_differential",
-    "libstp.kinematics_mecanum",
-    "libstp.odometry_fused",
-    "libstp.sensor_ir",
-    "libstp.sensor_et",
-]
-
 
 # ---------------------------------------------------------------------------
-# Index generation (introspects live .so modules)
+# Find libstp package directory
 # ---------------------------------------------------------------------------
 
 def _find_libstp_package_dir() -> Optional[Path]:
     """Find the libstp package directory without importing it."""
-    import sysconfig
     import site
 
     # Check common install locations
@@ -60,213 +39,205 @@ def _find_libstp_package_dir() -> Optional[Path]:
     return None
 
 
-def _find_so_paths(package_dir: Path) -> Dict[str, str]:
-    """Find all .so files for the modules we need."""
-    import sysconfig
+# ---------------------------------------------------------------------------
+# .pyi stub file parsing
+# ---------------------------------------------------------------------------
 
-    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-    paths = {}
-
-    for mod_name in _SO_MODULES:
-        submod = mod_name.split(".")[-1]
-        candidate = package_dir / f"{submod}{ext_suffix}"
-        if candidate.exists():
-            paths[mod_name] = str(candidate)
-
-    return paths
-
-
-def _load_so_modules_isolated() -> Dict[str, Any]:
-    """Load pybind11 .so modules without triggering libstp.__init__."""
-    # Step 1: Find .so paths BEFORE touching sys.modules
-    package_dir = _find_libstp_package_dir()
-    if package_dir is None:
-        return {}
-
-    so_paths = _find_so_paths(package_dir)
-    if not so_paths:
-        return {}
-
-    # Step 2: Install a dummy libstp package to prevent __init__.py from running
-    saved_libstp = sys.modules.get("libstp")
-    dummy = type(sys)("libstp")
-    dummy.__path__ = [str(package_dir)]
-    sys.modules["libstp"] = dummy
-
-    # Step 3: Load each .so module in order
-    loaded = {}
-    for mod_name in _SO_MODULES:
-        so_path = so_paths.get(mod_name)
-        if not so_path:
-            logger.debug(f"No .so found for {mod_name}, skipping")
-            continue
-
-        try:
-            spec = importlib.util.spec_from_file_location(mod_name, so_path)
-            if spec is None or spec.loader is None:
-                continue
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules[mod_name] = mod
-            spec.loader.exec_module(mod)
-            loaded[mod_name] = mod
-            logger.debug(f"Loaded {mod_name} from {so_path}")
-        except Exception as e:
-            logger.warning(f"Failed to load {mod_name}: {e}")
-
-    return loaded
-
-
-def _parse_init_docstring(doc: str) -> List[Dict[str, Any]]:
-    """Parse pybind11 __init__ docstring into parameter list.
-
-    Handles overloaded signatures — picks the one with the most named params.
-    """
-    if not doc:
-        return []
-
-    # Find all __init__ signatures
-    candidates = []
-    for match in re.finditer(
-        r"__init__\(self[^,]*(?:,\s*(.+?))?\)\s*->\s*None", doc
-    ):
-        params_str = match.group(1)
-        if not params_str:
-            candidates.append([])
-            continue
-
-        params = _parse_params_str(params_str)
-        candidates.append(params)
-
-    if not candidates:
-        return []
-
-    # Return the signature with most named (non-positional) parameters
-    return max(candidates, key=lambda ps: sum(1 for p in ps if p["name"] != "arg0"))
-
-
-def _parse_params_str(params_str: str) -> List[Dict[str, Any]]:
-    """Split a pybind11 parameter string into structured param dicts."""
-    parts = []
-    depth = 0
-    current: List[str] = []
-    for char in params_str + ",":
-        if char in "([{<":
-            depth += 1
-            current.append(char)
-        elif char in ")]}>" :
-            depth -= 1
-            current.append(char)
-        elif char == "," and depth == 0:
-            parts.append("".join(current).strip())
-            current = []
+def _find_pyi_files(package_dir: Path) -> Dict[str, Path]:
+    """Find all .pyi stub files in the libstp package directory."""
+    pyi_files = {}
+    for pyi_path in package_dir.glob("*.pyi"):
+        stem = pyi_path.stem
+        if stem == "__init__":
+            mod_name = "libstp"
         else:
-            current.append(char)
+            mod_name = f"libstp.{stem}"
+        pyi_files[mod_name] = pyi_path
+    return pyi_files
 
+
+def _parse_init_from_ast(
+    func_node: ast.FunctionDef,
+) -> List[Dict[str, Any]]:
+    """Extract __init__ parameters from an AST FunctionDef node."""
     params = []
-    for part in parts:
-        if not part or part.lstrip().startswith("*"):
+    args = func_node.args
+
+    # Count how many positional args lack defaults
+    num_args = len(args.args)
+    num_defaults = len(args.defaults)
+    first_default_idx = num_args - num_defaults
+
+    for i, arg in enumerate(args.args):
+        if arg.arg == "self":
             continue
 
-        if "=" in part:
-            name_type, _default = part.split("=", 1)
-            name = name_type.split(":")[0].strip()
-            type_str = name_type.split(":", 1)[1].strip() if ":" in name_type else ""
-            params.append({
-                "name": name,
-                "type": type_str,
-                "required": False,
-            })
-        else:
-            name = part.split(":")[0].strip()
-            type_str = part.split(":", 1)[1].strip() if ":" in part else ""
-            params.append({
-                "name": name,
-                "type": type_str,
-                "required": True,
-            })
+        type_str = ""
+        if arg.annotation:
+            type_str = ast.unparse(arg.annotation)
+
+        required = i < first_default_idx
+        params.append({
+            "name": arg.arg,
+            "type": type_str,
+            "required": required,
+        })
+
+    for arg in args.kwonlyargs:
+        type_str = ""
+        if arg.annotation:
+            type_str = ast.unparse(arg.annotation)
+        params.append({
+            "name": arg.arg,
+            "type": type_str,
+            "required": False,
+        })
 
     return params
 
 
-def _introspect_class(cls: type) -> Dict[str, Any]:
-    """Extract metadata from a single class."""
-    qualname = f"{cls.__module__}.{cls.__name__}"
+def _introspect_pyi_file(mod_name: str, pyi_path: Path) -> List[Dict[str, Any]]:
+    """Parse a .pyi file and extract class metadata."""
+    try:
+        source = pyi_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+    except (OSError, SyntaxError) as e:
+        logger.warning(f"Failed to parse {pyi_path}: {e}")
+        return []
 
-    # Get base classes (skip pybind11_object and object)
-    bases = []
-    for b in cls.__mro__[1:]:
-        if b is object or "pybind11" in b.__module__:
+    classes = []
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.ClassDef):
             continue
-        bases.append(f"{b.__module__}.{b.__name__}")
 
-    # Parse init params from docstring (pybind11 classes)
-    doc = getattr(getattr(cls, "__init__", None), "__doc__", None) or ""
-    params = _parse_init_docstring(doc)
+        qualname = f"{mod_name}.{node.name}"
 
-    # Extract the raw init docstring lines for parse_type_from_docstring compat
-    init_doc_lines = []
-    for line in doc.strip().splitlines():
-        line = line.strip()
-        if "__init__" in line:
-            init_doc_lines.append(line)
+        # Extract base class names
+        bases = []
+        for base in node.bases:
+            base_str = ast.unparse(base)
+            # Qualify unqualified names with the module's own namespace
+            if "." not in base_str:
+                base_str = f"{mod_name}.{base_str}"
+            bases.append(base_str)
 
-    return {
-        "qualname": qualname,
-        "module": cls.__module__,
-        "name": cls.__name__,
-        "bases": bases,
-        "init_params": params,
-        "init_docstring": "\n".join(init_doc_lines) if init_doc_lines else "",
-    }
+        # Find __init__ method (pick the non-overloaded or last one)
+        init_params: List[Dict[str, Any]] = []
+        init_docstring = ""
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                parsed = _parse_init_from_ast(item)
+                # Keep the signature with the most named params (handles @overload)
+                if len(parsed) >= len(init_params):
+                    init_params = parsed
+                    # Build a synthetic pybind11-style docstring for compat
+                    param_strs = []
+                    for p in parsed:
+                        s = f"{p['name']}: {p['type']}" if p["type"] else p["name"]
+                        if not p["required"]:
+                            s += " = ..."
+                        param_strs.append(s)
+                    init_docstring = (
+                        f"__init__(self: {qualname}"
+                        + (", " + ", ".join(param_strs) if param_strs else "")
+                        + ") -> None"
+                    )
 
+        classes.append({
+            "qualname": qualname,
+            "module": mod_name,
+            "name": node.name,
+            "bases": bases,
+            "init_params": init_params,
+            "init_docstring": init_docstring,
+        })
+
+    return classes
+
+
+# ---------------------------------------------------------------------------
+# Index generation
+# ---------------------------------------------------------------------------
 
 def generate_index(output_path: Optional[Path] = None) -> Path:
-    """Generate a type index from the locally installed libstp .so modules.
+    """Generate a type index from .pyi stub files installed by libstp-stubs.
 
     Returns the path to the written JSON file.
     """
     output_path = output_path or DEFAULT_INDEX_PATH
 
-    logger.info("Loading libstp .so modules for indexing...")
-    modules = _load_so_modules_isolated()
-
-    if not modules:
+    package_dir = _find_libstp_package_dir()
+    if package_dir is None:
         raise RuntimeError(
-            "No libstp .so modules found. Is libstp installed?\n"
-            "Install it with: pip install libstp"
+            "No libstp package directory found. Is libstp-stubs installed?\n"
+            "Install it with: pip install libstp-stubs"
         )
 
-    # Get libstp version
+    pyi_files = _find_pyi_files(package_dir)
+    if not pyi_files:
+        raise RuntimeError(
+            "No .pyi stub files found in libstp package.\n"
+            "Install stubs with: pip install libstp-stubs"
+        )
+
+    logger.info(f"Generating type index from {len(pyi_files)} .pyi stub files...")
+
+    # Try to get version from __init__.pyi
     version = "unknown"
-    core = modules.get("libstp._core")
-    if core and hasattr(core, "__version__"):
-        version = core.__version__
+    init_pyi = pyi_files.get("libstp")
+    if init_pyi:
+        try:
+            source = init_pyi.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            for node in ast.iter_child_nodes(tree):
+                if (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and node.target.id == "__version__"
+                    and isinstance(node.value, ast.Constant)
+                ):
+                    version = str(node.value.value)
+                    break
+        except Exception:
+            pass
 
     classes: Dict[str, Dict[str, Any]] = {}
     module_exports: Dict[str, List[str]] = {}
 
-    for mod_name, mod in modules.items():
+    # Parse .pyi files for submodules (skip __init__.pyi for now)
+    for mod_name, pyi_path in pyi_files.items():
+        if mod_name == "libstp":
+            continue  # Handle __init__ separately for namespace map
+        class_entries = _introspect_pyi_file(mod_name, pyi_path)
         exports = []
-        for attr_name in sorted(dir(mod)):
-            obj = getattr(mod, attr_name)
-            if not isinstance(obj, type):
-                continue
-            if "pybind11" in obj.__name__:
-                continue
-
-            info = _introspect_class(obj)
-            classes[info["qualname"]] = info
-            exports.append(attr_name)
-
+        for entry in class_entries:
+            classes[entry["qualname"]] = entry
+            exports.append(entry["name"])
         module_exports[mod_name] = exports
 
-    # Build the top-level libstp namespace mapping (mimics __init__.py re-exports)
-    libstp_exports = {}
-    for mod_name, mod in modules.items():
-        for attr_name in dir(mod):
-            obj = getattr(mod, attr_name)
-            if isinstance(obj, type) and "pybind11" not in obj.__name__:
-                libstp_exports[attr_name] = f"{obj.__module__}.{obj.__name__}"
+    # Build the top-level libstp namespace mapping from __init__.pyi imports
+    libstp_exports: Dict[str, str] = {}
+    if init_pyi:
+        try:
+            source = init_pyi.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            for node in ast.iter_child_nodes(tree):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    for alias in node.names:
+                        imported_name = alias.asname or alias.name
+                        qualified = f"{node.module}.{alias.name}"
+                        # Only include classes that exist in our index
+                        if qualified in classes:
+                            libstp_exports[imported_name] = qualified
+        except Exception:
+            pass
+
+    # Also map any class in submodules that isn't already mapped
+    for qualname, entry in classes.items():
+        name = entry["name"]
+        if name not in libstp_exports:
+            libstp_exports[name] = qualname
+
     module_exports["libstp"] = sorted(libstp_exports.keys())
 
     index = {
@@ -381,7 +352,7 @@ class TypeIndex:
             except (OSError, json.JSONDecodeError) as e:
                 logger.debug(f"Failed to load type index: {e}, regenerating")
 
-        # Auto-generate from locally installed libstp
+        # Auto-generate from .pyi stubs
         try:
             generate_index(self._path)
             raw = json.loads(self._path.read_text(encoding="utf-8"))
