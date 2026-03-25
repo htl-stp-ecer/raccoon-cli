@@ -17,6 +17,17 @@ def resolve_class(qualname: str) -> type:
     import fails — this enables codegen without hardware-dependent
     pybind11 modules being importable.
     """
+    if "." not in qualname:
+        # Simple name (no module prefix) — go straight to type index
+        from .type_index import get_type_index
+
+        index = get_type_index()
+        proxy = index.resolve_by_name(qualname)
+        if proxy is not None:
+            logger.debug(f"Resolved {qualname} via namespace map → {proxy}")
+            return proxy  # type: ignore[return-value]
+        raise ImportError(f"Cannot resolve simple name '{qualname}'")
+
     try:
         mod_name, cls_name = qualname.rsplit(".", 1)
         module = __import__(mod_name, fromlist=[cls_name])
@@ -34,7 +45,6 @@ def resolve_class(qualname: str) -> type:
 
         # For "libstp.ClassName" lookups, check the namespace map
         # (libstp re-exports from submodules like sensor_ir, drive, etc.)
-        _, cls_name = qualname.rsplit(".", 1)
         proxy = index.resolve_by_name(cls_name)
         if proxy is not None:
             logger.debug(f"Resolved {qualname} via namespace map → {proxy}")
