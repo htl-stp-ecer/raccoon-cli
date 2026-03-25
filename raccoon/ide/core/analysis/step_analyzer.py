@@ -32,12 +32,14 @@ class StepChainMethod:
     name: str
     arguments: List[StepArgument]
     chain_methods: List['StepChainMethod'] | None = None
+    recursive: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "arguments": [arg.to_dict() for arg in self.arguments],
             "chain_methods": [method.to_dict() for method in (self.chain_methods or [])],
+            "recursive": self.recursive,
         }
 
 
@@ -460,6 +462,7 @@ class DSLStepAnalyzer:
                 StepChainMethod(
                     name="until",
                     arguments=[StepArgument("condition", "str", None, False, None)],
+                    recursive=True,
                 )
             )
             methods.append(
@@ -480,6 +483,7 @@ class DSLStepAnalyzer:
                 StepChainMethod(
                     name="until",
                     arguments=[StepArgument("condition", "str", None, False, None)],
+                    recursive=True,
                 )
             )
 

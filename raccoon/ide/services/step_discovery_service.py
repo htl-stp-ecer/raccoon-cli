@@ -249,6 +249,7 @@ class StepDiscoveryService:
             name=name,
             arguments=args,
             chain_methods=child_methods if child_methods else None,
+            recursive=bool(entry.get("recursive", False)),
         )
 
     def _deduplicate_steps(self, steps: List[StepFunction]) -> List[Dict[str, Any]]:
