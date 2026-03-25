@@ -1,6 +1,8 @@
 """Discover available DSL steps for the IDE and maintain a libstp cache."""
 
+import importlib.util
 import json
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -8,8 +10,10 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 
-from raccoon.ide.core.analysis.step_analyzer import DSLStepAnalyzer, StepFunction, StepArgument
+from raccoon.ide.core.analysis.step_analyzer import DSLStepAnalyzer, StepFunction, StepArgument, StepChainMethod
 from raccoon.ide.services.project_service import ProjectService
+
+logger = logging.getLogger(__name__)
 
 
 class StepDiscoveryService:
@@ -129,6 +133,31 @@ class StepDiscoveryService:
             self._libstp_last_indexed_at = payload["last_indexed_at"]
             self._libstp_last_error = None
 
+    def refresh_libstp_cache_locally(self) -> Dict[str, Any]:
+        """Rebuild the libstp cache from the local Python installation."""
+        libstp_dir = self._find_installed_libstp_dir()
+        if libstp_dir is None:
+            message = (
+                "libstp package not found in the local Python environment. "
+                "Install libstp or libstp-stubs first."
+            )
+            self._set_libstp_error(message)
+            raise RuntimeError(message)
+
+        try:
+            analyzer = DSLStepAnalyzer(libstp_dir.parent)
+            for file_path in analyzer._find_library_steps():
+                analyzer._analyze_file(file_path)
+
+            logger.info("Discovered %s libstp steps from local install at %s", len(analyzer.discovered_steps), libstp_dir)
+            self.import_libstp_cache([step.to_dict() for step in analyzer.discovered_steps])
+            return self.get_libstp_cache_status()
+        except Exception as exc:
+            message = f"Failed to index local libstp installation: {exc}"
+            logger.exception(message)
+            self._set_libstp_error(message)
+            raise RuntimeError(message) from exc
+
     def get_libstp_cache_status(self) -> Dict[str, Any]:
         """Return cache health metadata used by the IDE refresh workflow."""
         with self._libstp_lock:
@@ -171,6 +200,32 @@ class StepDiscoveryService:
         if isinstance(last_indexed_at, str):
             self._libstp_last_indexed_at = last_indexed_at
 
+    def _find_installed_libstp_dir(self) -> Optional[Path]:
+        try:
+            spec = importlib.util.find_spec("libstp")
+        except Exception:
+            return None
+
+        if spec is None:
+            return None
+
+        if spec.submodule_search_locations:
+            for location in spec.submodule_search_locations:
+                package_dir = Path(location)
+                if package_dir.is_dir():
+                    return package_dir
+
+        if spec.origin:
+            package_dir = Path(spec.origin).parent
+            if package_dir.is_dir():
+                return package_dir
+
+        return None
+
+    def _set_libstp_error(self, message: str) -> None:
+        with self._libstp_lock:
+            self._libstp_last_error = message
+
     def _cached_libstp_steps(self) -> List[StepFunction]:
         cached = self._libstp_cache
         if not cached:
@@ -201,6 +256,11 @@ class StepDiscoveryService:
                     default_value=arg.get("default"),
                 )
             )
+        chain_methods = []
+        for method in entry.get("chain_methods", []) or []:
+            parsed_method = self._chain_method_from_dict(method)
+            if parsed_method:
+                chain_methods.append(parsed_method)
         # Extract tags from cached entry
         tags_raw = entry.get("tags")
         tags = [t for t in tags_raw if isinstance(t, str)] if isinstance(tags_raw, list) else None
@@ -210,6 +270,41 @@ class StepDiscoveryService:
             arguments=args,
             file_path=file_path,
             tags=tags if tags else None,
+            chain_methods=chain_methods if chain_methods else None,
+        )
+
+    def _chain_method_from_dict(self, entry: Dict[str, Any]) -> Optional[StepChainMethod]:
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            return None
+
+        args = []
+        for arg in entry.get("arguments", []) or []:
+            if not isinstance(arg, dict):
+                continue
+            args.append(
+                StepArgument(
+                    name=arg.get("name"),
+                    type_name=arg.get("type", "Any"),
+                    type_import=arg.get("import"),
+                    is_optional=bool(arg.get("optional", False)),
+                    default_value=arg.get("default"),
+                )
+            )
+
+        child_methods = []
+        for method in entry.get("chain_methods", []) or []:
+            if not isinstance(method, dict):
+                continue
+            parsed = self._chain_method_from_dict(method)
+            if parsed:
+                child_methods.append(parsed)
+
+        return StepChainMethod(
+            name=name,
+            arguments=args,
+            chain_methods=child_methods if child_methods else None,
+            recursive=bool(entry.get("recursive", False)),
         )
 
     def _deduplicate_steps(self, steps: List[StepFunction]) -> List[Dict[str, Any]]:

@@ -26,6 +26,24 @@ class StepArgument:
 
 
 @dataclass
+class StepChainMethod:
+    """Represents a chainable method that can be appended to a step builder."""
+
+    name: str
+    arguments: List[StepArgument]
+    chain_methods: List['StepChainMethod'] | None = None
+    recursive: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "arguments": [arg.to_dict() for arg in self.arguments],
+            "chain_methods": [method.to_dict() for method in (self.chain_methods or [])],
+            "recursive": self.recursive,
+        }
+
+
+@dataclass
 class StepFunction:
     """Represents a DSL-decorated function or class"""
     name: str
@@ -33,6 +51,7 @@ class StepFunction:
     arguments: List[StepArgument]
     file_path: str
     tags: List[str] | None = None
+    chain_methods: List[StepChainMethod] | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -41,6 +60,7 @@ class StepFunction:
             "arguments": [arg.to_dict() for arg in self.arguments],
             "file": self.file_path,
             "tags": self.tags or [],
+            "chain_methods": [method.to_dict() for method in (self.chain_methods or [])],
         }
 
 
@@ -79,15 +99,24 @@ class DSLStepAnalyzer:
         return step_files
 
     def _find_library_steps(self) -> List[Path]:
-        """Find all step files in the libstp_helpers library"""
-        step_files = []
+        """Find all step files in the libstp library.
 
-        # Look for step files in libstp_helpers
+        Prefer ``.py`` over ``.pyi`` when both exist for the same module so we
+        don't emit duplicate steps from stub/runtime pairs.
+        """
         lib_dir = self.project_root / "libstp"
         if lib_dir.exists():
-            step_files.extend(lib_dir.rglob("*.py"))
+            module_files: Dict[Path, Path] = {}
+            for pattern in ("*.pyi", "*.py"):
+                for path in lib_dir.rglob(pattern):
+                    if "__pycache__" in path.parts:
+                        continue
+                    module_key = path.relative_to(lib_dir).with_suffix("")
+                    module_files[module_key] = path
 
-        return step_files
+            return list(module_files.values())
+
+        return []
 
     def _analyze_file(self, file_path: Path):
         """Analyze a single Python file for @dsl decorated functions/classes"""
@@ -253,6 +282,7 @@ class DSLStepAnalyzer:
                 arguments=arguments,
                 file_path=str(file_path),
                 tags=tags or None,
+                chain_methods=self._infer_chain_methods(step_name, tags or []),
             )
 
         except Exception as e:
@@ -275,8 +305,14 @@ class DSLStepAnalyzer:
             # Get type annotation
             type_name, type_import, is_optional = self._resolve_type_annotation(arg.annotation, imports)
 
+            default_node = self._get_default_node(arg_name, args)
+            if type_name == "Any" and default_node is not None:
+                inferred_type = self._infer_type_from_default(default_node)
+                if inferred_type is not None:
+                    type_name = inferred_type
+
             # Get default value
-            default_value = self._get_default_value(arg_name, args)
+            default_value = self._format_default_value(default_node)
 
             return StepArgument(
                 name=arg_name,
@@ -356,8 +392,8 @@ class DSLStepAnalyzer:
         except Exception:
             return "Any", None, False
 
-    def _get_default_value(self, arg_name: str, args: ast.arguments) -> Optional[str]:
-        """Get default value for an argument if it exists"""
+    def _get_default_node(self, arg_name: str, args: ast.arguments) -> Optional[ast.AST]:
+        """Get the AST node for an argument default if it exists."""
         # Match argument position with defaults
         arg_names = [arg.arg for arg in args.args]
         if arg_name in arg_names:
@@ -366,14 +402,45 @@ class DSLStepAnalyzer:
             defaults_start = len(arg_names) - len(args.defaults)
             if arg_index >= defaults_start:
                 default_index = arg_index - defaults_start
-                default_node = args.defaults[default_index]
-                try:
-                    if isinstance(default_node, ast.Constant):
-                        return repr(default_node.value)
-                    else:
-                        return ast.unparse(default_node)
-                except Exception:
-                    return "..."
+                return args.defaults[default_index]
+        return None
+
+    def _format_default_value(self, default_node: Optional[ast.AST]) -> Optional[str]:
+        """Convert a default AST node into the serialized value used by the IDE."""
+        if default_node is None:
+            return None
+        try:
+            if isinstance(default_node, ast.Constant):
+                return repr(default_node.value)
+            return ast.unparse(default_node)
+        except Exception:
+            return "..."
+
+    def _infer_type_from_default(self, default_node: ast.AST) -> Optional[str]:
+        """Infer a simple scalar type from a literal default value."""
+        if isinstance(default_node, ast.Constant):
+            value = default_node.value
+            if isinstance(value, bool):
+                return "bool"
+            if isinstance(value, int):
+                return "int"
+            if isinstance(value, float):
+                return "float"
+            if isinstance(value, str):
+                return "str"
+            return None
+
+        if isinstance(default_node, ast.UnaryOp) and isinstance(default_node.op, (ast.UAdd, ast.USub)):
+            operand = default_node.operand
+            if isinstance(operand, ast.Constant):
+                value = operand.value
+                if isinstance(value, bool):
+                    return None
+                if isinstance(value, int):
+                    return "int"
+                if isinstance(value, float):
+                    return "float"
+
         return None
 
     def _generate_import_path(self, file_path: Path) -> str:
@@ -392,3 +459,41 @@ class DSLStepAnalyzer:
         except ValueError:
             # File is not under project root
             return str(file_path.stem)
+
+    def _infer_chain_methods(self, step_name: str, tags: List[str]) -> List[StepChainMethod] | None:
+        normalized_name = (step_name or "").strip().lower()
+        normalized_tags = {tag.strip().lower() for tag in (tags or []) if isinstance(tag, str)}
+
+        methods: List[StepChainMethod] = []
+
+        if "follow_line_single" in normalized_name:
+            methods.append(
+                StepChainMethod(
+                    name="until",
+                    arguments=[StepArgument("condition", "str", None, False, None)],
+                    recursive=True,
+                )
+            )
+            methods.append(
+                StepChainMethod(
+                    name="distance_cm",
+                    arguments=[StepArgument("distance_cm", "float", None, False, None)],
+                )
+            )
+            return methods
+
+        is_motion_like = (
+            "motion" in normalized_tags or
+            "line-follow" in normalized_tags or
+            any(token in normalized_name for token in ("drive", "strafe", "follow_line"))
+        )
+        if is_motion_like:
+            methods.append(
+                StepChainMethod(
+                    name="until",
+                    arguments=[StepArgument("condition", "str", None, False, None)],
+                    recursive=True,
+                )
+            )
+
+        return methods or None
