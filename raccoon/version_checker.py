@@ -51,7 +51,7 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         name="libstp",
         repo="htl-stp-ecer/raccoon-lib",
         pip_name="libstp",
-        targets=["laptop", "pi"],
+        targets=["pi"],
     ),
     PackageInfo(
         name="libstp-stubs",
