@@ -217,6 +217,30 @@ def _get_pi_updates(
     return updates
 
 
+def _filter_compatible_wheels(wheels: list[str]) -> list[str]:
+    """Filter wheel files to only those compatible with this platform.
+
+    Keeps pure-Python wheels (``py3-none-any``) and wheels whose platform
+    tag matches the current machine architecture.
+    """
+    import platform
+
+    machine = platform.machine().lower()  # e.g. "x86_64", "aarch64"
+
+    compatible = []
+    for w in wheels:
+        basename = os.path.basename(w)
+        # Pure Python wheels are always compatible
+        if "none-any" in basename:
+            compatible.append(w)
+        # Platform-specific wheels must match this machine
+        elif machine in basename:
+            compatible.append(w)
+        else:
+            logger.info(f"Skipping incompatible wheel: {basename} (need {machine})")
+    return compatible
+
+
 def _update_laptop(
     console: Console, updates: list[PackageStatus], force: bool
 ) -> None:
@@ -224,23 +248,43 @@ def _update_laptop(
     console.print()
     console.print("[bold]Updating laptop packages...[/bold]")
 
-    repo = "htl-stp-ecer/raccoon-cli"
+    # Group updates by repo
+    by_repo: dict[str, list[PackageStatus]] = {}
+    for s in updates:
+        by_repo.setdefault(s.info.repo, []).append(s)
+
+    all_wheels: list[str] = []
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        console.print(f"[dim]Downloading raccoon wheel from {repo}...[/dim]")
-        # Download only the raccoon wheel (not raccoon_transport)
-        wheels = download_release_assets(repo, "raccoon-*.whl", tmpdir)
-        if not wheels:
-            console.print("[red]No raccoon wheel found in release.[/red]")
+        for repo, repo_updates in by_repo.items():
+            for s in repo_updates:
+                pip_name = s.info.pip_name
+                if not pip_name:
+                    continue
+                pattern = f"{pip_name.replace('-', '_')}-*.whl"
+
+                console.print(f"[dim]Downloading {s.info.name} wheels from {repo}...[/dim]")
+                wheels = download_release_assets(repo, pattern, tmpdir)
+                wheels = _filter_compatible_wheels(wheels)
+                if not wheels:
+                    console.print(f"[yellow]No compatible wheel for {s.info.name} on this platform — skipping.[/yellow]")
+                    continue
+                for w in wheels:
+                    console.print(f"  {os.path.basename(w)}")
+                all_wheels.extend(wheels)
+
+        if not all_wheels:
+            console.print("[red]No wheels downloaded.[/red]")
             return
 
-        console.print(f"[dim]Installing {len(wheels)} wheel(s)...[/dim]")
-        for w in wheels:
+        console.print(f"[dim]Installing {len(all_wheels)} wheel(s)...[/dim]")
+        for w in all_wheels:
             console.print(f"  [dim]{os.path.basename(w)}[/dim]")
 
         pip_args = ["pip", "install"]
         if force:
             pip_args.append("--force-reinstall")
-        pip_args.extend(wheels)
+        pip_args.extend(all_wheels)
 
         result = subprocess.run(pip_args, capture_output=True, text=True)
         if result.returncode != 0:

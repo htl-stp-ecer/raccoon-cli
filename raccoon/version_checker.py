@@ -51,7 +51,13 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         name="libstp",
         repo="htl-stp-ecer/raccoon-lib",
         pip_name="libstp",
-        targets=["pi"],
+        targets=["laptop", "pi"],
+    ),
+    PackageInfo(
+        name="libstp-stubs",
+        repo="htl-stp-ecer/raccoon-lib",
+        pip_name="libstp-stubs",
+        targets=["laptop"],
     ),
     PackageInfo(
         name="botui",

@@ -11,10 +11,36 @@ logger = logging.getLogger("raccoon")
 
 
 def resolve_class(qualname: str) -> type:
-    """Resolve a fully qualified class name to the actual class object."""
-    mod_name, cls_name = qualname.rsplit(".", 1)
-    module = __import__(mod_name, fromlist=[cls_name])
-    return getattr(module, cls_name)
+    """Resolve a fully qualified class name to the actual class object.
+
+    Falls back to the offline type index (ClassProxy) when the live
+    import fails — this enables codegen without hardware-dependent
+    pybind11 modules being importable.
+    """
+    try:
+        mod_name, cls_name = qualname.rsplit(".", 1)
+        module = __import__(mod_name, fromlist=[cls_name])
+        return getattr(module, cls_name)
+    except (ImportError, AttributeError, SystemError):
+        from .type_index import get_type_index
+
+        index = get_type_index()
+
+        # Exact qualname match
+        proxy = index.resolve(qualname)
+        if proxy is not None:
+            logger.debug(f"Resolved {qualname} from type index (offline)")
+            return proxy  # type: ignore[return-value]
+
+        # For "libstp.ClassName" lookups, check the namespace map
+        # (libstp re-exports from submodules like sensor_ir, drive, etc.)
+        _, cls_name = qualname.rsplit(".", 1)
+        proxy = index.resolve_by_name(cls_name)
+        if proxy is not None:
+            logger.debug(f"Resolved {qualname} via namespace map → {proxy}")
+            return proxy  # type: ignore[return-value]
+
+        raise
 
 
 def qualname_of(cls: type) -> str:
@@ -82,7 +108,13 @@ def parse_pybind11_signature(cls: type) -> Dict[str, inspect.Parameter]:
 
 
 def get_init_params(cls: type) -> Dict[str, inspect.Parameter]:
-    """Get __init__ parameters for a class, handling both regular and pybind11 classes."""
+    """Get __init__ parameters for a class, handling regular, pybind11, and proxy classes."""
+    from .type_index import ClassProxy
+
+    # Fast path for ClassProxy — return pre-parsed params directly
+    if isinstance(cls, ClassProxy):
+        return cls.get_cached_params()
+
     try:
         sig = inspect.signature(cls.__init__)
         params: Dict[str, inspect.Parameter] = {}
@@ -120,7 +152,7 @@ def is_class_annotation(tp: Any) -> bool:
 
 
 def parse_type_from_docstring(parent_cls: type, param_name: str) -> type | None:
-    """Parse parameter type from pybind11 docstring."""
+    """Parse parameter type from pybind11 docstring (or ClassProxy docstring)."""
     doc = parent_cls.__init__.__doc__
     if not doc:
         logger.warning(f"No docstring for {parent_cls.__name__}.__init__")
@@ -137,7 +169,7 @@ def parse_type_from_docstring(parent_cls: type, param_name: str) -> type | None:
     type_str = match.group(1)
     logger.debug(f"Found type for '{param_name}': {type_str}")
 
-    # Try to resolve the type
+    # Try to resolve the type (resolve_class now falls back to type index)
     try:
         resolved = resolve_class(type_str)
         logger.debug(f"Resolved {type_str} to {resolved}")
@@ -146,7 +178,7 @@ def parse_type_from_docstring(parent_cls: type, param_name: str) -> type | None:
         # Try without module prefix (just class name)
         class_name = type_str.split('.')[-1]
         logger.debug(f"Failed to resolve {type_str}, trying {class_name}...")
-        for module_name in ['libstp.foundation', 'libstp.hal']:
+        for module_name in ['libstp.foundation', 'libstp.hal', 'libstp.motion', 'libstp.drive']:
             try:
                 resolved = resolve_class(f"{module_name}.{class_name}")
                 logger.debug(f"Resolved to {resolved}")

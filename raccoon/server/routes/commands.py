@@ -195,13 +195,12 @@ async def codegen_project(
     executor = CommandExecutor()
 
     # Start the command asynchronously
-    # Use --no-sync since we're already on the Pi
     asyncio.create_task(
         executor.execute(
             command_id=command_id,
             project_path=project["path"],
             command="raccoon",
-            args=["codegen", "--no-sync"] + request.args,
+            args=["codegen"] + request.args,
             env=request.env,
         )
     )
