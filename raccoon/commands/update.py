@@ -9,6 +9,8 @@ import sys
 import tarfile
 import tempfile
 
+import shutil
+
 import click
 from rich.console import Console
 from rich.prompt import Confirm
@@ -248,6 +250,17 @@ def _update_laptop(
     console.print()
     console.print("[bold]Updating laptop packages...[/bold]")
 
+    # Clean up stale .old exe from a previous Windows update
+    if sys.platform == "win32":
+        exe_path = shutil.which("raccoon")
+        if exe_path:
+            old_path = exe_path + ".old"
+            if os.path.exists(old_path):
+                try:
+                    os.remove(old_path)
+                except OSError:
+                    pass
+
     # Group updates by repo
     by_repo: dict[str, list[PackageStatus]] = {}
     for s in updates:
@@ -281,7 +294,24 @@ def _update_laptop(
         for w in all_wheels:
             console.print(f"  [dim]{os.path.basename(w)}[/dim]")
 
-        pip_args = ["pip", "install"]
+        # On Windows, the running raccoon.exe is locked and pip cannot
+        # overwrite it.  Windows *does* allow renaming a locked file, so we
+        # move the exe out of the way before pip install and clean up after.
+        renamed_exe: str | None = None
+        if sys.platform == "win32":
+            exe_path = shutil.which("raccoon")
+            if exe_path and os.path.isfile(exe_path):
+                old_path = exe_path + ".old"
+                try:
+                    if os.path.exists(old_path):
+                        os.remove(old_path)
+                    os.rename(exe_path, old_path)
+                    renamed_exe = old_path
+                    logger.info(f"Renamed {exe_path} → {old_path} to avoid lock")
+                except OSError:
+                    logger.debug("Could not rename raccoon exe, proceeding anyway")
+
+        pip_args = [sys.executable, "-m", "pip", "install"]
         if force:
             pip_args.append("--force-reinstall")
         pip_args.extend(all_wheels)
@@ -290,7 +320,7 @@ def _update_laptop(
         if result.returncode != 0:
             if "externally-managed-environment" in result.stderr:
                 console.print("[yellow]System Python detected — retrying with --break-system-packages[/yellow]")
-                pip_args.insert(2, "--break-system-packages")
+                pip_args.insert(4, "--break-system-packages")
                 result = subprocess.run(pip_args, capture_output=True, text=True)
                 if result.returncode != 0:
                     console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
@@ -298,6 +328,13 @@ def _update_laptop(
             else:
                 console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
                 return
+
+        # Clean up renamed exe on Windows
+        if renamed_exe and os.path.exists(renamed_exe):
+            try:
+                os.remove(renamed_exe)
+            except OSError:
+                logger.debug(f"Could not remove {renamed_exe} — will be cleaned up next run")
 
         console.print("[green]Laptop packages updated successfully.[/green]")
 
