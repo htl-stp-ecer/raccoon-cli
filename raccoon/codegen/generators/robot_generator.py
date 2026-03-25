@@ -1097,8 +1097,6 @@ class RobotGenerator(BaseGenerator):
         """
         Infer the expected class type for an odometry __init__ parameter.
 
-        Uses type annotations first, then falls back to pybind11 docstring parsing.
-
         Args:
             odometry_class: The odometry class to introspect
             param_name: The parameter name to look up
@@ -1106,30 +1104,12 @@ class RobotGenerator(BaseGenerator):
         Returns:
             The resolved class type, or None if it cannot be determined
         """
-        from ..introspection import (
-            get_init_params,
-            is_class_annotation,
-            parse_type_from_docstring,
-            unwrap_optional,
-        )
+        from ..introspection import infer_param_type
 
-        # First try type annotations from the signature
-        init_params = get_init_params(odometry_class)
-        if param_name in init_params:
-            annotation = init_params[param_name].annotation
-            if is_class_annotation(annotation):
-                resolved = unwrap_optional(annotation)
-                if isinstance(resolved, type):
-                    logger.info(
-                        f"Inferred type for odometry param '{param_name}': {resolved.__name__} (from annotation)"
-                    )
-                    return resolved
-
-        # Fall back to pybind11 docstring parsing
-        nested_cls = parse_type_from_docstring(odometry_class, param_name)
+        nested_cls = infer_param_type(odometry_class, param_name)
         if nested_cls is not None:
             logger.info(
-                f"Inferred type for odometry param '{param_name}': {nested_cls.__name__} (from docstring)"
+                f"Inferred type for odometry param '{param_name}': {nested_cls.__name__}"
             )
             return nested_cls
 

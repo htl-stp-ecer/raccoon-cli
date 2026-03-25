@@ -123,25 +123,12 @@ def _introspect_pyi_file(mod_name: str, pyi_path: Path) -> List[Dict[str, Any]]:
 
         # Find __init__ method (pick the non-overloaded or last one)
         init_params: List[Dict[str, Any]] = []
-        init_docstring = ""
         for item in node.body:
             if isinstance(item, ast.FunctionDef) and item.name == "__init__":
                 parsed = _parse_init_from_ast(item)
                 # Keep the signature with the most named params (handles @overload)
                 if len(parsed) >= len(init_params):
                     init_params = parsed
-                    # Build a synthetic pybind11-style docstring for compat
-                    param_strs = []
-                    for p in parsed:
-                        s = f"{p['name']}: {p['type']}" if p["type"] else p["name"]
-                        if not p["required"]:
-                            s += " = ..."
-                        param_strs.append(s)
-                    init_docstring = (
-                        f"__init__(self: {qualname}"
-                        + (", " + ", ".join(param_strs) if param_strs else "")
-                        + ") -> None"
-                    )
 
         classes.append({
             "qualname": qualname,
@@ -149,7 +136,6 @@ def _introspect_pyi_file(mod_name: str, pyi_path: Path) -> List[Dict[str, Any]]:
             "name": node.name,
             "bases": bases,
             "init_params": init_params,
-            "init_docstring": init_docstring,
         })
 
     return classes
@@ -265,25 +251,17 @@ def generate_index(output_path: Optional[Path] = None) -> Path:
 # ClassProxy — lightweight stand-in for a real type during codegen
 # ---------------------------------------------------------------------------
 
-class _FakeInit:
-    """Mimics __init__ with a __doc__ attribute for pybind11 docstring parsing."""
-
-    def __init__(self, doc: str):
-        self.__doc__ = doc
-
-
 class ClassProxy:
     """A lightweight proxy that quacks like a ``type`` for codegen purposes.
 
-    Provides ``__module__``, ``__name__``, ``__init__.__doc__`` (for pybind11
-    signature parsing), and cached init-parameter info.
+    Provides ``__module__``, ``__name__``, and cached init-parameter info
+    parsed from .pyi stub files at index time.
     """
 
     def __init__(self, entry: Dict[str, Any]):
         self.__module__ = entry["module"]
         self.__name__ = entry["name"]
         self.__qualname__ = entry.get("qualname", f"{self.__module__}.{self.__name__}")
-        self.__init__ = _FakeInit(entry.get("init_docstring", ""))
         self._bases: List[str] = entry.get("bases", [])
         self._init_params: List[Dict[str, Any]] = entry.get("init_params", [])
 
@@ -300,6 +278,13 @@ class ClassProxy:
             )
         return params
 
+    def get_param_type(self, param_name: str) -> Optional[str]:
+        """Return the type string for a parameter, or None if not found."""
+        for p in self._init_params:
+            if p["name"] == param_name:
+                return p.get("type") or None
+        return None
+
     def is_subclass_of(self, qualname: str) -> bool:
         """Check if this proxy's class is a subclass of the given qualname."""
         if self.__qualname__ == qualname:
@@ -313,6 +298,30 @@ class ClassProxy:
 # ---------------------------------------------------------------------------
 # TypeIndex — loads and queries the cached index
 # ---------------------------------------------------------------------------
+
+def _get_installed_libstp_version() -> Optional[str]:
+    """Read __version__ from the installed libstp __init__.pyi without importing."""
+    package_dir = _find_libstp_package_dir()
+    if package_dir is None:
+        return None
+    init_pyi = package_dir / "__init__.pyi"
+    if not init_pyi.exists():
+        return None
+    try:
+        source = init_pyi.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.iter_child_nodes(tree):
+            if (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == "__version__"
+                and isinstance(node.value, ast.Constant)
+            ):
+                return str(node.value.value)
+    except Exception:
+        pass
+    return None
+
 
 class TypeIndex:
     """Cached type index for offline codegen.
@@ -340,15 +349,21 @@ class TypeIndex:
         if self._path.exists():
             try:
                 raw = json.loads(self._path.read_text(encoding="utf-8"))
-                if raw.get("version") == INDEX_VERSION:
+                if raw.get("version") != INDEX_VERSION:
+                    logger.debug("Type index version mismatch, regenerating")
+                elif raw.get("libstp_version") != _get_installed_libstp_version():
+                    logger.info(
+                        f"libstp version changed "
+                        f"({raw.get('libstp_version')} → {_get_installed_libstp_version()}), "
+                        f"regenerating type index"
+                    )
+                else:
                     self._data = raw
                     logger.debug(
                         f"Loaded type index: {len(raw.get('classes', {}))} classes, "
                         f"libstp v{raw.get('libstp_version', '?')}"
                     )
                     return
-                else:
-                    logger.debug("Type index version mismatch, regenerating")
             except (OSError, json.JSONDecodeError) as e:
                 logger.debug(f"Failed to load type index: {e}, regenerating")
 

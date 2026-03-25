@@ -6,7 +6,7 @@ import inspect
 import logging
 from typing import Any, Dict, Set, Tuple
 
-from .introspection import parse_type_from_docstring, get_init_params
+from .introspection import infer_param_type, get_init_params
 
 logger = logging.getLogger("raccoon")
 
@@ -70,8 +70,8 @@ class ImportSet:
 
 
 def infer_nested_class(parent_cls: type, param_name: str, value: Dict[str, Any]) -> type | None:
-    """Try to infer nested class from parent class's __init__ signature via docstring."""
-    return parse_type_from_docstring(parent_cls, param_name)
+    """Try to infer nested class from parent class's __init__ parameter type."""
+    return infer_param_type(parent_cls, param_name)
 
 
 def build_constructor_expr(
