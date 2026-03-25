@@ -51,7 +51,7 @@ class DefsStubGenerator(BaseGenerator):
 
     def generate_header(self, config: Dict[str, Any]) -> str:
         # Minimal header for stub files
-        return '"""Auto-generated type stub for defs.py — DO NOT EDIT."""'
+        return '"""Auto-generated type stub — Raccoon Toolchain (Tobias Madlberger / RaccoonOS Team)"""'
 
     def generate_footer(self) -> str:
         return ""

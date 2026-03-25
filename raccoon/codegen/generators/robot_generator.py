@@ -1203,7 +1203,8 @@ class RobotGenerator(BaseGenerator):
             generic_robot_cls = resolve_class("libstp.GenericRobot")
             self.imports.add(generic_robot_cls)
         except (ImportError, AttributeError):
-            pass  # Will be handled by placeholder
+            # Fallback: add import entry directly so GenericRobot always appears
+            self.imports._entries.add(("libstp", "GenericRobot"))
 
         # Add geometry dataclass imports if needed (SensorPosition, WheelPosition)
         if hasattr(self, '_full_config'):
@@ -1215,11 +1216,14 @@ class RobotGenerator(BaseGenerator):
             if physical.get("sensors") or kinematics:
                 try:
                     sensor_pos_cls = resolve_class("libstp.robot.geometry.SensorPosition")
-                    wheel_pos_cls = resolve_class("libstp.robot.geometry.WheelPosition")
                     self.imports.add(sensor_pos_cls)
+                except (ImportError, AttributeError):
+                    self.imports._entries.add(("libstp.robot.geometry", "SensorPosition"))
+                try:
+                    wheel_pos_cls = resolve_class("libstp.robot.geometry.WheelPosition")
                     self.imports.add(wheel_pos_cls)
                 except (ImportError, AttributeError):
-                    pass  # Will be handled by placeholder
+                    self.imports._entries.add(("libstp.robot.geometry", "WheelPosition"))
 
         # Get consolidated libstp imports from ImportSet
         base_imports = super().generate_imports()
