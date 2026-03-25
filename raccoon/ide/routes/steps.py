@@ -46,16 +46,24 @@ async def get_step_index_status(
 
 @router.post("/index/refresh")
 async def refresh_step_index(
-        device_url: str = Query(..., description="Device backend URL (e.g., http://192.168.4.1:8000)"),
+        device_url: str | None = Query(None, description="Device backend URL (e.g., http://192.168.4.1:8000)"),
         force_clear: bool = Query(False, description="Clear cache before indexing"),
         svc: StepDiscoveryService = Depends(get_step_discovery_service),
 ) -> Dict[str, Any]:
-    """Fetch steps from device backend and import into local cache."""
+    """Refresh the libstp step cache from a device backend or the local install."""
     logger.info(f"POST /index/refresh called with device_url={device_url}, force_clear={force_clear}")
 
     if force_clear:
         logger.info("Clearing local cache")
         svc.clear_libstp_cache()
+
+    if not device_url:
+        logger.info("Refreshing step cache from local libstp installation")
+        try:
+            return await asyncio.to_thread(svc.refresh_libstp_cache_locally)
+        except RuntimeError as e:
+            logger.error(f"Local indexing failed: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
 
     # Normalize device URL
     base_url = device_url.rstrip("/")
@@ -73,8 +81,16 @@ async def refresh_step_index(
             steps = response.json()
             logger.info(f"Received {len(steps)} steps from device")
     except httpx.RequestError as e:
-        logger.error(f"Failed to connect to device: {e}")
-        raise HTTPException(status_code=502, detail=f"Failed to connect to device: {e}")
+        logger.warning(f"Failed to connect to device: {e}")
+        logger.info("Falling back to local libstp indexing")
+        try:
+            return await asyncio.to_thread(svc.refresh_libstp_cache_locally)
+        except RuntimeError as local_error:
+            logger.error(f"Local indexing failed after device fallback: {local_error}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to connect to device: {e}; local fallback failed: {local_error}",
+            )
     except httpx.HTTPStatusError as e:
         logger.error(f"Device returned error: {e.response.status_code}")
         raise HTTPException(status_code=502, detail=f"Device returned error: {e.response.status_code}")

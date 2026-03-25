@@ -99,15 +99,24 @@ class DSLStepAnalyzer:
         return step_files
 
     def _find_library_steps(self) -> List[Path]:
-        """Find all step files in the libstp_helpers library"""
-        step_files = []
+        """Find all step files in the libstp library.
 
-        # Look for step files in libstp_helpers
+        Prefer ``.py`` over ``.pyi`` when both exist for the same module so we
+        don't emit duplicate steps from stub/runtime pairs.
+        """
         lib_dir = self.project_root / "libstp"
         if lib_dir.exists():
-            step_files.extend(lib_dir.rglob("*.py"))
+            module_files: Dict[Path, Path] = {}
+            for pattern in ("*.pyi", "*.py"):
+                for path in lib_dir.rglob(pattern):
+                    if "__pycache__" in path.parts:
+                        continue
+                    module_key = path.relative_to(lib_dir).with_suffix("")
+                    module_files[module_key] = path
 
-        return step_files
+            return list(module_files.values())
+
+        return []
 
     def _analyze_file(self, file_path: Path):
         """Analyze a single Python file for @dsl decorated functions/classes"""

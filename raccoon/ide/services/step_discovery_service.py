@@ -1,6 +1,8 @@
 """Discover available DSL steps for the IDE and maintain a libstp cache."""
 
+import importlib.util
 import json
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -10,6 +12,8 @@ from uuid import UUID
 
 from raccoon.ide.core.analysis.step_analyzer import DSLStepAnalyzer, StepFunction, StepArgument, StepChainMethod
 from raccoon.ide.services.project_service import ProjectService
+
+logger = logging.getLogger(__name__)
 
 
 class StepDiscoveryService:
@@ -129,6 +133,31 @@ class StepDiscoveryService:
             self._libstp_last_indexed_at = payload["last_indexed_at"]
             self._libstp_last_error = None
 
+    def refresh_libstp_cache_locally(self) -> Dict[str, Any]:
+        """Rebuild the libstp cache from the local Python installation."""
+        libstp_dir = self._find_installed_libstp_dir()
+        if libstp_dir is None:
+            message = (
+                "libstp package not found in the local Python environment. "
+                "Install libstp or libstp-stubs first."
+            )
+            self._set_libstp_error(message)
+            raise RuntimeError(message)
+
+        try:
+            analyzer = DSLStepAnalyzer(libstp_dir.parent)
+            for file_path in analyzer._find_library_steps():
+                analyzer._analyze_file(file_path)
+
+            logger.info("Discovered %s libstp steps from local install at %s", len(analyzer.discovered_steps), libstp_dir)
+            self.import_libstp_cache([step.to_dict() for step in analyzer.discovered_steps])
+            return self.get_libstp_cache_status()
+        except Exception as exc:
+            message = f"Failed to index local libstp installation: {exc}"
+            logger.exception(message)
+            self._set_libstp_error(message)
+            raise RuntimeError(message) from exc
+
     def get_libstp_cache_status(self) -> Dict[str, Any]:
         """Return cache health metadata used by the IDE refresh workflow."""
         with self._libstp_lock:
@@ -170,6 +199,32 @@ class StepDiscoveryService:
         last_indexed_at = data.get("last_indexed_at")
         if isinstance(last_indexed_at, str):
             self._libstp_last_indexed_at = last_indexed_at
+
+    def _find_installed_libstp_dir(self) -> Optional[Path]:
+        try:
+            spec = importlib.util.find_spec("libstp")
+        except Exception:
+            return None
+
+        if spec is None:
+            return None
+
+        if spec.submodule_search_locations:
+            for location in spec.submodule_search_locations:
+                package_dir = Path(location)
+                if package_dir.is_dir():
+                    return package_dir
+
+        if spec.origin:
+            package_dir = Path(spec.origin).parent
+            if package_dir.is_dir():
+                return package_dir
+
+        return None
+
+    def _set_libstp_error(self, message: str) -> None:
+        with self._libstp_lock:
+            self._libstp_last_error = message
 
     def _cached_libstp_steps(self) -> List[StepFunction]:
         cached = self._libstp_cache

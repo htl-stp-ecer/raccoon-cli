@@ -83,3 +83,23 @@ def unresolved_defaults(
     assert args["items"].type_name == "Any"
     assert args["label"].type_name == "Any"
     assert args["maybe"].type_name == "Any"
+
+
+def test_discovers_library_steps_from_stub_only_modules(tmp_path: Path):
+    stub_file = tmp_path / "libstp" / "step" / "motion" / "drive_dsl.pyi"
+    stub_file.parent.mkdir(parents=True)
+    stub_file.write_text(
+        """
+from libstp import dsl
+
+@dsl
+def local_drive(speed: float = 0.5): ...
+""".strip(),
+        encoding="utf-8",
+    )
+
+    analyzer = DSLStepAnalyzer(tmp_path)
+    steps = analyzer.analyze_all_steps()
+    names = {step.name for step in steps}
+
+    assert "local_drive" in names
