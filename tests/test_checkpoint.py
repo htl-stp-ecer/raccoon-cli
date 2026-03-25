@@ -9,6 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from raccoon.checkpoint import (
+    _MAX_CHECKPOINTS,
+    _prune_excess_checkpoints,
     clean_checkpoints,
     create_checkpoint,
     delete_checkpoint,
@@ -292,3 +294,45 @@ class TestCleanCheckpoints:
 
         assert count == 0
         assert error == ""
+
+
+class TestPruneExcessCheckpoints:
+    def test_prunes_oldest_beyond_limit(self, tmp_path: Path):
+        """When more than _MAX_CHECKPOINTS exist, the oldest are deleted."""
+        _init_repo(tmp_path)
+
+        limit = 5  # use small limit for fast test
+
+        with patch("raccoon.checkpoint._MAX_CHECKPOINTS", limit):
+            for i in range(limit + 3):
+                (tmp_path / "file.txt").write_text(f"v{i}\n")
+                with patch("raccoon.checkpoint.time") as mock_time:
+                    mock_time.time.return_value = 1000000 + i
+                    create_checkpoint(tmp_path, label=f"cp-{i}")
+                # Commit so the next stash create sees a diff
+                _git(tmp_path, "add", "-A")
+                _git(tmp_path, "commit", "-m", f"v{i}")
+
+        remaining = list_checkpoints(tmp_path)
+        assert len(remaining) == limit
+
+        # The newest checkpoints survived
+        labels = [cp.label for cp in remaining]
+        for i in range(limit + 3 - limit, limit + 3):
+            assert f"cp-{i}" in labels
+
+    def test_noop_under_limit(self, tmp_path: Path):
+        """No pruning when checkpoint count is within the limit."""
+        _init_repo(tmp_path)
+
+        (tmp_path / "file.txt").write_text("change\n")
+        create_checkpoint(tmp_path, label="only-one")
+
+        deleted = _prune_excess_checkpoints(tmp_path)
+
+        assert deleted == 0
+        assert len(list_checkpoints(tmp_path)) == 1
+
+    def test_max_checkpoints_constant_is_100(self):
+        """Verify the default limit is 100."""
+        assert _MAX_CHECKPOINTS == 100

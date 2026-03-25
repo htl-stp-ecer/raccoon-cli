@@ -1059,6 +1059,12 @@ class MissionService:
 
             mission_name = mission_name.strip()
 
+            # Only one program may run on the robot at a time.
+            # Stop any previous mission for this project before starting a new one.
+            if project_uuid in self._running_procs or project_uuid in self._sim_cancel:
+                logger.info("Stopping previous mission for project %s before starting new one", project_uuid)
+                await self.stop_mission(project_uuid)
+
             project_path = self._repo.get_project_path(project_uuid)
             if not project_path or not project_path.exists():
                 logger.warning(f"Project path not found/deleted for UUID: {project_uuid}")

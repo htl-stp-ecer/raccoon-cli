@@ -52,18 +52,30 @@ def _run_local(
     if no_calibrate:
         env["LIBSTP_NO_CALIBRATE"] = "1"
 
-    result = subprocess.run(cmd_parts, cwd=project_root, env=env)
+    # On Windows, Ctrl+C doesn't reliably propagate to child processes.
+    # Use Popen so we can catch SIGINT ourselves and terminate the child.
+    proc = subprocess.Popen(cmd_parts, cwd=project_root, env=env)
+    try:
+        returncode = proc.wait()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Ctrl+C — stopping program...[/yellow]")
+        proc.terminate()
+        try:
+            returncode = proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            returncode = proc.wait()
 
-    exit_style = "bold green" if result.returncode == 0 else "bold red"
+    exit_style = "bold green" if returncode == 0 else "bold red"
     console.print(
         Panel.fit(
-            Text(f"src.main exited with code {result.returncode}", style=exit_style),
-            border_style="green" if result.returncode == 0 else "red",
+            Text(f"src.main exited with code {returncode}", style=exit_style),
+            border_style="green" if returncode == 0 else "red",
         )
     )
 
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
+    if returncode != 0:
+        raise SystemExit(returncode)
 
 
 async def _run_remote(

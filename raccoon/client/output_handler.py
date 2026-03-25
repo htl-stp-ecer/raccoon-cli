@@ -4,7 +4,12 @@ import asyncio
 import json
 from typing import Callable, Optional
 
-from websocket import WebSocket, create_connection
+from websocket import (
+    WebSocket,
+    WebSocketConnectionClosedException,
+    WebSocketTimeoutException,
+    create_connection,
+)
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -21,16 +26,18 @@ class OutputHandler:
     - Cancellation handling
     """
 
-    def __init__(self, websocket_url: str):
+    def __init__(self, websocket_url: str, recv_timeout: float = 0.5):
         """
         Initialize the output handler.
 
         Args:
             websocket_url: WebSocket URL for the command output stream
+            recv_timeout: Timeout in seconds for each recv() call
         """
         self.url = websocket_url
         self.ws: Optional[WebSocket] = None
         self._cancelled = False
+        self._recv_timeout = recv_timeout
 
     def stream_to_console(
         self,
@@ -51,7 +58,7 @@ class OutputHandler:
 
         try:
             self.ws = create_connection(self.url)
-            self.ws.settimeout(0.5)  # Allow periodic check for cancellation
+            self.ws.settimeout(self._recv_timeout)
 
             while True:
                 # Check if cancellation was requested
@@ -60,11 +67,13 @@ class OutputHandler:
 
                 try:
                     message = self.ws.recv()
-                except Exception:
-                    # Timeout or other recv error - check if cancelled and loop
-                    if self._cancelled:
-                        return {"status": "cancelled", "exit_code": -1}
+                except WebSocketTimeoutException:
+                    # Normal timeout — loop back to check cancel flag
                     continue
+                except (WebSocketConnectionClosedException, OSError, EOFError):
+                    # Connection lost (robot died, network down, etc.)
+                    console.print("[red]Connection to Pi lost.[/red]")
+                    return {"status": "failed", "exit_code": -1, "error": "connection lost"}
 
                 if not message:
                     continue
@@ -92,7 +101,10 @@ class OutputHandler:
 
         finally:
             if self.ws:
-                self.ws.close()
+                try:
+                    self.ws.close()
+                except Exception:
+                    pass
                 self.ws = None
 
     async def stream_to_console_async(

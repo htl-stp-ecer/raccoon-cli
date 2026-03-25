@@ -1,6 +1,7 @@
 """Command execution endpoints."""
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime
 from enum import Enum
@@ -10,6 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from pydantic import BaseModel
 
 from raccoon.server.auth import require_auth
+
+logger = logging.getLogger("raccoon")
 
 router = APIRouter(prefix="/api/v1", tags=["commands"], dependencies=[Depends(require_auth)])
 
@@ -64,6 +67,48 @@ class CommandStatusResponse(BaseModel):
 _active_commands: dict[str, dict] = {}
 
 
+async def _cancel_running_commands_for_project(project_id: str) -> None:
+    """Cancel any running commands for the given project.
+
+    Ensures only one program runs per project at a time.  When a new
+    run/calibrate is requested the previous one is terminated first.
+    """
+    from raccoon.server.services.executor import CommandStatus
+
+    for cmd_id, cmd in list(_active_commands.items()):
+        if cmd["project_id"] != project_id:
+            continue
+        executor = cmd.get("executor")
+        if executor and executor.status in (CommandStatus.PENDING, CommandStatus.RUNNING):
+            logger.info(
+                "Cancelling previous command %s for project %s", cmd_id, project_id
+            )
+            await executor.cancel()
+
+
+def _reject_if_another_project_running(project_id: str) -> None:
+    """Raise 409 if a *different* project has a running command.
+
+    Only one program may execute on the robot at a time.  Same-project
+    commands are already cancelled by ``_cancel_running_commands_for_project``,
+    but two different projects must not overlap.
+    """
+    from raccoon.server.services.executor import CommandStatus
+
+    for cmd_id, cmd in _active_commands.items():
+        if cmd["project_id"] == project_id:
+            continue
+        executor = cmd.get("executor")
+        if executor and executor.status in (CommandStatus.PENDING, CommandStatus.RUNNING):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Another project ({cmd['project_id']}) is already running "
+                    f"(command {cmd_id}). Stop it first or wait for it to finish."
+                ),
+            )
+
+
 @router.post("/run/{project_id}", response_model=CommandResponse)
 async def run_project(project_id: str, request: CommandRequest = CommandRequest()):
     """
@@ -82,6 +127,12 @@ async def run_project(project_id: str, request: CommandRequest = CommandRequest(
     project = manager.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
+    # Only one program may run on the robot at a time.
+    # Cancel any previous command for this project AND reject if *any other*
+    # project still has a running command (same physical robot).
+    await _cancel_running_commands_for_project(project_id)
+    _reject_if_another_project_running(project_id)
 
     command_id = str(uuid.uuid4())
     executor = CommandExecutor()
@@ -136,6 +187,10 @@ async def calibrate_project(
     project = manager.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
+    # Only one program may run on the robot at a time.
+    await _cancel_running_commands_for_project(project_id)
+    _reject_if_another_project_running(project_id)
 
     command_id = str(uuid.uuid4())
     executor = CommandExecutor()

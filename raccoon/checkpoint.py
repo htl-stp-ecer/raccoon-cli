@@ -15,6 +15,7 @@ from pathlib import Path
 from raccoon.git_history import _run_git, is_git_available, is_git_repo
 
 _REF_PREFIX = "refs/raccoon/checkpoints/"
+_MAX_CHECKPOINTS = 100
 
 
 @dataclass
@@ -103,7 +104,28 @@ def create_checkpoint(project_root: Path, label: str = "checkpoint") -> Checkpoi
     short_proc = _run_git(project_root, ["rev-parse", "--short", sha])
     short_sha = short_proc.stdout.strip() if short_proc.returncode == 0 else sha[:7]
 
+    # Prune oldest checkpoints beyond the limit to avoid unbounded storage growth
+    _prune_excess_checkpoints(project_root)
+
     return CheckpointResult(created=True, sha=sha, short_sha=short_sha, ref=ref)
+
+
+def _prune_excess_checkpoints(project_root: Path) -> int:
+    """Delete the oldest checkpoints when the total exceeds ``_MAX_CHECKPOINTS``.
+
+    Returns the number of refs deleted.
+    """
+    checkpoints = list_checkpoints(project_root)  # newest first
+    if len(checkpoints) <= _MAX_CHECKPOINTS:
+        return 0
+
+    excess = checkpoints[_MAX_CHECKPOINTS:]
+    deleted = 0
+    for cp in excess:
+        proc = _run_git(project_root, ["update-ref", "-d", cp.ref])
+        if proc.returncode == 0:
+            deleted += 1
+    return deleted
 
 
 def list_checkpoints(project_root: Path) -> list[Checkpoint]:
