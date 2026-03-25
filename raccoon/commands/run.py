@@ -24,7 +24,7 @@ logger = logging.getLogger("raccoon")
 
 def _run_local(
     ctx: click.Context, project_root: Path, config: dict, args: tuple,
-    dev: bool = False, no_calibrate: bool = False,
+    dev: bool = False, no_calibrate: bool = False, no_codegen: bool = False,
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
@@ -37,9 +37,10 @@ def _run_local(
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-    pipeline = create_pipeline()
-    output_dir = project_root / "src" / "hardware"
-    pipeline.run_all(config, output_dir, format_code=True)
+    if not no_codegen:
+        pipeline = create_pipeline()
+        output_dir = project_root / "src" / "hardware"
+        pipeline.run_all(config, output_dir, format_code=True)
 
     logger.info("Running src.main...")
     cmd_parts = [sys.executable, "-m", "src.main", *args]
@@ -82,6 +83,13 @@ async def _run_remote(
     from raccoon.client.output_handler import OutputHandler
     from raccoon.client.sftp_sync import SyncDirection
     from raccoon.commands.sync_cmd import sync_project_interactive
+
+    # Run codegen locally before syncing so generated files are included
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    pipeline = create_pipeline()
+    output_dir = project_root / "src" / "hardware"
+    pipeline.run_all(config, output_dir, format_code=True)
 
     # Sync project to Pi before running
     if not sync_project_interactive(project_root, console):
@@ -162,8 +170,9 @@ async def _run_remote(
 @click.option("--local", "-l", is_flag=True, help="Force local execution (skip remote)")
 @click.option("--no-sync", is_flag=True, help="Skip syncing before remote run")
 @click.option("--no-calibrate", is_flag=True, help="Skip calibration steps, use stored values")
+@click.option("--no-codegen", is_flag=True, help="Skip code generation (used by server when codegen was done client-side)")
 @click.pass_context
-def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool) -> None:
+def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool, no_codegen: bool) -> None:
     """Run codegen and then execute src.main.
 
     If connected to a Pi, syncs the project and runs remotely.
@@ -222,7 +231,7 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
             raise SystemExit(1)
 
         # Run locally
-        _run_local(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate)
+        _run_local(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate, no_codegen=no_codegen)
 
     except ProjectError as exc:
         logger.error(str(exc))

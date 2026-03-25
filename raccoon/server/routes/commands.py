@@ -89,12 +89,13 @@ async def run_project(project_id: str, request: CommandRequest = CommandRequest(
 
     # Start the command asynchronously
     # Use --local to force local execution (we're already on the Pi)
+    # Use --no-codegen because codegen is done client-side before sync
     asyncio.create_task(
         executor.execute(
             command_id=command_id,
             project_path=project["path"],
             command="raccoon",
-            args=["run", "--local"] + request.args,
+            args=["run", "--local", "--no-codegen"] + request.args,
             env=request.env,
         )
     )
