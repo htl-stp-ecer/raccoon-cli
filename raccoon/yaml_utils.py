@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
+
 from pathlib import Path
 from typing import Any
 
-from ruamel.yaml import YAML
-
+from ruamel.yaml import YAML, CommentedMap, CommentedSeq
 
 # ---------------------------------------------------------------------------
 # !include / !include-merge support
@@ -15,55 +16,70 @@ from ruamel.yaml import YAML
 
 # Thread-local stack of base directories for resolving relative !include paths.
 _tls = threading.local()
+_MERGE_SENTINEL = object()
+
+def safe_for_yaml(node):
+    """Recursively make node safe for ruamel.yaml while preserving comments."""
+    if isinstance(node, CommentedMap):
+        for k, v in node.items():
+            node[k] = safe_for_yaml(v)
+        return node
+    elif isinstance(node, CommentedSeq):
+        for i, v in enumerate(node):
+            node[i] = safe_for_yaml(v)
+        return node
+    elif isinstance(node, (str, int, float, bool, type(None))):
+        return node
+    else:
+        # Only convert unsupported objects to string
+        return str(node)
+
+@contextmanager
+def _base_dir_context(base: Path):
+    _get_base_dir_stack().append(base)
+    try:
+        yield
+    finally:
+        _get_base_dir_stack().pop()
 
 
 def _get_base_dir_stack() -> list[Path]:
-    """Return the per-thread base-dir stack, creating it if necessary."""
     stack = getattr(_tls, "base_dir_stack", None)
     if stack is None:
         stack = []
         _tls.base_dir_stack = stack
     return stack
 
-_MERGE_SENTINEL = object()
-
 
 def _include_constructor(loader, node):
-    """Resolve ``!include <path>`` relative to the file being loaded."""
     rel = loader.construct_scalar(node)
     inc_path = (_get_base_dir_stack()[-1] / rel).resolve()
     return load_yaml(inc_path)
 
 
 def _include_merge_constructor(loader, node):
-    """Return a sentinel-wrapped dict for ``!include-merge`` post-processing."""
     rel = loader.construct_scalar(node)
     inc_path = (_get_base_dir_stack()[-1] / rel).resolve()
     data = load_yaml(inc_path)
     if not isinstance(data, dict):
-        raise ValueError(
-            f"!include-merge requires a mapping, got {type(data).__name__} from {rel}"
-        )
+        raise ValueError(f"!include-merge requires a mapping, got {type(data).__name__} from {rel}")
     return (_MERGE_SENTINEL, data)
 
 
 def _post_process_merges(data):
-    """Merge any ``!include-merge`` results into their parent mappings."""
     if not isinstance(data, dict):
         return data
-
     merges = []
     for key, value in list(data.items()):
         if isinstance(value, tuple) and len(value) == 2 and value[0] is _MERGE_SENTINEL:
             merges.append((key, value[1]))
         else:
             _post_process_merges(value)
-
     for key, merge_dict in merges:
         del data[key]
         data.update(merge_dict)
-
     return data
+
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +87,6 @@ def _post_process_merges(data):
 # ---------------------------------------------------------------------------
 
 def _make_yaml() -> YAML:
-    """Create a pre-configured round-trip YAML instance."""
     yml = YAML()
     yml.preserve_quotes = True
     yml.default_flow_style = False
@@ -79,29 +94,28 @@ def _make_yaml() -> YAML:
 
 
 def _make_yaml_no_comments() -> YAML:
-    """Create a YAML instance that ignores comments during loading."""
     yml = YAML()
     yml.preserve_quotes = False
     yml.default_flow_style = False
     return yml
 
-
 # Register tag constructors once at module level.
 _make_yaml().Constructor.add_constructor("!include", _include_constructor)
 _make_yaml().Constructor.add_constructor("!include-merge", _include_merge_constructor)
 
-def _push_base_dir(path: Path) -> None:
-    """
-    Push a base directory onto the include resolution stack.
-    Used when loading YAML so !include paths resolve correctly.
-    """
-    _get_base_dir_stack().append(Path(path))
+
+@contextmanager
+def push_base_dir(path: Path):
+    stack = _get_base_dir_stack()
+    stack.append(path.parent)
+    try:
+        yield
+    finally:
+        stack.pop()
+
 
 
 def _pop_base_dir() -> None:
-    """
-    Pop the last base directory from the include resolution stack.
-    """
     stack = _get_base_dir_stack()
     if not stack:
         raise RuntimeError("Attempted to pop empty YAML base-dir stack")

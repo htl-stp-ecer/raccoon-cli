@@ -17,8 +17,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import TaggedScalar
 
 from raccoon.project import ProjectError, require_project
+from raccoon.yaml_utils import load_yaml, _make_yaml, _base_dir_context, safe_for_yaml
 
 logger = logging.getLogger("raccoon")
 
@@ -573,30 +575,40 @@ def _prompt_ticks_per_rev(
         clear_api_client()
 
 
+
 def _load_yaml_roundtrip(path: Path):
-    yaml = YAML()
-    yaml.preserve_quotes = True
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml, yaml.load(f)
+    yaml = _make_yaml()
+    with _base_dir_context(path.parent):
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml, yaml.load(f)
 
 
 def _update_yaml_node(existing, new_data):
     """
     Recursively update YAML nodes without replacing them.
-    This preserves comments and formatting.
+    Preserves comments and formatting.
+    Safely handles existing values that are strings (like !include-merge).
     """
-    for key, value in new_data.items():
+    # If existing is not a mapping, we can’t recurse; replace it entirely
+    if not hasattr(existing, "items") or not isinstance(new_data, dict):
+        return new_data
 
+    for key, value in new_data.items():
         if key not in existing:
             existing[key] = value
             continue
 
-        if isinstance(value, dict) and isinstance(existing[key], dict):
-            _update_yaml_node(existing[key], value)
+        existing_val = existing[key]
+
+        # If both are dict-like, recurse
+        if isinstance(existing_val, dict) and isinstance(value, dict):
+            _update_yaml_node(existing_val, value)
         else:
-            if existing[key] != value:
+            # Otherwise, just update the value
+            if existing_val != value:
                 existing[key] = value
 
+    return existing
 
 def _write_yaml_if_changed(path: Path, data: dict, console: Console) -> bool:
     """Write YAML file only if its contents have changed."""
@@ -619,163 +631,106 @@ def _write_yaml_if_changed(path: Path, data: dict, console: Console) -> bool:
 
 
 def _save_modular_config(
-        console: Console,
+        console,
         project_root: Path,
         project_name: str,
         existing_uuid: str,
-        robot_config: Dict[str, object],
-        definitions: Dict[str, object],
-        connection_config: Optional[Dict[str, object]] = None,
-        missions_list: Optional[list] = None,
+        robot_config: dict,
+        definitions: dict,
+        connection_config: dict | None = None,
+        missions_list: list | None = None,
 ) -> None:
-
-    from ruamel.yaml import YAML
+    """Save project configuration into modular YAML files, preserving comments and only updating changed fields."""
 
     config_dir = project_root / "config"
     config_dir.mkdir(exist_ok=True)
 
-    motors = {}
-    other_defs = {}
+    # Split definitions into motors and other definitions
+    motors = {k: v for k, v in definitions.items() if isinstance(v, dict) and v.get("type") == "Motor"}
+    other_defs = {k: v for k, v in definitions.items() if k not in motors}
 
-    for name, defn in definitions.items():
-        if isinstance(defn, dict) and defn.get("type") == "Motor":
-            motors[name] = defn
-        else:
-            other_defs[name] = defn
-
-    yaml = YAML()
-    yaml.preserve_quotes = True
-
-    # -----------------------
-    # robot.yml
-    # -----------------------
-
+    # ---------------- robot.yml ----------------
     robot_path = config_dir / "robot.yml"
-
     if robot_path.exists():
-        yaml, data = _load_yaml_roundtrip(robot_path)
+        yaml_obj, data = _load_yaml_roundtrip(robot_path)
     else:
-        data = {}
-
+        yaml_obj, data = _make_yaml(), {}
     _update_yaml_node(data, robot_config)
-
     with open(robot_path, "w", encoding="utf-8") as f:
-        yaml.dump(data, f)
-
+        yaml_obj.dump(safe_for_yaml(data), f)
     console.print("[cyan]  ✓ robot.yml updated[/cyan]")
 
-    # -----------------------
-    # motors.yml
-    # -----------------------
-
+    # ---------------- motors.yml ----------------
     if motors:
-
         motors_path = config_dir / "motors.yml"
-
         if motors_path.exists():
-            yaml, data = _load_yaml_roundtrip(motors_path)
+            yaml_obj, data = _load_yaml_roundtrip(motors_path)
         else:
-            data = {}
-
+            yaml_obj, data = _make_yaml(), {}
         for name, motor in motors.items():
-
             if name not in data:
                 data[name] = motor
-                continue
-
-            _update_yaml_node(data[name], motor)
-
+            else:
+                _update_yaml_node(data[name], motor)
         with open(motors_path, "w", encoding="utf-8") as f:
-            yaml.dump(data, f)
-
+            yaml_obj.dump(safe_for_yaml(data), f)
         console.print("[cyan]  ✓ motors.yml updated[/cyan]")
 
-    # -----------------------
-    # hardware.yml
-    # -----------------------
-
+    # ---------------- hardware.yml ----------------
     hardware_path = config_dir / "hardware.yml"
-
     if hardware_path.exists():
-        yaml, data = _load_yaml_roundtrip(hardware_path)
+        yaml_obj, data = _load_yaml_roundtrip(hardware_path)
     else:
-        data = {}
-
+        yaml_obj, data = _make_yaml(), {}
     _update_yaml_node(data, other_defs)
-
     if motors:
-        data["_motors"] = "!include-merge motors.yml"
-
+        data["_motors"] = TaggedScalar("motors.yml", tag="!include-merge")
     with open(hardware_path, "w", encoding="utf-8") as f:
-        yaml.dump(data, f)
-
+        yaml_obj.dump(safe_for_yaml(data), f)
     console.print("[cyan]  ✓ hardware.yml updated[/cyan]")
 
-    # -----------------------
-    # missions.yml
-    # -----------------------
-
+    # ---------------- missions.yml ----------------
     if missions_list is not None:
-
         missions_path = config_dir / "missions.yml"
-
         if missions_path.exists():
-            yaml, data = _load_yaml_roundtrip(missions_path)
+            yaml_obj, data = _load_yaml_roundtrip(missions_path)
         else:
-            data = []
-
+            yaml_obj, data = _make_yaml(), []
         if data != missions_list:
             with open(missions_path, "w", encoding="utf-8") as f:
-                yaml.dump(missions_list, f)
-
+                yaml_obj.dump(safe_for_yaml(missions_list), f)
             console.print("[cyan]  ✓ missions.yml updated[/cyan]")
 
-    # -----------------------
-    # connection.yml
-    # -----------------------
-
+    # ---------------- connection.yml ----------------
     if connection_config:
-
         connection_path = config_dir / "connection.yml"
-
         if connection_path.exists():
-            yaml, data = _load_yaml_roundtrip(connection_path)
+            yaml_obj, data = _load_yaml_roundtrip(connection_path)
         else:
-            data = {}
-
+            yaml_obj, data = _make_yaml(), {}
         _update_yaml_node(data, connection_config)
-
         with open(connection_path, "w", encoding="utf-8") as f:
-            yaml.dump(data, f)
-
+            yaml_obj.dump(safe_for_yaml(data), f)
         console.print("[cyan]  ✓ connection.yml updated[/cyan]")
 
-    # -----------------------
-    # main project YAML
-    # -----------------------
-
+    # ---------------- main project YAML ----------------
     main_yaml_content = f"""name: {project_name}
 uuid: {existing_uuid}
 robot: !include config/robot.yml
 definitions: !include config/hardware.yml
 """
-
     if missions_list:
         main_yaml_content += "missions: !include config/missions.yml\n"
-
     if connection_config:
         main_yaml_content += "connection: !include config/connection.yml\n"
 
     main_path = project_root / "raccoon.project.yml"
-
     if main_path.exists():
         old = main_path.read_text(encoding="utf-8")
         if old.strip() == main_yaml_content.strip():
             return
-
     main_path.write_text(main_yaml_content, encoding="utf-8")
     console.print("[cyan]  ✓ raccoon.project.yml updated[/cyan]")
-
 
 @click.command(name="wizard")
 @click.option("--dry-run", is_flag=True, help="Preview output without writing raccoon.project.yml")
