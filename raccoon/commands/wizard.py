@@ -6,6 +6,8 @@ import asyncio
 import logging
 import math
 import time
+from io import StringIO
+
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -14,11 +16,11 @@ import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from ruamel.yaml import YAML
 
-from raccoon.project import ProjectError, load_project_config, require_project
+from raccoon.project import ProjectError, require_project
 
 logger = logging.getLogger("raccoon")
-
 
 # Module-level reference to API client for remote calibration
 _api_client: Optional["RaccoonApiClient"] = None
@@ -37,7 +39,13 @@ def clear_api_client() -> None:
 
 
 def _prompt_measurements(existing_config: Dict[str, object]) -> Dict[str, float]:
-    """Collect measurement data from the user, using existing config values as defaults."""
+    """Collect measurement data from the user (Steps 15-18).
+    
+    15. Diameter of the wheel in mm (Default: 60)
+    16. Track width (cm, left <-> right wheel centers) (Default: 19)
+    17. Wheelbase (cm, front <-> rear axle centers) (Default: 12)
+    18. Velocity low-pass alpha (0-1) (Default: 0.8)
+    """
     # Extract existing values from config if available
     robot = existing_config.get("robot", {})
     drive = robot.get("drive", {}) if isinstance(robot, dict) else {}
@@ -66,7 +74,8 @@ def _prompt_measurements(existing_config: Dict[str, object]) -> Dict[str, float]
                     break
 
     wheel_diameter_mm = click.prompt("Wheel diameter (mm)", default=default_wheel_diameter_mm, type=float)
-    track_width_cm = click.prompt("Track width (cm, left ↔ right wheel centers)", default=default_track_width_cm, type=float)
+    track_width_cm = click.prompt("Track width (cm, left ↔ right wheel centers)", default=default_track_width_cm,
+                                  type=float)
     wheelbase_cm = click.prompt("Wheelbase (cm, front ↔ rear axle centers)", default=default_wheelbase_cm, type=float)
     vel_filter_alpha = click.prompt("Velocity low-pass alpha (0-1)", default=default_vel_filter_alpha, type=float)
 
@@ -79,7 +88,7 @@ def _prompt_measurements(existing_config: Dict[str, object]) -> Dict[str, float]
 
 
 def _prompt_drive_type(existing: str | None) -> str:
-    """Ask for drivetrain selection."""
+    """Ask for drivetrain selection (Step 6 of wizard)."""
     choice = click.prompt(
         "Drivetrain type",
         default=existing or "mecanum",
@@ -89,8 +98,17 @@ def _prompt_drive_type(existing: str | None) -> str:
 
 
 def _collect_motor_data(drivetrain: str, existing_config: Dict[str, object]) -> Dict[str, Tuple[int, bool]]:
-    """
-    Collect motor connection details.
+    """Collect motor connection details (Steps 7-14).
+    
+    Always asks for all 4 motors regardless of drivetrain type:
+    7. Port of the front-left motor (Default: 0)
+    8. Is the front-left motor inverted (Default: No)
+    9. Port of the front-right motor (Default: 1)
+    10. Is the front-right motor inverted (Default: Yes)
+    11. Port of the rear-left motor (Default: 2)
+    12. Is the rear-left motor inverted (Default: No)
+    13. Port of the rear-right motor (Default: 3)
+    14. Is the rear-right motor inverted (Default: Yes)
 
     Returns a dict mapping definition keys to (port, inverted) pairs.
     Uses existing definitions as defaults if available.
@@ -99,23 +117,18 @@ def _collect_motor_data(drivetrain: str, existing_config: Dict[str, object]) -> 
     if not isinstance(definitions, dict):
         definitions = {}
 
-    if drivetrain == "mecanum":
-        order = [
-            ("front_left_motor", "Front-left"),
-            ("front_right_motor", "Front-right"),
-            ("rear_left_motor", "Rear-left"),
-            ("rear_right_motor", "Rear-right"),
-        ]
-    else:
-        order = [
-            ("left_motor", "Left"),
-            ("right_motor", "Right"),
-        ]
+    # Always ask for all 4 motors (front-left, front-right, rear-left, rear-right)
+    # regardless of drivetrain type
+    order = [
+        ("front_left_motor", "Front-left"),
+        ("front_right_motor", "Front-right"),
+        ("rear_left_motor", "Rear-left"),
+        ("rear_right_motor", "Rear-right"),
+    ]
 
     motors: Dict[str, Tuple[int, bool]] = {}
     default_port = 0
     for key, label in order:
-        # Get defaults from existing definition if available
         existing_def = definitions.get(key, {})
         if isinstance(existing_def, dict) and existing_def.get("type") == "Motor":
             existing_port = existing_def.get("port", default_port)
@@ -148,9 +161,9 @@ def _build_motor_definition(port: int, inverted: bool, ticks_to_rad: float, vel_
 
 
 def _create_definitions(
-    motors: Dict[str, Tuple[int, bool]],
-    ticks_to_rad: Dict[str, float],
-    vel_lpf_alpha: float,
+        motors: Dict[str, Tuple[int, bool]],
+        ticks_to_rad: Dict[str, float],
+        vel_lpf_alpha: float,
 ) -> Dict[str, object]:
     """Create the definitions section."""
     definitions = {
@@ -162,9 +175,9 @@ def _create_definitions(
 
 
 def _build_kinematics_config(
-    drivetrain: str,
-    motors: Dict[str, Tuple[int, bool]],
-    measures: Dict[str, float],
+        drivetrain: str,
+        motors: Dict[str, Tuple[int, bool]],
+        measures: Dict[str, float],
 ) -> Dict[str, object]:
     """Create a kinematics configuration payload."""
     wheel_radius = (measures["wheel_diameter_mm"] / 1000.0) / 2.0
@@ -177,6 +190,8 @@ def _build_kinematics_config(
         "track_width": round(track_width, 4),
     }
 
+    # Always use the same 4 motor naming (front-left, front-right, rear-left, rear-right)
+    # for both mecanum and differential drivetrains
     if drivetrain == "mecanum":
         config["wheelbase"] = round(wheelbase, 4)
         config.update(
@@ -188,10 +203,14 @@ def _build_kinematics_config(
             }
         )
     else:
+        # Differential drivetrain also uses front/rear naming
+        config["wheelbase"] = round(wheelbase, 4)
         config.update(
             {
-                "left_motor": "left_motor",
-                "right_motor": "right_motor",
+                "front_left_motor": "front_left_motor",
+                "front_right_motor": "front_right_motor",
+                "back_left_motor": "rear_left_motor",
+                "back_right_motor": "rear_right_motor",
             }
         )
 
@@ -199,9 +218,9 @@ def _build_kinematics_config(
 
 
 def _build_robot_config(
-    drivetrain: str,
-    motors: Dict[str, Tuple[int, bool]],
-    measures: Dict[str, float],
+        drivetrain: str,
+        motors: Dict[str, Tuple[int, bool]],
+        measures: Dict[str, float],
 ) -> Dict[str, object]:
     """Assemble the robot configuration."""
     kinematics = _build_kinematics_config(drivetrain, motors, measures)
@@ -232,10 +251,12 @@ def to_builtin(obj):
     else:
         return obj
 
+
 def _render_summary(console: Console, config: Dict[str, object]) -> None:
     """Pretty-print the resulting configuration summary."""
     robot = config.get("robot", {})
     definitions = config.get("definitions", {})
+    definitions_for_display = to_builtin(definitions)
 
     table = Table(title="Wizard Summary", expand=True)
     table.add_column("Section", style="bold cyan")
@@ -243,7 +264,12 @@ def _render_summary(console: Console, config: Dict[str, object]) -> None:
 
     table.add_row("Project", f"name: {config.get('name', 'Unnamed Project')}\nuuid: {config.get('uuid', '—')}")
     table.add_row("Drive", yaml.safe_dump(robot, sort_keys=False))
-    table.add_row("Definitions", yaml.safe_dump(to_builtin(definitions), sort_keys=False))
+
+    for k, v in definitions_for_display.items():
+        if str(v).startswith("!include-merge"):
+            definitions_for_display[k] = str(v)
+
+    table.add_row("Definitions", yaml.safe_dump(definitions_for_display, sort_keys=False))
     console.print(Panel(table, border_style="green"))
 
 
@@ -264,7 +290,7 @@ def _read_encoder_position_remote(port: int, inverted: bool) -> int:
 
 
 def _calibrate_single_wheel_remote(
-    console: Console, port: int, inverted: bool, motor_name: str, num_trials: int = 3
+        console: Console, port: int, inverted: bool, motor_name: str, num_trials: int = 3
 ) -> float:
     """
     Calibrate a single wheel by having the user rotate it manually (remote mode).
@@ -304,7 +330,7 @@ def _calibrate_single_wheel_remote(
 
 
 def _calibrate_single_wheel_local(
-    console: Console, motor, motor_name: str, num_trials: int = 3
+        console: Console, motor, motor_name: str, num_trials: int = 3
 ) -> float:
     """
     Calibrate a single wheel by having the user rotate it manually (local mode).
@@ -359,7 +385,7 @@ def _print_calibration_summary(console: Console, results: Dict[str, int]) -> Non
 
 
 def _calibrate_ticks_per_rev(
-    console: Console, motor_defs: Dict[str, Tuple[int, bool]]
+        console: Console, motor_defs: Dict[str, Tuple[int, bool]]
 ) -> Dict[str, int]:
     """
     Interactive helper to measure encoder ticks per wheel revolution.
@@ -493,10 +519,13 @@ def _ensure_remote_connection(console: Console, project_root: Path) -> bool:
 
 
 def _prompt_ticks_per_rev(
-    console: Console, motor_defs: Dict[str, Tuple[int, bool]], existing_config: Dict[str, object], project_root: Path
+        console: Console, motor_defs: Dict[str, Tuple[int, bool]], existing_config: Dict[str, object],
+        project_root: Path
 ) -> Dict[str, int]:
-    """
-    Ask whether to calibrate encoder ticks interactively or accept a prompt.
+    """Collect encoder tick calibration (Steps 19-20).
+    
+    19. Run the guided encoder tick calibration (Default: No)
+    20. Ticks per wheel revolution (Default: 1536)
 
     Returns:
         Dict mapping motor name to its ticks per revolution.
@@ -530,7 +559,8 @@ def _prompt_ticks_per_rev(
     # (calibration needs to run on the Pi with actual hardware)
     if not _ensure_remote_connection(console, project_root):
         console.print("[yellow]No Pi connection available.[/yellow]")
-        console.print("[cyan]To run encoder calibration, connect to the Pi first with 'raccoon connect <pi-address>'[/cyan]")
+        console.print(
+            "[cyan]To run encoder calibration, connect to the Pi first with 'raccoon connect <pi-address>'[/cyan]")
         console.print("[cyan]Falling back to manual entry.[/cyan]")
         single_default = next(iter(default_ticks.values()), 1536)
         ticks = click.prompt("Encoder ticks per wheel revolution", default=single_default, type=int)
@@ -543,11 +573,214 @@ def _prompt_ticks_per_rev(
         clear_api_client()
 
 
+def _load_yaml_roundtrip(path: Path):
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml, yaml.load(f)
+
+
+def _update_yaml_node(existing, new_data):
+    """
+    Recursively update YAML nodes without replacing them.
+    This preserves comments and formatting.
+    """
+    for key, value in new_data.items():
+
+        if key not in existing:
+            existing[key] = value
+            continue
+
+        if isinstance(value, dict) and isinstance(existing[key], dict):
+            _update_yaml_node(existing[key], value)
+        else:
+            if existing[key] != value:
+                existing[key] = value
+
+
+def _write_yaml_if_changed(path: Path, data: dict, console: Console) -> bool:
+    """Write YAML file only if its contents have changed."""
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.default_flow_style = False
+
+    buffer = StringIO()
+    yaml.dump(data, buffer)
+    new_content = buffer.getvalue()
+
+    if path.exists():
+        old_content = path.read_text(encoding="utf-8")
+        if old_content.strip() == new_content.strip():
+            return False
+
+    path.write_text(new_content, encoding="utf-8")
+    console.print(f"[cyan]  ✓ {path} updated[/cyan]")
+    return True
+
+
+def _save_modular_config(
+        console: Console,
+        project_root: Path,
+        project_name: str,
+        existing_uuid: str,
+        robot_config: Dict[str, object],
+        definitions: Dict[str, object],
+        connection_config: Optional[Dict[str, object]] = None,
+        missions_list: Optional[list] = None,
+) -> None:
+
+    from ruamel.yaml import YAML
+
+    config_dir = project_root / "config"
+    config_dir.mkdir(exist_ok=True)
+
+    motors = {}
+    other_defs = {}
+
+    for name, defn in definitions.items():
+        if isinstance(defn, dict) and defn.get("type") == "Motor":
+            motors[name] = defn
+        else:
+            other_defs[name] = defn
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+
+    # -----------------------
+    # robot.yml
+    # -----------------------
+
+    robot_path = config_dir / "robot.yml"
+
+    if robot_path.exists():
+        yaml, data = _load_yaml_roundtrip(robot_path)
+    else:
+        data = {}
+
+    _update_yaml_node(data, robot_config)
+
+    with open(robot_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+
+    console.print("[cyan]  ✓ robot.yml updated[/cyan]")
+
+    # -----------------------
+    # motors.yml
+    # -----------------------
+
+    if motors:
+
+        motors_path = config_dir / "motors.yml"
+
+        if motors_path.exists():
+            yaml, data = _load_yaml_roundtrip(motors_path)
+        else:
+            data = {}
+
+        for name, motor in motors.items():
+
+            if name not in data:
+                data[name] = motor
+                continue
+
+            _update_yaml_node(data[name], motor)
+
+        with open(motors_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        console.print("[cyan]  ✓ motors.yml updated[/cyan]")
+
+    # -----------------------
+    # hardware.yml
+    # -----------------------
+
+    hardware_path = config_dir / "hardware.yml"
+
+    if hardware_path.exists():
+        yaml, data = _load_yaml_roundtrip(hardware_path)
+    else:
+        data = {}
+
+    _update_yaml_node(data, other_defs)
+
+    if motors:
+        data["_motors"] = "!include-merge motors.yml"
+
+    with open(hardware_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+
+    console.print("[cyan]  ✓ hardware.yml updated[/cyan]")
+
+    # -----------------------
+    # missions.yml
+    # -----------------------
+
+    if missions_list is not None:
+
+        missions_path = config_dir / "missions.yml"
+
+        if missions_path.exists():
+            yaml, data = _load_yaml_roundtrip(missions_path)
+        else:
+            data = []
+
+        if data != missions_list:
+            with open(missions_path, "w", encoding="utf-8") as f:
+                yaml.dump(missions_list, f)
+
+            console.print("[cyan]  ✓ missions.yml updated[/cyan]")
+
+    # -----------------------
+    # connection.yml
+    # -----------------------
+
+    if connection_config:
+
+        connection_path = config_dir / "connection.yml"
+
+        if connection_path.exists():
+            yaml, data = _load_yaml_roundtrip(connection_path)
+        else:
+            data = {}
+
+        _update_yaml_node(data, connection_config)
+
+        with open(connection_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+        console.print("[cyan]  ✓ connection.yml updated[/cyan]")
+
+    # -----------------------
+    # main project YAML
+    # -----------------------
+
+    main_yaml_content = f"""name: {project_name}
+uuid: {existing_uuid}
+robot: !include config/robot.yml
+definitions: !include config/hardware.yml
+"""
+
+    if missions_list:
+        main_yaml_content += "missions: !include config/missions.yml\n"
+
+    if connection_config:
+        main_yaml_content += "connection: !include config/connection.yml\n"
+
+    main_path = project_root / "raccoon.project.yml"
+
+    if main_path.exists():
+        old = main_path.read_text(encoding="utf-8")
+        if old.strip() == main_yaml_content.strip():
+            return
+
+    main_path.write_text(main_yaml_content, encoding="utf-8")
+    console.print("[cyan]  ✓ raccoon.project.yml updated[/cyan]")
+
+
 @click.command(name="wizard")
 @click.option("--dry-run", is_flag=True, help="Preview output without writing raccoon.project.yml")
 @click.pass_context
 def wizard_command(ctx: click.Context, dry_run: bool) -> None:
-    """Launch an interactive wizard to scaffold raccoon.project.yml."""
     console: Console = ctx.obj["console"]
 
     try:
@@ -556,19 +789,30 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
         logger.error(str(exc))
         raise SystemExit(1) from exc
 
+    # Load existing config ignoring comments during parsing
     try:
-        existing_config = load_project_config(project_root)
+        from raccoon.yaml_utils import load_yaml_no_comments
+        existing_config = load_yaml_no_comments(project_root / "raccoon.project.yml")
     except ProjectError:
         existing_config = {}
+
+    connection_config = existing_config.get("connection", {})
 
     project_name = click.prompt(
         "Project name",
         default=existing_config.get("name", "My Raccoon Robot"),
     )
 
+    # Step 6: Drivetrain Type
     drivetrain = _prompt_drive_type(existing_config.get("robot", {}).get("drive", {}).get("kinematics", {}).get("type"))
+
+    # Steps 7-14: Collect motor data (ports and inversions)
     motor_defs = _collect_motor_data(drivetrain, existing_config)
+
+    # Steps 15-18: Collect measurements
     measurements = _prompt_measurements(existing_config)
+
+    # Steps 19-20: Encoder tick calibration
     ticks_per_rev = _prompt_ticks_per_rev(console, motor_defs, existing_config, project_root)
 
     # Convert ticks per revolution to radians per tick for each motor
@@ -589,9 +833,34 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
         console.print("[yellow]Dry run enabled — raccoon.project.yml was not updated.[/yellow]")
         return
 
-    config_path = project_root / "raccoon.project.yml"
-    from raccoon.yaml_utils import save_yaml
+    console.print("[cyan]Saving configuration to modular files...[/cyan]")
+    existing_uuid = existing_config.get("uuid", config.get("uuid", ""))
+    existing_missions = existing_config.get("missions", [])
 
-    save_yaml(config, config_path)
+    existing_snapshot = {
+        "name": existing_config.get("name"),
+        "robot": existing_config.get("robot"),
+        "definitions": existing_config.get("definitions"),
+    }
 
-    console.print(f"[green]Updated {config_path.relative_to(project_root)} with wizard output.[/green]")
+    new_snapshot = {
+        "name": config.get("name"),
+        "robot": config.get("robot"),
+        "definitions": config.get("definitions"),
+    }
+
+    if to_builtin(existing_snapshot) == to_builtin(new_snapshot):
+        console.print("[cyan]No configuration changes detected.[/cyan]")
+        return
+
+    _save_modular_config(
+        console,
+        project_root,
+        project_name,
+        existing_uuid,
+        config["robot"] if isinstance(config["robot"], dict) else {},  # type: ignore
+        config["definitions"] if isinstance(config["definitions"], dict) else {},  # type: ignore
+        connection_config=connection_config,
+        missions_list=existing_missions if isinstance(existing_missions, list) else None,
+    )
+    console.print(f"[green]✓ Updated project configuration in config/ directory[/green]")

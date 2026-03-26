@@ -78,9 +78,34 @@ def _make_yaml() -> YAML:
     return yml
 
 
+def _make_yaml_no_comments() -> YAML:
+    """Create a YAML instance that ignores comments during loading."""
+    yml = YAML()
+    yml.preserve_quotes = False
+    yml.default_flow_style = False
+    return yml
+
+
 # Register tag constructors once at module level.
 _make_yaml().Constructor.add_constructor("!include", _include_constructor)
 _make_yaml().Constructor.add_constructor("!include-merge", _include_merge_constructor)
+
+def _push_base_dir(path: Path) -> None:
+    """
+    Push a base directory onto the include resolution stack.
+    Used when loading YAML so !include paths resolve correctly.
+    """
+    _get_base_dir_stack().append(Path(path))
+
+
+def _pop_base_dir() -> None:
+    """
+    Pop the last base directory from the include resolution stack.
+    """
+    stack = _get_base_dir_stack()
+    if not stack:
+        raise RuntimeError("Attempted to pop empty YAML base-dir stack")
+    stack.pop()
 
 
 def load_yaml(path: Path | str) -> dict:
@@ -112,3 +137,27 @@ def save_yaml(data: Any, path: Path | str) -> None:
     yml = _make_yaml()
     with open(path, "w", encoding="utf-8") as f:
         yml.dump(data, f)
+
+
+def load_yaml_no_comments(path: Path | str) -> dict:
+    """Load a YAML file while ignoring comments during parsing.
+    
+    Useful for wizard operations that want to ignore existing comments
+    and work with clean data.
+    
+    Still resolves ``!include`` / ``!include-merge`` tags like load_yaml().
+    """
+    path = Path(path).resolve()
+    stack = _get_base_dir_stack()
+    stack.append(path.parent)
+    try:
+        yml = _make_yaml_no_comments()
+        with open(path, "r", encoding="utf-8") as f:
+            data = yml.load(f)
+        data = data if data is not None else {}
+        _post_process_merges(data)
+        return data
+    finally:
+        stack.pop()
+
+
