@@ -320,18 +320,28 @@ class SftpSync:
                 if remote_dir not in created_dirs:
                     _ensure_remote_dir(sftp, remote_dir, created_dirs)
 
+                # Skip unchanged files (compare size and mtime)
+                local_stat = os.stat(local_file)
+                try:
+                    remote_stat = sftp.stat(remote_file)
+                    if (remote_stat.st_size == local_stat.st_size
+                            and remote_stat.st_mtime >= int(local_stat.st_mtime)):
+                        progress.advance(task)
+                        continue
+                except FileNotFoundError:
+                    pass
+
                 sftp.put(local_file, remote_file)
-                size = os.path.getsize(local_file)
                 result.files_uploaded += 1
-                result.bytes_transferred += size
+                result.bytes_transferred += local_stat.st_size
                 progress.advance(task)
 
-        # Delete remote files not present locally
+        # Delete remote files not present locally (skip excluded patterns)
         pushed_set = {f[2] for f in files}
         if options.delete:
             remote_files = _list_remote_recursive(sftp, remote_path)
             for rf in remote_files:
-                if rf not in pushed_set:
+                if rf not in pushed_set and not _should_exclude(rf, options.exclude_patterns):
                     try:
                         sftp.remove(str(PurePosixPath(remote_path) / rf))
                         result.files_deleted += 1
@@ -393,6 +403,7 @@ class SftpSync:
                 progress.advance(task)
 
         if options.delete:
+            remote_set = set(remote_files)
             for dirpath, _dirnames, filenames in os.walk(local_path):
                 rel_dir = os.path.relpath(dirpath, local_path)
                 if rel_dir == ".":
@@ -400,7 +411,7 @@ class SftpSync:
                 for fname in filenames:
                     rel_posix = f"{rel_dir}/{fname}" if rel_dir else fname
                     rel_posix = rel_posix.replace("\\", "/")
-                    if rel_posix not in pulled_rel and not _should_exclude(rel_posix, options.exclude_patterns):
+                    if rel_posix not in remote_set and not _should_exclude(rel_posix, options.exclude_patterns):
                         try:
                             os.remove(os.path.join(dirpath, fname))
                             result.files_deleted += 1
