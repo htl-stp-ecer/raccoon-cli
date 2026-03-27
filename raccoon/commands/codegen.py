@@ -78,7 +78,6 @@ def _codegen_local(
     only: tuple,
     no_format: bool,
     output_dir: str | None,
-    force: bool = False,
 ) -> None:
     """Run code generation locally."""
     import sys
@@ -93,13 +92,6 @@ def _codegen_local(
     project_root_str = str(project_root)
     if project_root_str not in sys.path:
         sys.path.insert(0, project_root_str)
-
-    # Clear cache if --force flag is set
-    if force:
-        from raccoon.codegen.cache import CodegenCache
-        cache = CodegenCache(out_dir)
-        cache.clear()
-        logger.info("Cache cleared (--force)")
 
     pipeline = create_pipeline()
 
@@ -134,14 +126,12 @@ def _codegen_local(
     default=None,
     help="Override output directory (default: src/hardware/)",
 )
-@click.option("--force", "-f", is_flag=True, help="Force regeneration, ignoring cache")
 @click.pass_context
 def codegen_command(
     ctx: click.Context,
     only: tuple,
     no_format: bool,
     output_dir: str | None,
-    force: bool,
 ) -> None:
     """Generate Python code from raccoon.project.yml.
 
@@ -158,7 +148,7 @@ def codegen_command(
         if not isinstance(config, dict):
             raise ProjectError("raccoon.project.yml must be a mapping")
 
-        _codegen_local(console, project_root, config, only, no_format, output_dir, force)
+        _codegen_local(console, project_root, config, only, no_format, output_dir)
 
     except ProjectError as exc:
         logger.error(str(exc))

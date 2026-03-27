@@ -350,6 +350,14 @@ class DefsGenerator(BaseGenerator):
 
         return "SensorGroup(" + ", ".join(pieces) + ")"
 
+    def generate_footer(self) -> str:
+        """Generate footer with module-level defs instance."""
+        instance_name = self.class_name[0].lower() + self.class_name[1:]
+        return (
+            f"\n{instance_name} = {self.class_name}()\n"
+            f"\n__all__ = ['{self.class_name}', '{instance_name}']\n"
+        )
+
     def generate_imports(self) -> str:
         """Generate import statements, ensuring Imu is always imported."""
         base_imports = super().generate_imports()

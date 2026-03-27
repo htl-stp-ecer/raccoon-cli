@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ..builder import ImportSet
-from ..cache import CodegenCache, hash_payload, source_fingerprint
 
 logger = logging.getLogger("raccoon")
 
@@ -20,8 +19,6 @@ class BaseGenerator(ABC):
     Uses the Template Method pattern to define the generation workflow.
     Subclasses override specific steps to customize behavior.
     """
-
-    CACHE_SCHEMA_VERSION = "1"
 
     def __init__(self, class_name: str = None):
         """
@@ -157,28 +154,6 @@ class BaseGenerator(ABC):
 
         data = self._prepare_data(config)
 
-        cache = CodegenCache(output_dir)
-        config_digest = hash_payload(data)
-        generator_fingerprint = source_fingerprint(self.__class__)
-        fingerprint_payload = {
-            "config": config_digest,
-            "format_code": bool(format_code),
-            "generator": f"{self.__class__.__module__}.{self.__class__.__qualname__}",
-            "generator_source": generator_fingerprint,
-            "class_name": self.class_name,
-            "schema_version": self.CACHE_SCHEMA_VERSION,
-        }
-        fingerprint = hash_payload(fingerprint_payload)
-
-        cached_entry = cache.get(filename)
-        if (
-            cached_entry
-            and cached_entry.get("fingerprint") == fingerprint
-            and output_file.exists()
-        ):
-            logger.info(f"Skipping {filename} (cache hit)")
-            return output_file
-
         logger.info(f"Generating {filename}...")
         source = self._compose_source(config, data)
 
@@ -191,28 +166,8 @@ class BaseGenerator(ABC):
             except ImportError:
                 logger.warning("black not installed, skipping formatting")
 
-        # Write to disk (avoid touching file when unchanged)
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            existing = output_file.read_text(encoding="utf-8")
-        except OSError:
-            existing = None
-
-        if existing == source:
-            logger.info(f"✓ {filename} already up to date")
-        else:
-            output_file.write_text(source, encoding="utf-8")
-            logger.debug(f"Wrote {output_file}")
-            logger.info(f"✓ Generated {filename}")
-
-        cache.set(
-            filename,
-            {
-                "fingerprint": fingerprint,
-                "config_hash": config_digest,
-                "generator_source": generator_fingerprint,
-                "format_code": bool(format_code),
-            },
-        )
+        output_file.write_text(source, encoding="utf-8")
+        logger.info(f"✓ Generated {filename}")
 
         return output_file
