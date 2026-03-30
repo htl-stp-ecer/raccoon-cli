@@ -613,14 +613,12 @@ def calibrate_motors_local(
             console.print("[yellow]Calibration results not saved.[/yellow]")
             return
 
-    config_path = project_root / "raccoon.project.yml"
-
     try:
-        from raccoon.yaml_utils import save_yaml
+        from raccoon.project import save_project_keys
 
-        save_yaml(config, config_path)
+        save_project_keys(project_root, {"definitions": config["definitions"]})
 
-        console.print(f"\n[green]✓ Calibration results saved to {config_path.relative_to(project_root)}[/green]")
+        console.print("\n[green]✓ Calibration results saved.[/green]")
     except Exception as exc:
         console.print(f"\n[red]Failed to save configuration: {exc}[/red]")
         raise SystemExit(1) from exc

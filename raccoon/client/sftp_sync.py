@@ -87,6 +87,7 @@ class SyncOptions:
     direction: SyncDirection = SyncDirection.PUSH
     delete: bool = True  # Delete extraneous files on destination
     update: bool = False  # Skip files that are newer on the destination
+    verbose: bool = False  # Print per-file actions
     exclude_patterns: list[str] = field(
         default_factory=lambda: [
             ".git",
@@ -131,20 +132,40 @@ class RsyncSync:
         logger.debug(f"rsync command: {' '.join(cmd)}")
 
         try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
+            if options.verbose:
+                # Stream rsync output in real-time
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                stdout_lines = []
+                for line in proc.stdout:
+                    stdout_lines.append(line)
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                proc.wait(timeout=300)
+                stdout = "".join(stdout_lines)
+                stderr = proc.stderr.read()
+            else:
+                proc_result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                stdout = proc_result.stdout
+                stderr = proc_result.stderr
+                proc = proc_result
 
             if proc.returncode != 0:
                 return SyncResult(
                     success=False,
-                    errors=[f"rsync failed (exit {proc.returncode}): {proc.stderr.strip()}"],
+                    errors=[f"rsync failed (exit {proc.returncode}): {stderr.strip()}"],
                 )
 
-            return self._parse_stats(proc.stdout, options.direction)
+            return self._parse_stats(stdout, options.direction)
 
         except subprocess.TimeoutExpired:
             return SyncResult(
@@ -326,11 +347,15 @@ class SftpSync:
                     remote_stat = sftp.stat(remote_file)
                     if (remote_stat.st_size == local_stat.st_size
                             and remote_stat.st_mtime >= int(local_stat.st_mtime)):
+                        if options.verbose:
+                            print(f"  skip (unchanged): {rel_posix}")
                         progress.advance(task)
                         continue
                 except FileNotFoundError:
                     pass
 
+                if options.verbose:
+                    print(f"  upload: {rel_posix} ({local_stat.st_size} bytes)")
                 sftp.put(local_file, remote_file)
                 result.files_uploaded += 1
                 result.bytes_transferred += local_stat.st_size
@@ -343,6 +368,8 @@ class SftpSync:
             for rf in remote_files:
                 if rf not in pushed_set and not _should_exclude(rf, options.exclude_patterns):
                     try:
+                        if options.verbose:
+                            print(f"  delete (remote): {rf}")
                         sftp.remove(str(PurePosixPath(remote_path) / rf))
                         result.files_deleted += 1
                     except Exception:
@@ -393,9 +420,13 @@ class SftpSync:
                     except Exception:
                         remote_mtime = 0
                     if local_mtime > remote_mtime:
+                        if options.verbose:
+                            print(f"  skip (newer local): {rel_file}")
                         progress.advance(task)
                         continue
 
+                if options.verbose:
+                    print(f"  download: {rel_file}")
                 sftp.get(remote_file, str(local_file))
                 result.files_downloaded += 1
                 result.bytes_transferred += local_file.stat().st_size
@@ -413,6 +444,8 @@ class SftpSync:
                     rel_posix = rel_posix.replace("\\", "/")
                     if rel_posix not in remote_set and not _should_exclude(rel_posix, options.exclude_patterns):
                         try:
+                            if options.verbose:
+                                print(f"  delete (local): {rel_posix}")
                             os.remove(os.path.join(dirpath, fname))
                             result.files_deleted += 1
                         except Exception:

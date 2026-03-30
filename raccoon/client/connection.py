@@ -306,14 +306,10 @@ class ConnectionManager:
 
     def save_to_project(self, project_path: Path) -> None:
         """Save connection config to project's raccoon.project.yml (no sensitive data)."""
-        config_path = project_path / "raccoon.project.yml"
-        if not config_path.exists():
+        if not (project_path / "raccoon.project.yml").exists():
             return
 
-        from raccoon.yaml_utils import load_yaml, save_yaml
-        from raccoon.project import resolve_config_file
-
-        config = load_yaml(config_path)
+        from raccoon.project import save_project_keys
 
         conn_data = ConnectionConfig(
             pi_address=self._state.pi_address,
@@ -321,13 +317,7 @@ class ConnectionManager:
             pi_user=self._state.pi_user,
         ).to_dict()
 
-        # If connection lives in an !include file, update that file instead.
-        target = resolve_config_file(project_path, "connection")
-        if target != config_path:
-            save_yaml(conn_data, target)
-        else:
-            config["connection"] = conn_data
-            save_yaml(config, config_path)
+        save_project_keys(project_path, {"connection": conn_data})
 
     def load_from_project(self, project_path: Path) -> Optional[ConnectionConfig]:
         """Load connection config from project's raccoon.project.yml."""

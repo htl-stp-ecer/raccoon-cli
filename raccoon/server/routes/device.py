@@ -134,12 +134,18 @@ def _load_project_config(project_path: Path) -> dict:
     return load_yaml(config_path)
 
 
-def _save_project_config(project_path: Path, config: dict) -> None:
-    """Save the project YAML configuration."""
-    from raccoon.yaml_utils import save_yaml
+def _save_project_config(project_path: Path, config: dict, keys: list[str] | None = None) -> None:
+    """Save project YAML configuration, routing keys to their correct files.
 
-    config_path = project_path / "raccoon.project.yml"
-    save_yaml(config, config_path)
+    If *keys* is given, only those top-level keys are saved.  Otherwise the
+    entire *config* dict is saved (each key routed individually).
+    """
+    from raccoon.project import save_project_keys
+
+    if keys is not None:
+        save_project_keys(project_path, {k: config[k] for k in keys if k in config})
+    else:
+        save_project_keys(project_path, config)
 
 
 def _get_hostname() -> str:
@@ -305,7 +311,7 @@ async def update_dimensions(request: DimensionsRequest):
     config["robot"]["physical"]["width_cm"] = request.width_cm
     config["robot"]["physical"]["length_cm"] = request.length_cm
 
-    _save_project_config(project_path, config)
+    _save_project_config(project_path, config, keys=["robot"])
     return _build_connection_info(project_path)
 
 
@@ -333,7 +339,7 @@ async def update_sensors(request: SensorsRequest):
 
     config["robot"]["physical"]["sensors"] = sensors_data
 
-    _save_project_config(project_path, config)
+    _save_project_config(project_path, config, keys=["robot"])
     return _build_connection_info(project_path)
 
 
@@ -355,7 +361,7 @@ async def update_rotation_center(request: RotationCenterRequest):
     elif "rotation_center" in config["robot"]["physical"]:
         del config["robot"]["physical"]["rotation_center"]
 
-    _save_project_config(project_path, config)
+    _save_project_config(project_path, config, keys=["robot"])
     return _build_connection_info(project_path)
 
 
@@ -375,7 +381,7 @@ async def update_start_pose(request: StartPoseRequest):
         "theta_deg": request.start_pose.theta_deg,
     }
 
-    _save_project_config(project_path, config)
+    _save_project_config(project_path, config, keys=["robot"])
     return _build_connection_info(project_path)
 
 
@@ -406,5 +412,5 @@ async def update_table_map(request: TableMapRequest):
     elif "table_map" in config["robot"]["physical"]:
         del config["robot"]["physical"]["table_map"]
 
-    _save_project_config(project_path, config)
+    _save_project_config(project_path, config, keys=["robot"])
     return {"success": True}

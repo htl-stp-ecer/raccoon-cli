@@ -173,25 +173,18 @@ def _copy_template_dir(template_dir: Path, target_dir: Path, context: Dict[str, 
 
 def _add_mission_to_project_config(project_root: Path, mission_class: str) -> None:
     """Add a mission to the raccoon.project.yml file."""
-    config_path = project_root / "raccoon.project.yml"
-    
-    # Load existing config
     config = load_project_config(project_root)
-    
-    # Get or create missions list
+
     missions = config.get('missions', [])
     if not isinstance(missions, list):
         missions = []
-    
-    # Add mission if not already present
+
     if mission_class not in missions:
         missions.append(mission_class)
-        config['missions'] = missions
-        
-        # Write back to file
-        from raccoon.yaml_utils import save_yaml
 
-        save_yaml(config, config_path)
+        from raccoon.project import save_project_keys
+
+        save_project_keys(project_root, {"missions": missions})
 
 
 

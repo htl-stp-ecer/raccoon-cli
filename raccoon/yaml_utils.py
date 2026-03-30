@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from ruamel.yaml import YAML
+from ruamel.yaml.constructor import RoundTripConstructor
+from ruamel.yaml.representer import RoundTripRepresenter
 
 
 # ---------------------------------------------------------------------------
@@ -67,12 +69,56 @@ def _post_process_merges(data):
 
 
 # ---------------------------------------------------------------------------
+# Raw (non-resolving) include support for round-trip editing
+# ---------------------------------------------------------------------------
+
+class _IncludeTag:
+    """Opaque wrapper that preserves ``!include`` / ``!include-merge`` tags
+    through a load → modify → save cycle without resolving them."""
+
+    def __init__(self, tag: str, path: str):
+        self.tag = tag
+        self.path = path
+
+
+class _PreservingConstructor(RoundTripConstructor):
+    """Constructor subclass that keeps include tags as :class:`_IncludeTag`."""
+
+
+def _preserve_include_tag(loader, node):
+    return _IncludeTag(node.tag, loader.construct_scalar(node))
+
+_PreservingConstructor.add_constructor("!include", _preserve_include_tag)
+_PreservingConstructor.add_constructor("!include-merge", _preserve_include_tag)
+
+
+class _PreservingRepresenter(RoundTripRepresenter):
+    """Representer subclass that dumps :class:`_IncludeTag` back correctly."""
+
+
+def _represent_include_tag(dumper, data):
+    return dumper.represent_scalar(data.tag, data.path)
+
+_PreservingRepresenter.add_representer(_IncludeTag, _represent_include_tag)
+
+
+# ---------------------------------------------------------------------------
 # Core helpers
 # ---------------------------------------------------------------------------
 
 def _make_yaml() -> YAML:
     """Create a pre-configured round-trip YAML instance."""
     yml = YAML()
+    yml.preserve_quotes = True
+    yml.default_flow_style = False
+    return yml
+
+
+def _make_raw_yaml() -> YAML:
+    """Create a YAML instance that preserves include tags without resolving."""
+    yml = YAML()
+    yml.Constructor = _PreservingConstructor
+    yml.Representer = _PreservingRepresenter
     yml.preserve_quotes = True
     yml.default_flow_style = False
     return yml
@@ -106,9 +152,32 @@ def load_yaml(path: Path | str) -> dict:
         stack.pop()
 
 
+def load_yaml_raw(path: Path | str) -> dict:
+    """Load a YAML file preserving ``!include`` / ``!include-merge`` as
+    opaque :class:`_IncludeTag` objects (no resolution or merging).
+
+    Pair with :func:`save_yaml_raw` for safe round-trip editing of files
+    that contain include directives.
+    """
+    path = Path(path).resolve()
+    yml = _make_raw_yaml()
+    with open(path, "r", encoding="utf-8") as f:
+        data = yml.load(f)
+    return data if data is not None else {}
+
+
 def save_yaml(data: Any, path: Path | str) -> None:
     """Dump *data* to *path*, preserving any comments attached to the data."""
     path = Path(path)
     yml = _make_yaml()
+    with open(path, "w", encoding="utf-8") as f:
+        yml.dump(data, f)
+
+
+def save_yaml_raw(data: Any, path: Path | str) -> None:
+    """Dump *data* to *path*, correctly serialising any :class:`_IncludeTag`
+    objects back to their original ``!include`` / ``!include-merge`` tags."""
+    path = Path(path)
+    yml = _make_raw_yaml()
     with open(path, "w", encoding="utf-8") as f:
         yml.dump(data, f)

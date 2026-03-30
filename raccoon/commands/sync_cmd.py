@@ -19,6 +19,7 @@ def do_sync(
     direction: SyncDirection = SyncDirection.PUSH,
     delete: bool = True,
     update: bool = False,
+    verbose: bool = False,
 ) -> bool:
     """
     Core sync logic - performs sync using rsync.
@@ -102,9 +103,17 @@ def do_sync(
             direction=direction,
             delete=delete,
             update=update,
+            verbose=verbose,
         )
         if ignore_patterns:
             options.exclude_patterns = options.exclude_patterns + ignore_patterns
+
+        if verbose:
+            backend_name = type(sync).__name__
+            console.print(f"[dim]Backend: {backend_name}[/dim]")
+            console.print(f"[dim]Local:   {project_root}[/dim]")
+            console.print(f"[dim]Remote:  {state.pi_user}@{state.pi_address}:{remote_path}[/dim]")
+            console.print(f"[dim]Exclude: {options.exclude_patterns}[/dim]")
 
         result = sync.sync(
             local_path=project_root,
@@ -151,8 +160,9 @@ def do_sync(
 @click.option("--push", is_flag=True, help="Push-only: upload local files to Pi")
 @click.option("--pull", is_flag=True, help="Pull-only: download files from Pi to local")
 @click.option("--delete/--no-delete", default=True, help="Delete extraneous files on destination (default: on)")
+@click.option("--verbose", "-v", is_flag=True, help="Print detailed per-file sync actions")
 @click.pass_context
-def sync_command(ctx: click.Context, push: bool, pull: bool, delete: bool) -> None:
+def sync_command(ctx: click.Context, push: bool, pull: bool, delete: bool, verbose: bool) -> None:
     """Sync the current project with the connected Pi using rsync.
 
     By default, pushes local files to the Pi (local -> Pi).
@@ -179,7 +189,7 @@ def sync_command(ctx: click.Context, push: bool, pull: bool, delete: bool) -> No
     else:
         direction = SyncDirection.PUSH
 
-    success = do_sync(project_root, console, direction, delete)
+    success = do_sync(project_root, console, direction, delete, verbose=verbose)
 
     if not success:
         raise SystemExit(1)

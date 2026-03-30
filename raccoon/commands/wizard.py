@@ -589,9 +589,13 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
         console.print("[yellow]Dry run enabled — raccoon.project.yml was not updated.[/yellow]")
         return
 
-    config_path = project_root / "raccoon.project.yml"
-    from raccoon.yaml_utils import save_yaml
+    from raccoon.project import save_project_keys
 
-    save_yaml(config, config_path)
+    save_project_keys(project_root, {
+        "name": config["name"],
+        "uuid": config.get("uuid", ""),
+        "robot": config["robot"],
+        "definitions": config["definitions"],
+    })
 
-    console.print(f"[green]Updated {config_path.relative_to(project_root)} with wizard output.[/green]")
+    console.print("[green]Updated project configuration with wizard output.[/green]")

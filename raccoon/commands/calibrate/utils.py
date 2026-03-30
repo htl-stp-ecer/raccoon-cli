@@ -120,8 +120,7 @@ def find_motor_by_port(config: Dict[str, Any], port: int) -> str | None:
 
 
 def save_project_config(config: Dict[str, Any], project_root: "Path") -> None:
-    """Save project configuration to YAML file."""
-    from raccoon.yaml_utils import save_yaml
+    """Save project configuration, routing keys to their correct source files."""
+    from raccoon.project import save_project_keys
 
-    config_path = project_root / "raccoon.project.yml"
-    save_yaml(config, config_path)
+    save_project_keys(project_root, {"definitions": config["definitions"]})

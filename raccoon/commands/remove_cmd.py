@@ -8,7 +8,6 @@ import shutil
 from pathlib import Path
 
 import click
-import yaml
 from rich.console import Console
 
 from raccoon.project import ProjectError, load_project_config, find_project_root
@@ -39,8 +38,6 @@ def _to_pascal_case(name: str) -> str:
 
 def _remove_mission_from_project_config(project_root: Path, mission_class: str) -> bool:
     """Remove a mission from the raccoon.project.yml file. Returns True if removed."""
-    config_path = project_root / "raccoon.project.yml"
-    
     # Load existing config
     config = load_project_config(project_root)
     
@@ -53,11 +50,11 @@ def _remove_mission_from_project_config(project_root: Path, mission_class: str) 
     if mission_class in missions:
         missions.remove(mission_class)
         config['missions'] = missions
-        
-        # Write back to file
-        from raccoon.yaml_utils import save_yaml
 
-        save_yaml(config, config_path)
+        # Write back to the correct file
+        from raccoon.project import save_project_keys
+
+        save_project_keys(project_root, {"missions": config["missions"]})
         return True
     
     return False
