@@ -75,6 +75,9 @@ class DefsStubGenerator(BaseGenerator):
         imports.add("from libstp import IMU as Imu")
         fields.append(("imu", "Imu"))
 
+        has_wfl_sensor = False
+        wfl_has_drop_fraction = False
+
         for field_name, hw_cfg in data.items():
             if field_name == "imu":
                 continue
@@ -100,9 +103,19 @@ class DefsStubGenerator(BaseGenerator):
                     imports.add(f"from libstp import {import_name}")
                 fields.append((field_name, import_name or "Any"))
 
+            if field_name == "wait_for_light_sensor":
+                has_wfl_sensor = True
+                wfl_has_drop_fraction = "drop_fraction" in hw_cfg
+
         # analog_sensors list
         imports.add("from libstp import AnalogSensor")
         fields.append(("analog_sensors", "List[AnalogSensor]"))
+
+        # wait_for_light config attributes (generated alongside wait_for_light_sensor)
+        if has_wfl_sensor:
+            fields.append(("wait_for_light_mode", "str"))
+            if wfl_has_drop_fraction:
+                fields.append(("wait_for_light_drop_fraction", "float"))
 
         # Assemble output
         lines.extend(sorted(imports))

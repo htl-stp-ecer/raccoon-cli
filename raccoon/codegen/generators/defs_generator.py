@@ -20,6 +20,9 @@ _SENSOR_GROUP_PARAM_KEYS = frozenset({
     "threshold", "speed",
     "follow_speed", "follow_kp", "follow_ki", "follow_kd",
 })
+# Extra keys on wait_for_light_sensor that are stripped from the hardware
+# constructor and emitted as separate Defs class attributes instead.
+_WFL_EXTRA_KEYS = frozenset({"mode", "drop_fraction"})
 
 
 class DefsGenerator(BaseGenerator):
@@ -139,6 +142,8 @@ class DefsGenerator(BaseGenerator):
 
         # Build class attributes
         attributes = [("imu", imu_expr)]
+        wfl_extra_attrs: List[Tuple[str, str]] = []  # deferred: emitted after analog_sensors
+
         for field_name, hw_cfg in data.items():
             if field_name == "imu":
                 continue
@@ -158,9 +163,14 @@ class DefsGenerator(BaseGenerator):
             # Check for servo preset (positions key on a Servo type)
             preset_info = self._extract_servo_preset(hw_cfg)
 
-            # Resolve type and extract parameters using the unified resolver
-            # Strip preset-only keys before passing to the hardware resolver
-            resolved_cfg = {k: v for k, v in hw_cfg.items() if k not in ("positions", "offset")}
+            # Strip keys that are not hardware constructor params.
+            # For wait_for_light_sensor: also strip mode/drop_fraction.
+            strip_keys = {"positions", "offset"}
+            is_wfl_sensor = field_name == "wait_for_light_sensor"
+            if is_wfl_sensor:
+                strip_keys |= _WFL_EXTRA_KEYS
+
+            resolved_cfg = {k: v for k, v in hw_cfg.items() if k not in strip_keys}
             try:
                 hw_class, hw_params = self.resolver.resolve_from_config(resolved_cfg, type_key="type")
                 logger.info(f"Resolved type '{type_name}' to {hw_class.__name__} for {field_name}")
@@ -185,9 +195,26 @@ class DefsGenerator(BaseGenerator):
 
             attributes.append((field_name, hw_expr))
 
+            # Emit wait_for_light config attributes derived from extra keys
+            if is_wfl_sensor:
+                wfl_mode = hw_cfg.get("mode", "auto")
+                wfl_drop = hw_cfg.get("drop_fraction")
+                wfl_extra_attrs.append(("wait_for_light_mode", f'"{wfl_mode}"'))
+                if wfl_drop is not None:
+                    wfl_extra_attrs.append(
+                        ("wait_for_light_drop_fraction", build_literal_expr(float(wfl_drop)))
+                    )
+                logger.info(
+                    f"WFL config: mode={wfl_mode}"
+                    + (f", drop_fraction={wfl_drop}" if wfl_drop is not None else "")
+                )
+
         # Always add analog_sensors list (empty if no analog sensors found)
         analog_list = "[" + ", ".join(self._analog_sensor_fields) + "]"
         attributes.append(("analog_sensors", analog_list))
+
+        # Append wait_for_light config attributes after analog_sensors
+        attributes.extend(wfl_extra_attrs)
 
         # Use ClassBuilder to construct the class
         return ClassBuilder.build_simple_class(self.class_name, attributes)
