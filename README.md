@@ -13,9 +13,11 @@ A toolchain CLI for Botball robot development on Raspberry Pi (Wombat). Raccoon 
 
 ## Installation
 
-The repository currently documents source installs, not a published PyPI workflow. The previous placeholder `pip install <>` commands were removed because they were not actionable.
+```bash
+pip install raccoon-cli
+```
 
-### Source Installation
+### Development (from source)
 
 ```bash
 git clone <repository-url>

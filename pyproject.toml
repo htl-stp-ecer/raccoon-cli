@@ -3,9 +3,29 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "raccoon"
+name = "raccoon-cli"
 dynamic = ["version"]
-description = "Toolchain CLI for libstp projects"
+description = "Toolchain CLI for Botball robot development on Raspberry Pi (Wombat)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Tobias Madlberger" }]
+keywords = ["botball", "robotics", "raspberry-pi", "cli", "codegen"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Embedded Systems",
+]
 requires-python = ">=3.8"
 dependencies = [
     "pyyaml",
@@ -29,11 +49,8 @@ dependencies = [
     # IDE backend dependencies
     "libcst>=1.0.0",
     "pydantic>=2.0",
-    # LCM message types & transport
-    # Not listed here because pip resolves the name to the local raccoon-transport/
-    # directory which has no root pyproject.toml. Install separately:
-    #   pip install -e raccoon-transport/python
     "lcm",
+    "raccoon-transport>=0.1",
 ]
 
 [project.scripts]
