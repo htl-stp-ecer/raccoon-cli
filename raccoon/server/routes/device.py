@@ -86,10 +86,24 @@ class StartPoseRequest(BaseModel):
     start_pose: StartPose
 
 
-class TableMapRequest(BaseModel):
-    """Request to set table map image."""
+class TableMapLine(BaseModel):
+    """A single line or wall segment on the table map."""
 
-    image: str  # Base64-encoded image
+    kind: str  # 'line' or 'wall'
+    startX: float
+    startY: float
+    endX: float
+    endY: float
+    widthCm: float
+
+
+class TableMapRequest(BaseModel):
+    """Request to set table map (vector format)."""
+
+    format: str = "flowchart-table-map"
+    version: int = 1
+    table: dict  # { widthCm, heightCm }
+    lines: list[TableMapLine]
 
 
 class HostnameRequest(BaseModel):
@@ -387,19 +401,19 @@ async def update_start_pose(request: StartPoseRequest):
 
 @router.get("/table-map")
 async def get_table_map():
-    """Get the table map image."""
+    """Get the table map."""
     project_path = _get_project_path()
     if not project_path:
-        return {"image": None}
+        return {"map": None}
 
     config = _load_project_config(project_path)
     physical = config.get("robot", {}).get("physical", {})
-    return {"image": physical.get("table_map")}
+    return {"map": physical.get("table_map")}
 
 
 @router.put("/table-map", dependencies=[Depends(require_auth)])
 async def update_table_map(request: TableMapRequest):
-    """Update the table map image."""
+    """Update the table map."""
     project_path = _get_project_path()
     if not project_path:
         raise HTTPException(status_code=404, detail="No project found")
@@ -407,8 +421,8 @@ async def update_table_map(request: TableMapRequest):
     config = _load_project_config(project_path)
     config = _ensure_physical_section(config)
 
-    if request.image:
-        config["robot"]["physical"]["table_map"] = request.image
+    if request.lines:
+        config["robot"]["physical"]["table_map"] = request.model_dump()
     elif "table_map" in config["robot"]["physical"]:
         del config["robot"]["physical"]["table_map"]
 

@@ -381,6 +381,12 @@ class RobotGenerator(BaseGenerator):
             if wheel_positions_expr:
                 builder.add_class_attribute("_wheel_positions", wheel_positions_expr)
 
+        # Table map (ftmap vector format)
+        table_map_data = physical.get("table_map")
+        if table_map_data and isinstance(table_map_data, dict):
+            table_map_expr = self._build_table_map_expr(table_map_data)
+            builder.add_class_attribute("table_map", table_map_expr)
+
     def _compute_rotation_center_offset(
         self,
         width_cm: float,
@@ -412,6 +418,15 @@ class RobotGenerator(BaseGenerator):
         strafe_cm = (width_cm / 2) - x_cm
 
         return (round(forward_cm, 4), round(strafe_cm, 4))
+
+    def _build_table_map_expr(self, data: Dict[str, Any]) -> str:
+        """Build a TableMap.from_ftmap(...) expression from the config dict."""
+        try:
+            table_map_cls = resolve_class("libstp.robot.table_map.TableMap")
+            self.imports.add(table_map_cls)
+        except (ImportError, AttributeError):
+            self.imports._entries.add(("libstp.robot.table_map", "TableMap"))
+        return f"TableMap.from_ftmap({data!r})"
 
     def _build_sensor_positions_expr(
         self,

@@ -86,10 +86,24 @@ class StartPoseRequest(BaseModel):
     start_pose: StartPose
 
 
-class TableMapRequest(BaseModel):
-    """Request to set table map image."""
+class TableMapLine(BaseModel):
+    """A single line or wall segment on the table map."""
 
-    image: str  # Base64-encoded image
+    kind: str  # 'line' or 'wall'
+    startX: float
+    startY: float
+    endX: float
+    endY: float
+    widthCm: float
+
+
+class TableMapRequest(BaseModel):
+    """Request to set table map (vector format)."""
+
+    format: str = "flowchart-table-map"
+    version: int = 1
+    table: dict  # { widthCm, heightCm }
+    lines: list[TableMapLine]
 
 
 class KinematicsRequest(BaseModel):
@@ -338,12 +352,12 @@ async def get_table_map(
     project_uuid: UUID,
     svc: ProjectService = Depends(get_project_service),
 ):
-    """Get table map image for a project."""
+    """Get table map for a project."""
     config = svc.project_repository.read_project_config(project_uuid)
     if not config:
-        return {"image": None}
+        return {"map": None}
     physical = config.get("robot", {}).get("physical", {})
-    return {"image": physical.get("table_map")}
+    return {"map": physical.get("table_map")}
 
 
 @router.put("/{project_uuid}/table-map")
@@ -352,12 +366,12 @@ async def update_table_map(
     request: TableMapRequest,
     svc: ProjectService = Depends(get_project_service),
 ):
-    """Update table map image for a project."""
+    """Update table map for a project."""
 
     def mutate(config: dict) -> dict:
         config = _ensure_physical_section(config)
-        if request.image:
-            config["robot"]["physical"]["table_map"] = request.image
+        if request.lines:
+            config["robot"]["physical"]["table_map"] = request.model_dump()
         elif "table_map" in config["robot"]["physical"]:
             del config["robot"]["physical"]["table_map"]
         return config

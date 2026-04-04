@@ -5,549 +5,701 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import click
+import questionary
 import yaml
+from questionary import Style as QStyle
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from raccoon.project import ProjectError, load_project_config, require_project
+from raccoon.project import ProjectError, load_project_config, require_project, save_project_keys
 
 logger = logging.getLogger("raccoon")
 
+# ---------------------------------------------------------------------------
+# Questionary style — consistent with raccoon's purple/cyan brand
+# ---------------------------------------------------------------------------
 
-# Module-level reference to API client for remote calibration
-_api_client: Optional["RaccoonApiClient"] = None
+_STYLE = QStyle([
+    ("qmark",       "fg:#8b5cf6 bold"),
+    ("question",    "bold"),
+    ("answer",      "fg:#22d3ee bold"),
+    ("pointer",     "fg:#8b5cf6 bold"),
+    ("highlighted", "fg:#8b5cf6 bold"),
+    ("selected",    "fg:#22d3ee"),
+    ("separator",   "fg:#6b7280"),
+    ("instruction", "fg:#6b7280 italic"),
+])
 
+# ---------------------------------------------------------------------------
+# Validators
+# ---------------------------------------------------------------------------
 
-def set_api_client(client: "RaccoonApiClient") -> None:
-    """Set the API client for remote encoder reading."""
-    global _api_client
-    _api_client = client
-
-
-def clear_api_client() -> None:
-    """Clear the API client reference."""
-    global _api_client
-    _api_client = None
-
-
-def _prompt_measurements(existing_config: Dict[str, object]) -> Dict[str, float]:
-    """Collect measurement data from the user, using existing config values as defaults."""
-    # Extract existing values from config if available
-    robot = existing_config.get("robot", {})
-    drive = robot.get("drive", {}) if isinstance(robot, dict) else {}
-    kinematics = drive.get("kinematics", {}) if isinstance(drive, dict) else {}
-    limits = drive.get("limits", {}) if isinstance(drive, dict) else {}
-    definitions = existing_config.get("definitions", {})
-
-    # Calculate defaults from existing config
-    existing_wheel_radius = kinematics.get("wheel_radius") if isinstance(kinematics, dict) else None
-    default_wheel_diameter_mm = round(existing_wheel_radius * 2 * 1000, 1) if existing_wheel_radius else 75.0
-
-    existing_track_width = kinematics.get("track_width") if isinstance(kinematics, dict) else None
-    default_track_width_cm = round(existing_track_width * 100, 1) if existing_track_width else 20.0
-
-    existing_wheelbase = kinematics.get("wheelbase") if isinstance(kinematics, dict) else None
-    default_wheelbase_cm = round(existing_wheelbase * 100, 1) if existing_wheelbase else 15.0
-
-    # Try to get vel_lpf_alpha from any motor definition
-    default_vel_filter_alpha = 0.8
-    if isinstance(definitions, dict):
-        for defn in definitions.values():
-            if isinstance(defn, dict) and defn.get("type") == "Motor":
-                calib = defn.get("calibration", {})
-                if isinstance(calib, dict) and "vel_lpf_alpha" in calib:
-                    default_vel_filter_alpha = calib["vel_lpf_alpha"]
-                    break
-
-    wheel_diameter_mm = click.prompt("Wheel diameter (mm)", default=default_wheel_diameter_mm, type=float)
-    track_width_cm = click.prompt("Track width (cm, left ↔ right wheel centers)", default=default_track_width_cm, type=float)
-    wheelbase_cm = click.prompt("Wheelbase (cm, front ↔ rear axle centers)", default=default_wheelbase_cm, type=float)
-    vel_filter_alpha = click.prompt("Velocity low-pass alpha (0-1)", default=default_vel_filter_alpha, type=float)
-
-    return {
-        "wheel_diameter_mm": wheel_diameter_mm,
-        "track_width_cm": track_width_cm,
-        "wheelbase_cm": wheelbase_cm,
-        "vel_filter_alpha": vel_filter_alpha,
-    }
+def _int_validator(v: str) -> bool | str:
+    return True if v.lstrip("-").isdigit() else "Please enter a whole number."
 
 
-def _prompt_drive_type(existing: str | None) -> str:
-    """Ask for drivetrain selection."""
-    choice = click.prompt(
-        "Drivetrain type",
-        default=existing or "mecanum",
-        type=click.Choice(["mecanum", "differential"], case_sensitive=False),
-    )
-    return choice.lower()
+def _pos_float_validator(v: str) -> bool | str:
+    try:
+        if float(v) > 0:
+            return True
+        return "Value must be greater than 0."
+    except ValueError:
+        return "Please enter a number."
 
 
-def _collect_motor_data(drivetrain: str, existing_config: Dict[str, object]) -> Dict[str, Tuple[int, bool]]:
+def _alpha_validator(v: str) -> bool | str:
+    try:
+        f = float(v)
+        if 0.0 < f <= 1.0:
+            return True
+        return "Must be between 0 (exclusive) and 1 (inclusive)."
+    except ValueError:
+        return "Please enter a number between 0 and 1."
+
+
+def _identifier_validator(v: str) -> bool | str:
+    return True if v.isidentifier() else "Must be a valid Python identifier (no spaces, start with a letter)."
+
+
+# ---------------------------------------------------------------------------
+# Type-index helpers — discover hardware types from installed stubs
+# ---------------------------------------------------------------------------
+
+# The hardware types surfaced to the user in the "add definition" section.
+# Ordered by expected frequency of use.
+_ADDABLE_HW_TYPES = ["Servo", "IRSensor", "ETSensor", "AnalogSensor", "DigitalSensor"]
+
+# Friendly names for display
+_TYPE_LABELS = {
+    "Motor":         "Motor",
+    "Servo":         "Servo",
+    "IRSensor":      "IR Sensor",
+    "ETSensor":      "ET (line) Sensor",
+    "AnalogSensor":  "Analog Sensor (raw)",
+    "DigitalSensor": "Digital Sensor",
+    "SensorGroup":   "Sensor Group (line-follow pair)",
+}
+
+
+def _type_index():
+    """Return the TypeIndex singleton (lazy-load / auto-generate)."""
+    from raccoon.codegen.type_index import get_type_index
+    return get_type_index()
+
+
+def _available_hw_types() -> List[str]:
+    """Return addable hardware types that exist in the installed stubs."""
+    idx = _type_index()
+    if not idx.available:
+        return _ADDABLE_HW_TYPES
+    return [t for t in _ADDABLE_HW_TYPES if idx.resolve_by_name(t) is not None] or _ADDABLE_HW_TYPES
+
+
+def _type_init_params(type_name: str) -> List[Dict]:
+    """Return the raw init-param list for a type from the type index."""
+    idx = _type_index()
+    proxy = idx.resolve_by_name(type_name)
+    if proxy is None:
+        return []
+    return proxy._init_params  # [{name, type, required}]
+
+
+# ---------------------------------------------------------------------------
+# Per-param questionary prompt derived from stub annotations
+# ---------------------------------------------------------------------------
+
+_PORT_CHOICES = [str(i) for i in range(10)]   # 0-9: 10 digital sensor ports
+_MOTOR_PORT_CHOICES = [str(i) for i in range(4)]  # motors: 0-3
+
+
+def _prompt_param(param: Dict, default_val=None, port_choices: List[str] = _PORT_CHOICES):
+    """Ask a single init-param using an appropriate questionary widget.
+
+    Returns the typed value, or None to skip optional params.
     """
-    Collect motor connection details.
+    name = param["name"]
+    type_str = param.get("type", "")
+    required = param["required"]
 
-    Returns a dict mapping definition keys to (port, inverted) pairs.
-    Uses existing definitions as defaults if available.
+    label = f"  {name}"
+
+    # Port → select from fixed choices
+    if name == "port":
+        default = str(default_val) if default_val is not None else port_choices[0]
+        if default not in port_choices:
+            default = port_choices[0]
+        raw = questionary.select(f"{label}:", choices=port_choices, default=default,
+                                 style=_STYLE).ask()
+        return None if raw is None else int(raw)
+
+    # Bool → confirm
+    if "bool" in type_str.lower():
+        default = bool(default_val) if default_val is not None else False
+        return questionary.confirm(f"{label}?", default=default, style=_STYLE).ask()
+
+    # int (other than port)
+    if "int" in type_str.lower():
+        default = str(int(default_val)) if default_val is not None else "0"
+        raw = questionary.text(f"{label}:", default=default,
+                               validate=_int_validator, style=_STYLE).ask()
+        return None if raw is None else int(raw)
+
+    # float
+    if "float" in type_str.lower():
+        default = str(float(default_val)) if default_val is not None else "0.0"
+        raw = questionary.text(f"{label}:", default=default,
+                               validate=lambda v: _pos_float_validator(v) if required else True,
+                               style=_STYLE).ask()
+        return None if raw is None else float(raw)
+
+    # str or anything else
+    if required:
+        default = str(default_val) if default_val is not None else ""
+        return questionary.text(f"{label}:", default=default, style=_STYLE).ask()
+
+    # Optional non-primitive — skip
+    return None
+
+
+def _ask_hw_params(type_name: str, existing: Optional[Dict] = None) -> Optional[Dict]:
+    """Prompt for all constructor params of a hardware type using the type index.
+
+    Returns a config dict (including 'type'), or None if the user aborted.
     """
-    definitions = existing_config.get("definitions", {})
-    if not isinstance(definitions, dict):
-        definitions = {}
+    params_meta = _type_init_params(type_name)
+    existing = existing or {}
 
-    if drivetrain == "mecanum":
-        order = [
-            ("front_left_motor", "Front-left"),
-            ("front_right_motor", "Front-right"),
-            ("rear_left_motor", "Rear-left"),
-            ("rear_right_motor", "Rear-right"),
-        ]
+    port_choices = _MOTOR_PORT_CHOICES if type_name == "Motor" else _PORT_CHOICES
+    result: Dict = {"type": type_name}
+
+    if not params_meta:
+        # Fallback for unknown types: just ask port and inverted
+        raw = questionary.select("  port:", choices=port_choices,
+                                 default=str(existing.get("port", port_choices[0])),
+                                 style=_STYLE).ask()
+        if raw is None:
+            return None
+        result["port"] = int(raw)
+        if type_name in ("Motor", "Servo", "DigitalSensor"):
+            inv = questionary.confirm("  inverted?",
+                                      default=bool(existing.get("inverted", False)),
+                                      style=_STYLE).ask()
+            if inv is None:
+                return None
+            result["inverted"] = inv
+        return result
+
+    for p in params_meta:
+        name = p["name"]
+        val = _prompt_param(p, default_val=existing.get(name), port_choices=port_choices)
+        if val is None and p["required"]:
+            return None  # user Ctrl-C'd
+        if val is not None:
+            result[name] = val
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Step 0 — Pi Connection
+# ---------------------------------------------------------------------------
+
+def _connect_step(console: Console) -> bool:
+    """Ask if the user wants to connect to a Pi. Returns True if connected."""
+    from raccoon.client.connection import get_connection_manager, ParamikoVersionError
+
+    manager = get_connection_manager()
+
+    # Already connected?
+    if manager.is_connected:
+        console.print(f"[green]Already connected to {manager.state.pi_hostname}[/green]")
+        return True
+
+    want = questionary.confirm(
+        "Connect to a Pi? (enables live encoder calibration and syncing later)",
+        default=True,
+        style=_STYLE,
+    ).ask()
+    if not want:
+        return False
+
+    # Build choice list: known Pis + manual entry option
+    known = manager.load_known_pis()
+    MANUAL = "✏  Enter address manually"
+    choices = [f"{p.get('address')}:{p.get('port', 8421)}" for p in known] + [MANUAL]
+
+    if len(choices) > 1:
+        choice = questionary.select("Choose Pi:", choices=choices, style=_STYLE).ask()
     else:
-        order = [
-            ("left_motor", "Left"),
-            ("right_motor", "Right"),
-        ]
+        choice = MANUAL
 
+    if choice is None:
+        return False
+
+    if choice == MANUAL:
+        address = questionary.text(
+            "Pi address:",
+            default="192.168.4.1",
+            validate=lambda v: True if v.strip() else "Enter an IP address or hostname.",
+            style=_STYLE,
+        ).ask()
+        if not address:
+            return False
+        port_str = questionary.text("Port:", default="8421",
+                                    validate=_int_validator, style=_STYLE).ask()
+        port = int(port_str or 8421)
+        user = questionary.text("SSH user:", default="pi", style=_STYLE).ask() or "pi"
+    else:
+        parts = choice.rsplit(":", 1)
+        address, port = parts[0], int(parts[1])
+        user = "pi"
+
+    console.print(f"[cyan]Connecting to {address}:{port}...[/cyan]")
+    try:
+        manager.connect_sync(address, port, user)
+        console.print(f"[green]Connected to {manager.state.pi_hostname}[/green]")
+        return True
+    except ParamikoVersionError as exc:
+        console.print(f"[red]Paramiko version error: {exc}[/red]")
+        return False
+    except Exception as exc:
+        console.print(f"[yellow]Could not connect: {exc}[/yellow]")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Step 1 — Project name
+# ---------------------------------------------------------------------------
+
+def _ask_project_name(existing: str) -> str:
+    name = questionary.text(
+        "Project name:", default=existing or "My Raccoon Robot", style=_STYLE
+    ).ask()
+    return name or existing or "My Raccoon Robot"
+
+
+# ---------------------------------------------------------------------------
+# Step 2 — Drivetrain
+# ---------------------------------------------------------------------------
+
+_DRIVETRAIN_CHOICES = [
+    questionary.Choice("Mecanum (4-wheel holonomic)", value="mecanum"),
+    questionary.Choice("Differential (2-wheel tank)",  value="differential"),
+]
+
+
+def _ask_drivetrain(existing: Optional[str]) -> str:
+    default = "mecanum" if existing not in ("mecanum", "differential") else existing
+    result = questionary.select(
+        "Drivetrain type:", choices=_DRIVETRAIN_CHOICES, default=default, style=_STYLE
+    ).ask()
+    return result or default
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — Motor slots
+# ---------------------------------------------------------------------------
+
+_MOTOR_SLOTS = {
+    "mecanum": [
+        ("front_left_motor",  "Front-left"),
+        ("front_right_motor", "Front-right"),
+        ("rear_left_motor",   "Rear-left"),
+        ("rear_right_motor",  "Rear-right"),
+    ],
+    "differential": [
+        ("left_motor",  "Left"),
+        ("right_motor", "Right"),
+    ],
+}
+
+
+def _ask_motors(drivetrain: str, existing_defs: Dict) -> Dict[str, Tuple[int, bool]]:
+    """Return {slot_name: (port, inverted)} for each drive motor."""
+    slots = _MOTOR_SLOTS[drivetrain]
     motors: Dict[str, Tuple[int, bool]] = {}
     default_port = 0
-    for key, label in order:
-        # Get defaults from existing definition if available
-        existing_def = definitions.get(key, {})
-        if isinstance(existing_def, dict) and existing_def.get("type") == "Motor":
-            existing_port = existing_def.get("port", default_port)
-            existing_inverted = existing_def.get("inverted", key.endswith("right_motor"))
-        else:
-            existing_port = default_port
-            existing_inverted = key.endswith("right_motor")
 
-        port = click.prompt(f"{label} motor port", type=int, default=existing_port)
-        inverted = click.confirm(f"Is the {label.lower()} motor inverted?", default=existing_inverted)
-        motors[key] = (port, inverted)
+    for key, label in slots:
+        console_label = f"[bold]{label} motor[/bold]"
+        print(f"\n  {label} motor")
+
+        existing = existing_defs.get(key, {})
+        ex_port    = existing.get("port", default_port) if isinstance(existing, dict) else default_port
+        ex_inv     = existing.get("inverted", key.endswith("right_motor")) if isinstance(existing, dict) else key.endswith("right_motor")
+
+        port_raw = questionary.select(
+            f"  port:", choices=_MOTOR_PORT_CHOICES,
+            default=str(ex_port), style=_STYLE
+        ).ask()
+        if port_raw is None:
+            port_raw = str(ex_port)
+
+        inverted = questionary.confirm(
+            f"  inverted?", default=ex_inv, style=_STYLE
+        ).ask()
+        if inverted is None:
+            inverted = ex_inv
+
+        motors[key] = (int(port_raw), inverted)
         default_port += 1
 
     return motors
 
 
-def _build_motor_definition(port: int, inverted: bool, ticks_to_rad: float, vel_lpf_alpha: float) -> Dict[str, object]:
-    """Return a baseline motor definition."""
+# ---------------------------------------------------------------------------
+# Step 4 — Button sensor (required by defs generator)
+# ---------------------------------------------------------------------------
+
+_BUTTON_PORT_CHOICES = [str(i) for i in range(11)]  # 0-10; Wombat has 10 digital ports
+
+
+def _ask_button(existing_defs: Dict) -> Tuple[int, bool]:
+    """Return (port, inverted) for the start button DigitalSensor."""
+    print("\n  Button sensor (required — start/stop trigger)")
+    ex = existing_defs.get("button", {})
+    ex_port = ex.get("port", 10) if isinstance(ex, dict) else 10
+    ex_inv  = ex.get("inverted", False) if isinstance(ex, dict) else False
+
+    port_raw = questionary.select(
+        "  port:", choices=_BUTTON_PORT_CHOICES,
+        default=str(ex_port), style=_STYLE
+    ).ask()
+    inverted = questionary.confirm("  inverted?", default=ex_inv, style=_STYLE).ask()
+    return (int(port_raw or ex_port), bool(inverted))
+
+
+# ---------------------------------------------------------------------------
+# Step 5 — Physical measurements
+# ---------------------------------------------------------------------------
+
+def _ask_measurements(existing_robot: Dict) -> Dict[str, float]:
+    """Collect physical dimensions with labelled, validated prompts."""
+    kin = existing_robot.get("drive", {}).get("kinematics", {})
+
+    ex_wr  = kin.get("wheel_radius")
+    ex_tw  = kin.get("track_width")
+    ex_wb  = kin.get("wheelbase")
+
+    def_diam  = round(ex_wr * 2 * 1000, 1) if ex_wr else 75.0
+    def_track = round(ex_tw * 100, 1)       if ex_tw else 20.0
+    def_wb    = round(ex_wb * 100, 1)       if ex_wb else 15.0
+
+    # Try vel_lpf_alpha from any motor
+    def_alpha = 0.8
+
+    print("\n  Physical measurements")
+
+    diam  = questionary.text("  Wheel diameter (mm):", default=str(def_diam),
+                              validate=_pos_float_validator, style=_STYLE).ask()
+    track = questionary.text("  Track width cm (L↔R wheel centres):", default=str(def_track),
+                              validate=_pos_float_validator, style=_STYLE).ask()
+    wb    = questionary.text("  Wheelbase cm (front↔rear axle):", default=str(def_wb),
+                              validate=_pos_float_validator, style=_STYLE).ask()
+    alpha = questionary.text("  Velocity low-pass alpha (0–1):", default=str(def_alpha),
+                              validate=_alpha_validator, style=_STYLE).ask()
+
+    return {
+        "wheel_diameter_mm": float(diam   or def_diam),
+        "track_width_cm":    float(track  or def_track),
+        "wheelbase_cm":      float(wb     or def_wb),
+        "vel_filter_alpha":  float(alpha  or def_alpha),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 6 — Additional hardware definitions (type-index powered)
+# ---------------------------------------------------------------------------
+
+def _ask_extra_definitions(existing_defs: Dict, skip_names: set) -> Dict:
+    """Optionally add sensor / servo definitions using stubs-derived prompts."""
+    available_types = _available_hw_types()
+    type_labels = [
+        questionary.Choice(_TYPE_LABELS.get(t, t), value=t)
+        for t in available_types
+    ]
+    added: Dict = {}
+
+    print()
+    while True:
+        more = questionary.confirm(
+            "Add another hardware definition (sensor, servo…)?",
+            default=False, style=_STYLE
+        ).ask()
+        if not more:
+            break
+
+        hw_type = questionary.select(
+            "Hardware type:", choices=type_labels, style=_STYLE
+        ).ask()
+        if hw_type is None:
+            break
+
+        default_name = hw_type.lower().replace("sensor", "_sensor")
+        name = questionary.text(
+            "Definition name (YAML key):",
+            default=default_name,
+            validate=lambda v: (
+                _identifier_validator(v) if v not in skip_names
+                else f"'{v}' is already defined."
+            ),
+            style=_STYLE,
+        ).ask()
+        if name is None:
+            break
+
+        print(f"  Configure {hw_type} '{name}':")
+        params = _ask_hw_params(hw_type, existing=existing_defs.get(name))
+        if params is None:
+            break
+
+        added[name] = params
+        skip_names.add(name)
+
+    return added
+
+
+# ---------------------------------------------------------------------------
+# Step 7 — Encoder ticks calibration (optional)
+# ---------------------------------------------------------------------------
+
+def _read_remote(address: str, port: int, api_token: Optional[str], motor_port: int, inverted: bool) -> int:
+    from raccoon.client.api import create_api_client
+
+    async def _inner():
+        async with create_api_client(address, port, api_token=api_token) as client:
+            r = await client.read_encoder(motor_port, inverted)
+            if not r.success:
+                raise RuntimeError(r.error)
+            return r.position
+
+    return asyncio.run(_inner())
+
+
+def _measure_ticks_for_motor(
+    name: str, motor_port: int, inverted: bool,
+    read_fn,
+    num_trials: int = 3,
+) -> float:
+    """Guide the user through rotating one wheel and return avg ticks/rev."""
+    measurements = []
+    for trial in range(1, num_trials + 1):
+        print(f"\n    Trial {trial}/{num_trials} — {name}")
+        start = read_fn(motor_port, inverted)
+        print(f"    Encoder: {start}")
+        questionary.text(
+            "    Rotate wheel exactly ONE full turn (360°) then press Enter:",
+            default="", style=_STYLE
+        ).ask()
+        end = read_fn(motor_port, inverted)
+        ticks = abs(end - start)
+        print(f"    → {ticks} ticks")
+        measurements.append(ticks)
+
+    avg = sum(measurements) / len(measurements)
+    print(f"    {name}: {avg:.1f} ticks/rev (average)")
+    return avg
+
+
+def _ask_ticks(
+    motor_defs: Dict[str, Tuple[int, bool]],
+    existing_defs: Dict,
+    is_connected: bool,
+) -> Dict[str, int]:
+    """Optionally calibrate encoder ticks per revolution. Returns {motor: ticks}."""
+    # Build defaults from existing config
+    defaults: Dict[str, int] = {}
+    for name in motor_defs:
+        defn = existing_defs.get(name, {})
+        if isinstance(defn, dict):
+            calib = defn.get("calibration", {})
+            t2r = calib.get("ticks_to_rad") if isinstance(calib, dict) else None
+            if t2r and t2r > 0:
+                defaults[name] = int(round((2 * math.pi) / t2r))
+    for name in motor_defs:
+        defaults.setdefault(name, 1536)
+
+    single_default = next(iter(defaults.values()), 1536)
+
+    print()
+    run_cal = questionary.select(
+        "Encoder ticks calibration (optional):",
+        choices=[
+            questionary.Choice("Run guided calibration (rotate each wheel by hand)", value="guided"),
+            questionary.Choice(f"Enter ticks manually (current default: {single_default})",  value="manual"),
+            questionary.Choice("Skip — keep existing values",                                  value="skip"),
+        ],
+        style=_STYLE,
+    ).ask()
+
+    if run_cal is None or run_cal == "skip":
+        return defaults
+
+    if run_cal == "manual":
+        raw = questionary.text(
+            "Ticks per wheel revolution:",
+            default=str(single_default),
+            validate=lambda v: _int_validator(v) and int(v) > 0 or "Must be a positive integer.",
+            style=_STYLE,
+        ).ask()
+        ticks = int(raw or single_default)
+        return {name: ticks for name in motor_defs}
+
+    # Guided calibration
+    read_fn = None
+
+    if is_connected:
+        try:
+            from raccoon.client.connection import get_connection_manager
+            manager = get_connection_manager()
+            if manager.is_connected:
+                state = manager.state
+                read_fn = lambda mp, inv: _read_remote(state.pi_address, state.pi_port, state.api_token, mp, inv)
+        except Exception:
+            pass
+
+    if read_fn is None:
+        # Try local HAL
+        try:
+            from libstp.hal import Motor as HalMotor  # type: ignore
+
+            def _local_read(mp: int, inv: bool) -> int:
+                return HalMotor(port=mp, inverted=inv).get_position()
+
+            read_fn = _local_read
+        except Exception as exc:
+            print(f"  [yellow]No hardware available for live ticks ({exc}). Falling back to manual.[/yellow]")
+            raw = questionary.text(
+                "Ticks per wheel revolution:",
+                default=str(single_default), validate=_int_validator, style=_STYLE
+            ).ask()
+            ticks = int(raw or single_default)
+            return {name: ticks for name in motor_defs}
+
+    results: Dict[str, int] = {}
+    for name, (mp, inv) in motor_defs.items():
+        print(f"\n  {name} (port {mp})")
+        print("  Make sure the wheel can spin freely.")
+        go = questionary.confirm(f"  Calibrate {name}?", default=True, style=_STYLE).ask()
+        if not go:
+            results[name] = defaults.get(name, 1536)
+            continue
+        try:
+            avg = _measure_ticks_for_motor(name, mp, inv, read_fn)
+            results[name] = int(round(avg))
+        except Exception as exc:
+            print(f"  Error: {exc} — using default {defaults.get(name, 1536)}")
+            results[name] = defaults.get(name, 1536)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Config builders (unchanged logic, kept from original wizard)
+# ---------------------------------------------------------------------------
+
+def _build_motor_def(port: int, inverted: bool, ticks_to_rad: float, vel_lpf_alpha: float) -> Dict:
     return {
         "type": "Motor",
         "port": port,
         "inverted": inverted,
         "calibration": {
-            "ff": {"kS": 0.08, "kV": 0.12, "kA": 0.1},
-            "pid": {"kp": 2.4, "ki": 0.3, "kd": 0.08},
-            "ticks_to_rad": round(ticks_to_rad, 7),
+            "ff":  {"kS": 0.08, "kV": 0.12, "kA": 0.1},
+            "pid": {"kp": 2.4,  "ki": 0.3,  "kd": 0.08},
+            "ticks_to_rad":  round(ticks_to_rad, 7),
             "vel_lpf_alpha": round(vel_lpf_alpha, 3),
         },
     }
 
 
-def _create_definitions(
+def _build_definitions(
     motors: Dict[str, Tuple[int, bool]],
+    button_port: int,
+    button_inverted: bool,
     ticks_to_rad: Dict[str, float],
     vel_lpf_alpha: float,
-) -> Dict[str, object]:
-    """Create the definitions section."""
-    definitions = {
-        name: _build_motor_definition(port, inverted, ticks_to_rad[name], vel_lpf_alpha)
-        for name, (port, inverted) in motors.items()
-    }
-    definitions.setdefault("imu", {"type": "IMU"})
-    return definitions
+    extra: Dict,
+) -> Dict:
+    defs: Dict = {"imu": {"type": "IMU"}}
+    for name, (port, inverted) in motors.items():
+        defs[name] = _build_motor_def(port, inverted, ticks_to_rad[name], vel_lpf_alpha)
+    defs["button"] = {"type": "DigitalSensor", "port": button_port, "inverted": button_inverted}
+    defs.update(extra)
+    return defs
 
 
-def _build_kinematics_config(
-    drivetrain: str,
-    motors: Dict[str, Tuple[int, bool]],
-    measures: Dict[str, float],
-) -> Dict[str, object]:
-    """Create a kinematics configuration payload."""
-    wheel_radius = (measures["wheel_diameter_mm"] / 1000.0) / 2.0
-    track_width = measures["track_width_cm"] / 100.0
-    wheelbase = measures["wheelbase_cm"] / 100.0
+def _build_kinematics(drivetrain: str, motors: Dict[str, Tuple[int, bool]], m: Dict[str, float]) -> Dict:
+    wheel_radius = (m["wheel_diameter_mm"] / 1000.0) / 2.0
+    track_width  = m["track_width_cm"] / 100.0
+    wheelbase    = m["wheelbase_cm"] / 100.0
 
-    config: Dict[str, object] = {
-        "type": drivetrain,
+    cfg: Dict = {
+        "type":         drivetrain,
         "wheel_radius": round(wheel_radius, 5),
-        "track_width": round(track_width, 4),
+        "track_width":  round(track_width, 4),
     }
-
     if drivetrain == "mecanum":
-        config["wheelbase"] = round(wheelbase, 4)
-        config.update(
-            {
-                "front_left_motor": "front_left_motor",
-                "front_right_motor": "front_right_motor",
-                "back_left_motor": "rear_left_motor",
-                "back_right_motor": "rear_right_motor",
-            }
-        )
+        cfg["wheelbase"]         = round(wheelbase, 4)
+        cfg["front_left_motor"]  = "front_left_motor"
+        cfg["front_right_motor"] = "front_right_motor"
+        cfg["back_left_motor"]   = "rear_left_motor"
+        cfg["back_right_motor"]  = "rear_right_motor"
     else:
-        config.update(
-            {
-                "left_motor": "left_motor",
-                "right_motor": "right_motor",
-            }
-        )
-
-    return config
+        cfg["left_motor"]  = "left_motor"
+        cfg["right_motor"] = "right_motor"
+    return cfg
 
 
-def _build_robot_config(
-    drivetrain: str,
-    motors: Dict[str, Tuple[int, bool]],
-    measures: Dict[str, float],
-) -> Dict[str, object]:
-    """Assemble the robot configuration."""
-    kinematics = _build_kinematics_config(drivetrain, motors, measures)
-
-    odometry_defaults = {
-        "type": "FusedOdometry",
-        "invert_x": False,
-        "invert_y": False,
-        "invert_z": True,
-        "invert_w": False,
-    }
-
+def _build_robot(drivetrain: str, motors: Dict[str, Tuple[int, bool]], m: Dict[str, float]) -> Dict:
     return {
-        "drive": {
-            "kinematics": kinematics,
-        },
-        "odometry": odometry_defaults,
+        "drive":    {"kinematics": _build_kinematics(drivetrain, motors, m)},
+        "odometry": {"type": "FusedOdometry", "invert_x": False, "invert_y": False,
+                     "invert_z": True, "invert_w": False},
     }
 
 
-def to_builtin(obj):
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+def _to_builtin(obj):
     if isinstance(obj, dict):
-        return {k: to_builtin(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [to_builtin(v) for v in obj]
-    elif hasattr(obj, "__dict__"):
-        return to_builtin(vars(obj))
-    else:
-        return obj
+        return {k: _to_builtin(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_builtin(v) for v in obj]
+    return obj
 
-def _render_summary(console: Console, config: Dict[str, object]) -> None:
-    """Pretty-print the resulting configuration summary."""
-    robot = config.get("robot", {})
-    definitions = config.get("definitions", {})
 
+def _render_summary(console: Console, config: Dict) -> None:
     table = Table(title="Wizard Summary", expand=True)
-    table.add_column("Section", style="bold cyan")
+    table.add_column("Section", style="bold cyan", no_wrap=True)
     table.add_column("Details")
-
-    table.add_row("Project", f"name: {config.get('name', 'Unnamed Project')}\nuuid: {config.get('uuid', '—')}")
-    table.add_row("Drive", yaml.safe_dump(robot, sort_keys=False))
-    table.add_row("Definitions", yaml.safe_dump(to_builtin(definitions), sort_keys=False))
+    table.add_row("Project",     f"name: {config.get('name', '—')}\nuuid: {config.get('uuid', '—')}")
+    table.add_row("Drive",       yaml.safe_dump(config.get("robot", {}), sort_keys=False).strip())
+    table.add_row("Definitions", yaml.safe_dump(_to_builtin(config.get("definitions", {})), sort_keys=False).strip())
     console.print(Panel(table, border_style="green"))
 
 
-def _read_encoder_position_remote(port: int, inverted: bool) -> int:
-    """Read encoder position from remote Pi via API."""
-    global _api_client
-    if _api_client is None:
-        raise RuntimeError("No API client configured for remote encoder reading")
-
-    async def _read():
-        async with _api_client:
-            reading = await _api_client.read_encoder(port, inverted)
-            if not reading.success:
-                raise RuntimeError(f"Failed to read encoder: {reading.error}")
-            return reading.position
-
-    return asyncio.run(_read())
-
-
-def _calibrate_single_wheel_remote(
-    console: Console, port: int, inverted: bool, motor_name: str, num_trials: int = 3
-) -> float:
-    """
-    Calibrate a single wheel by having the user rotate it manually (remote mode).
-
-    Records the encoder position before and after one full rotation via API,
-    averaging across multiple trials.
-    """
-    measurements = []
-
-    for trial in range(1, num_trials + 1):
-        console.print(f"\n[bold cyan]Trial {trial}/{num_trials} for {motor_name}[/bold cyan]")
-
-        # Record starting position via remote API
-        start_pos = _read_encoder_position_remote(port, inverted)
-        console.print(f"[dim]Starting encoder position: {start_pos}[/dim]")
-
-        console.print(
-            "[green]→ Mark the wheel position, then rotate it exactly ONE full turn "
-            "(360°) by hand.[/green]"
-        )
-        click.prompt("Press Enter when you have completed the rotation", default="", show_default=False)
-
-        # Record ending position via remote API
-        end_pos = _read_encoder_position_remote(port, inverted)
-        ticks = abs(end_pos - start_pos)
-
-        console.print(f"[dim]Ending encoder position: {end_pos}[/dim]")
-        console.print(f"[cyan]Measured: {ticks} ticks for this rotation[/cyan]")
-
-        measurements.append(ticks)
-
-    avg_ticks = sum(measurements) / len(measurements)
-    console.print(f"\n[bold green]{motor_name} average: {avg_ticks:.1f} ticks/revolution[/bold green]")
-    console.print(f"[dim]Individual measurements: {measurements}[/dim]")
-
-    return avg_ticks
-
-
-def _calibrate_single_wheel_local(
-    console: Console, motor, motor_name: str, num_trials: int = 3
-) -> float:
-    """
-    Calibrate a single wheel by having the user rotate it manually (local mode).
-
-    Records the encoder position before and after one full rotation,
-    averaging across multiple trials.
-    """
-    measurements = []
-
-    for trial in range(1, num_trials + 1):
-        console.print(f"\n[bold cyan]Trial {trial}/{num_trials} for {motor_name}[/bold cyan]")
-
-        # Record starting position
-        start_pos = motor.get_position()
-        console.print(f"[dim]Starting encoder position: {start_pos}[/dim]")
-
-        console.print(
-            "[green]→ Mark the wheel position, then rotate it exactly ONE full turn "
-            "(360°) by hand.[/green]"
-        )
-        click.prompt("Press Enter when you have completed the rotation", default="", show_default=False)
-
-        # Record ending position
-        end_pos = motor.get_position()
-        ticks = abs(end_pos - start_pos)
-
-        console.print(f"[dim]Ending encoder position: {end_pos}[/dim]")
-        console.print(f"[cyan]Measured: {ticks} ticks for this rotation[/cyan]")
-
-        measurements.append(ticks)
-
-    avg_ticks = sum(measurements) / len(measurements)
-    console.print(f"\n[bold green]{motor_name} average: {avg_ticks:.1f} ticks/revolution[/bold green]")
-    console.print(f"[dim]Individual measurements: {measurements}[/dim]")
-
-    return avg_ticks
-
-
-def _print_calibration_summary(console: Console, results: Dict[str, int]) -> None:
-    """Print a summary table of calibration results per motor."""
-    console.print("\n[bold green]Calibration Results:[/bold green]")
-    table = Table()
-    table.add_column("Motor", style="cyan")
-    table.add_column("Ticks/Rev", justify="right")
-    table.add_column("Rad/Tick", justify="right")
-
-    for motor_name, ticks in results.items():
-        rad_per_tick = (2 * math.pi) / ticks
-        table.add_row(motor_name, str(ticks), f"{rad_per_tick:.7f}")
-
-    console.print(table)
-
-
-def _calibrate_ticks_per_rev(
-    console: Console, motor_defs: Dict[str, Tuple[int, bool]]
-) -> Dict[str, int]:
-    """
-    Interactive helper to measure encoder ticks per wheel revolution.
-
-    For each wheel, the user manually rotates the wheel one full turn
-    while the wizard measures the encoder tick difference. Each wheel
-    is measured 3 times and averaged individually.
-
-    Uses remote API if an API client is configured, otherwise tries local hardware.
-
-    Returns:
-        Dict mapping motor name to its calibrated ticks per revolution.
-    """
-    global _api_client
-    num_trials = 3
-    available_motors = list(motor_defs.keys())
-    results: Dict[str, int] = {}
-
-    # Try remote calibration first if API client is configured
-    if _api_client is not None:
-        console.print(
-            "\n[bold cyan]Encoder Calibration (Remote)[/bold cyan]\n"
-            f"For each wheel, you will rotate it exactly ONE full turn {num_trials} times.\n"
-            "The wizard will record the encoder ticks via the Pi and average the results.\n"
-        )
-
-        for motor_name in available_motors:
-            port, inverted = motor_defs[motor_name]
-
-            console.print(f"\n[bold]Calibrating: {motor_name} (port {port})[/bold]")
-            console.print("[yellow]Make sure the wheel can spin freely.[/yellow]")
-
-            if not click.confirm(f"Ready to calibrate {motor_name}?", default=True):
-                console.print(f"[yellow]Skipping {motor_name} - using default[/yellow]")
-                results[motor_name] = 1536
-                continue
-
-            try:
-                avg = _calibrate_single_wheel_remote(console, port, inverted, motor_name, num_trials)
-                results[motor_name] = int(round(avg))
-            except Exception as exc:
-                console.print(f"[red]Error calibrating {motor_name}: {exc}[/red]")
-                results[motor_name] = 1536
-
-        _print_calibration_summary(console, results)
-        return results
-
-    # Fall back to local calibration
-    try:
-        from libstp.hal import Motor as HalMotor  # type: ignore
-
-        console.print(
-            "\n[bold cyan]Encoder Calibration (Local)[/bold cyan]\n"
-            f"For each wheel, you will rotate it exactly ONE full turn {num_trials} times.\n"
-            "The wizard will record the encoder ticks and average the results.\n"
-        )
-
-        for motor_name in available_motors:
-            port, inverted = motor_defs[motor_name]
-            motor = HalMotor(port=port, inverted=inverted)
-
-            console.print(f"\n[bold]Calibrating: {motor_name} (port {port})[/bold]")
-            console.print("[yellow]Make sure the wheel can spin freely.[/yellow]")
-
-            if not click.confirm(f"Ready to calibrate {motor_name}?", default=True):
-                console.print(f"[yellow]Skipping {motor_name} - using default[/yellow]")
-                results[motor_name] = 1536
-                continue
-
-            avg = _calibrate_single_wheel_local(console, motor, motor_name, num_trials)
-            results[motor_name] = int(round(avg))
-
-        _print_calibration_summary(console, results)
-        return results
-
-    except Exception as exc:  # pylint: disable=broad-except
-        console.print(
-            f"[yellow]Could not access motor hardware ({exc}).[/yellow]\n"
-            "[cyan]Falling back to manual entry.[/cyan]"
-        )
-        default_ticks = click.prompt("Encoder ticks per wheel revolution", default=1536, type=int)
-        return {name: default_ticks for name in available_motors}
-
-
-def _ensure_remote_connection(console: Console, project_root: Path) -> bool:
-    """
-    Ensure a connection to the Pi is established for remote calibration.
-
-    Returns True if connected (and API client is set), False otherwise.
-    """
-    from raccoon.client.connection import get_connection_manager
-    from raccoon.client.api import create_api_client
-
-    manager = get_connection_manager()
-
-    # Try to auto-connect from project or global config if not connected
-    if not manager.is_connected:
-        # Try project config first
-        project_conn = manager.load_from_project(project_root)
-        if project_conn and project_conn.pi_address:
-            console.print(f"[cyan]Connecting to Pi at {project_conn.pi_address}...[/cyan]")
-            try:
-                manager.connect_sync(project_conn.pi_address, project_conn.pi_port, project_conn.pi_user)
-            except Exception as e:
-                console.print(f"[yellow]Failed to connect: {e}[/yellow]")
-                return False
-        else:
-            # Try global config
-            known_pis = manager.load_known_pis()
-            if known_pis:
-                pi = known_pis[0]
-                console.print(f"[cyan]Connecting to Pi at {pi.get('address')}...[/cyan]")
-                try:
-                    manager.connect_sync(pi.get("address"), pi.get("port", 8421))
-                except Exception as e:
-                    console.print(f"[yellow]Failed to connect: {e}[/yellow]")
-                    return False
-            else:
-                return False
-
-    if not manager.is_connected:
-        return False
-
-    # Create and set the API client
-    state = manager.state
-    client = create_api_client(state.pi_address, state.pi_port, api_token=state.api_token)
-    set_api_client(client)
-
-    console.print(f"[green]Connected to {state.pi_hostname}[/green]")
-    return True
-
-
-def _prompt_ticks_per_rev(
-    console: Console, motor_defs: Dict[str, Tuple[int, bool]], existing_config: Dict[str, object], project_root: Path
-) -> Dict[str, int]:
-    """
-    Ask whether to calibrate encoder ticks interactively or accept a prompt.
-
-    Returns:
-        Dict mapping motor name to its ticks per revolution.
-    """
-    # Calculate defaults from existing ticks_to_rad values per motor
-    definitions = existing_config.get("definitions", {})
-    default_ticks: Dict[str, int] = {}
-
-    if isinstance(definitions, dict):
-        for motor_name in motor_defs:
-            defn = definitions.get(motor_name, {})
-            if isinstance(defn, dict) and defn.get("type") == "Motor":
-                calib = defn.get("calibration", {})
-                if isinstance(calib, dict) and "ticks_to_rad" in calib:
-                    ticks_to_rad = calib["ticks_to_rad"]
-                    if ticks_to_rad > 0:
-                        default_ticks[motor_name] = int(round((2 * math.pi) / ticks_to_rad))
-
-    # Fill in missing defaults
-    for motor_name in motor_defs:
-        if motor_name not in default_ticks:
-            default_ticks[motor_name] = 1536
-
-    if not click.confirm("Run the guided encoder tick calibration?", default=False):
-        # Use same value for all motors when manually entering
-        single_default = next(iter(default_ticks.values()), 1536)
-        ticks = click.prompt("Encoder ticks per wheel revolution", default=single_default, type=int)
-        return {name: ticks for name in motor_defs}
-
-    # Before running calibration, ensure we have a remote connection
-    # (calibration needs to run on the Pi with actual hardware)
-    if not _ensure_remote_connection(console, project_root):
-        console.print("[yellow]No Pi connection available.[/yellow]")
-        console.print("[cyan]To run encoder calibration, connect to the Pi first with 'raccoon connect <pi-address>'[/cyan]")
-        console.print("[cyan]Falling back to manual entry.[/cyan]")
-        single_default = next(iter(default_ticks.values()), 1536)
-        ticks = click.prompt("Encoder ticks per wheel revolution", default=single_default, type=int)
-        return {name: ticks for name in motor_defs}
-
-    try:
-        return _calibrate_ticks_per_rev(console, motor_defs)
-    finally:
-        # Clean up the API client
-        clear_api_client()
-
+# ---------------------------------------------------------------------------
+# Wizard command
+# ---------------------------------------------------------------------------
 
 @click.command(name="wizard")
 @click.option("--dry-run", is_flag=True, help="Preview output without writing raccoon.project.yml")
 @click.pass_context
 def wizard_command(ctx: click.Context, dry_run: bool) -> None:
-    """Launch an interactive wizard to scaffold raccoon.project.yml."""
+    """Interactive wizard to scaffold or update raccoon.project.yml.
+
+    Guides you through drivetrain type, motor ports, physical measurements,
+    button sensor, optional extra definitions, and encoder ticks calibration.
+    Hardware types and their parameters are read directly from the installed
+    libstp stubs so the wizard always reflects the available API.
+    """
     console: Console = ctx.obj["console"]
 
     try:
@@ -557,45 +709,91 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
         raise SystemExit(1) from exc
 
     try:
-        existing_config = load_project_config(project_root)
+        existing = load_project_config(project_root)
     except ProjectError:
-        existing_config = {}
+        existing = {}
 
-    project_name = click.prompt(
-        "Project name",
-        default=existing_config.get("name", "My Raccoon Robot"),
-    )
+    ex_robot = existing.get("robot", {})
+    if not isinstance(ex_robot, dict):
+        ex_robot = {}
+    ex_defs = existing.get("definitions", {})
+    if not isinstance(ex_defs, dict):
+        ex_defs = {}
 
-    drivetrain = _prompt_drive_type(existing_config.get("robot", {}).get("drive", {}).get("kinematics", {}).get("type"))
-    motor_defs = _collect_motor_data(drivetrain, existing_config)
-    measurements = _prompt_measurements(existing_config)
-    ticks_per_rev = _prompt_ticks_per_rev(console, motor_defs, existing_config, project_root)
+    console.print(Panel("[bold cyan]Raccoon Project Wizard[/bold cyan]\n"
+                        "[dim]Arrow keys to navigate · Enter to confirm · Ctrl-C to abort[/dim]",
+                        border_style="cyan"))
+    print()
 
-    # Convert ticks per revolution to radians per tick for each motor
+    # ── 0. Connection ────────────────────────────────────────────────────────
+    is_connected = _connect_step(console)
+    print()
+
+    # ── 1. Project name ──────────────────────────────────────────────────────
+    project_name = _ask_project_name(existing.get("name", ""))
+    print()
+
+    # ── 2. Drivetrain ────────────────────────────────────────────────────────
+    existing_drive_type = (ex_robot.get("drive", {}) or {}).get("kinematics", {}).get("type")
+    drivetrain = _ask_drivetrain(existing_drive_type)
+    print()
+
+    # ── 3. Motors ────────────────────────────────────────────────────────────
+    print("  [Drive motors]")
+    motor_defs = _ask_motors(drivetrain, ex_defs)
+    motor_names = set(motor_defs.keys())
+    print()
+
+    # ── 4. Button ────────────────────────────────────────────────────────────
+    button_port, button_inverted = _ask_button(ex_defs)
+    print()
+
+    # ── 5. Physical measurements ─────────────────────────────────────────────
+    measurements = _ask_measurements(ex_robot)
+    print()
+
+    # ── 6. Extra definitions (type-index powered) ────────────────────────────
+    reserved = motor_names | {"imu", "button"}
+    extra_defs = _ask_extra_definitions(ex_defs, skip_names=set(reserved))
+    print()
+
+    # ── 7. Encoder ticks (optional) ──────────────────────────────────────────
+    ticks_per_rev = _ask_ticks(motor_defs, ex_defs, is_connected)
+
+    # ── Build config ──────────────────────────────────────────────────────────
     ticks_to_rad = {name: (2 * math.pi) / ticks for name, ticks in ticks_per_rev.items()}
 
-    config: Dict[str, object] = dict(existing_config)
+    config: Dict = dict(existing)
     config["name"] = project_name
-    config.setdefault("uuid", existing_config.get("uuid", ""))
-    config["robot"] = _build_robot_config(drivetrain, motor_defs, measurements)
+    config.setdefault("uuid", existing.get("uuid", ""))
+    config["robot"] = _build_robot(drivetrain, motor_defs, measurements)
 
-    definitions = existing_config.get("definitions", {}).copy()
-    definitions.update(_create_definitions(motor_defs, ticks_to_rad, measurements["vel_filter_alpha"]))
-    config["definitions"] = definitions
+    merged_defs: Dict = dict(ex_defs)
+    merged_defs.update(_build_definitions(
+        motor_defs, button_port, button_inverted,
+        ticks_to_rad, measurements["vel_filter_alpha"],
+        extra_defs,
+    ))
+    config["definitions"] = merged_defs
 
+    # ── Summary ───────────────────────────────────────────────────────────────
+    print()
     _render_summary(console, config)
 
     if dry_run:
-        console.print("[yellow]Dry run enabled — raccoon.project.yml was not updated.[/yellow]")
+        console.print("[yellow]Dry run — raccoon.project.yml was not updated.[/yellow]")
         return
 
-    from raccoon.project import save_project_keys
+    confirm = questionary.confirm("Save configuration?", default=True, style=_STYLE).ask()
+    if not confirm:
+        console.print("[yellow]Aborted — nothing was saved.[/yellow]")
+        return
 
     save_project_keys(project_root, {
-        "name": config["name"],
-        "uuid": config.get("uuid", ""),
-        "robot": config["robot"],
+        "name":        config["name"],
+        "uuid":        config.get("uuid", ""),
+        "robot":       config["robot"],
         "definitions": config["definitions"],
     })
 
-    console.print("[green]Updated project configuration with wizard output.[/green]")
+    console.print("[green]raccoon.project.yml updated.[/green]")
