@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
 import shutil
 import uuid as uuid_module
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 import click
 import yaml
@@ -21,64 +20,6 @@ from raccoon.project import ProjectError, load_project_config, find_project_root
 
 logger = logging.getLogger("raccoon")
 
-
-def _prompt_and_connect_to_pi(console: Console, project_root: Path) -> Optional["RaccoonApiClient"]:
-    """
-    Prompt the user for Pi connection details and establish connection.
-
-    Returns an API client if connection is successful, None otherwise.
-    """
-    from raccoon.client.api import create_api_client
-    from raccoon.client.connection import get_connection_manager
-    from raccoon.client.discovery import check_address
-
-    console.print("\n[bold cyan]Pi Connection Setup[/bold cyan]")
-    console.print("To calibrate encoders, the wizard needs to connect to your Pi.\n")
-
-    if not click.confirm("Connect to a Pi for encoder calibration?", default=True):
-        console.print("[yellow]Skipping Pi connection. Encoder calibration will use manual entry.[/yellow]")
-        return None
-
-    # Get Pi address
-    address = click.prompt("Pi address (IP or hostname)", default="192.168.4.1")
-    port = click.prompt("Pi server port", default=8421, type=int)
-    user = click.prompt("SSH username", default="pi")
-
-    # Check if the Pi is reachable
-    console.print(f"\n[cyan]Checking connection to {address}:{port}...[/cyan]")
-    result = asyncio.run(check_address(address, port))
-
-    if not result:
-        console.print(f"[red]Failed to connect to {address}:{port}[/red]")
-        console.print("Make sure the Pi is running and raccoon-server is started.")
-        console.print("[yellow]Continuing without Pi connection. Encoder calibration will use manual entry.[/yellow]")
-        return None
-
-    # Connect using connection manager
-    manager = get_connection_manager()
-    success = asyncio.run(manager.connect(address=address, port=port, user=user))
-
-    if not success:
-        console.print(f"[red]Failed to connect to {address}:{port}[/red]")
-        console.print("[yellow]Continuing without Pi connection. Encoder calibration will use manual entry.[/yellow]")
-        return None
-
-    state = manager.state
-    console.print(f"[green]Connected to {state.pi_hostname}[/green]")
-
-    # Check API token
-    if not state.api_token:
-        console.print("[yellow]SSH key authentication failed. Cannot access hardware.[/yellow]")
-        console.print("[yellow]Continuing without Pi connection. Encoder calibration will use manual entry.[/yellow]")
-        return None
-
-    # Save connection to project config
-    manager.save_to_project(project_root)
-    manager.save_to_global()
-    console.print(f"[dim]Connection saved to project config[/dim]")
-
-    # Create and return API client
-    return create_api_client(address, port, state.api_token)
 
 
 _MISSION_NUMBER_RE = re.compile(r'^[Mm](\d{3})')
@@ -329,16 +270,9 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
 
     # Run wizard before finalizing (unless explicitly skipped)
     if not no_wizard:
-        # Prompt for Pi connection before running wizard
-        api_client = _prompt_and_connect_to_pi(console, target_dir)
-
         console.print("\n[cyan]Launching setup wizard to finalize project configuration...[/cyan]\n")
 
-        # Set up the API client for remote encoder reading
-        from raccoon.commands.wizard import wizard_command, set_api_client, clear_api_client
-
-        if api_client:
-            set_api_client(api_client)
+        from raccoon.commands.wizard import wizard_command
 
         # Change to project directory and run wizard
         original_cwd = os.getcwd()
@@ -347,7 +281,6 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
             ctx.invoke(wizard_command, dry_run=False)
         finally:
             os.chdir(original_cwd)
-            clear_api_client()
 
         console.print(f"\n[green]✓ Project '{name}' finalized successfully![/green]")
     else:

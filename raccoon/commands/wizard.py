@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import click
 import questionary
@@ -60,149 +60,6 @@ def _alpha_validator(v: str) -> bool | str:
         return "Must be between 0 (exclusive) and 1 (inclusive)."
     except ValueError:
         return "Please enter a number between 0 and 1."
-
-
-def _identifier_validator(v: str) -> bool | str:
-    return True if v.isidentifier() else "Must be a valid Python identifier (no spaces, start with a letter)."
-
-
-# ---------------------------------------------------------------------------
-# Type-index helpers — discover hardware types from installed stubs
-# ---------------------------------------------------------------------------
-
-# The hardware types surfaced to the user in the "add definition" section.
-# Ordered by expected frequency of use.
-_ADDABLE_HW_TYPES = ["Servo", "IRSensor", "ETSensor", "AnalogSensor", "DigitalSensor"]
-
-# Friendly names for display
-_TYPE_LABELS = {
-    "Motor":         "Motor",
-    "Servo":         "Servo",
-    "IRSensor":      "IR Sensor",
-    "ETSensor":      "ET (line) Sensor",
-    "AnalogSensor":  "Analog Sensor (raw)",
-    "DigitalSensor": "Digital Sensor",
-    "SensorGroup":   "Sensor Group (line-follow pair)",
-}
-
-
-def _type_index():
-    """Return the TypeIndex singleton (lazy-load / auto-generate)."""
-    from raccoon.codegen.type_index import get_type_index
-    return get_type_index()
-
-
-def _available_hw_types() -> List[str]:
-    """Return addable hardware types that exist in the installed stubs."""
-    idx = _type_index()
-    if not idx.available:
-        return _ADDABLE_HW_TYPES
-    return [t for t in _ADDABLE_HW_TYPES if idx.resolve_by_name(t) is not None] or _ADDABLE_HW_TYPES
-
-
-def _type_init_params(type_name: str) -> List[Dict]:
-    """Return the raw init-param list for a type from the type index."""
-    idx = _type_index()
-    proxy = idx.resolve_by_name(type_name)
-    if proxy is None:
-        return []
-    return proxy._init_params  # [{name, type, required}]
-
-
-# ---------------------------------------------------------------------------
-# Per-param questionary prompt derived from stub annotations
-# ---------------------------------------------------------------------------
-
-_PORT_CHOICES = [str(i) for i in range(10)]   # 0-9: 10 digital sensor ports
-_MOTOR_PORT_CHOICES = [str(i) for i in range(4)]  # motors: 0-3
-
-
-def _prompt_param(param: Dict, default_val=None, port_choices: List[str] = _PORT_CHOICES):
-    """Ask a single init-param using an appropriate questionary widget.
-
-    Returns the typed value, or None to skip optional params.
-    """
-    name = param["name"]
-    type_str = param.get("type", "")
-    required = param["required"]
-
-    label = f"  {name}"
-
-    # Port → select from fixed choices
-    if name == "port":
-        default = str(default_val) if default_val is not None else port_choices[0]
-        if default not in port_choices:
-            default = port_choices[0]
-        raw = questionary.select(f"{label}:", choices=port_choices, default=default,
-                                 style=_STYLE).ask()
-        return None if raw is None else int(raw)
-
-    # Bool → confirm
-    if "bool" in type_str.lower():
-        default = bool(default_val) if default_val is not None else False
-        return questionary.confirm(f"{label}?", default=default, style=_STYLE).ask()
-
-    # int (other than port)
-    if "int" in type_str.lower():
-        default = str(int(default_val)) if default_val is not None else "0"
-        raw = questionary.text(f"{label}:", default=default,
-                               validate=_int_validator, style=_STYLE).ask()
-        return None if raw is None else int(raw)
-
-    # float
-    if "float" in type_str.lower():
-        default = str(float(default_val)) if default_val is not None else "0.0"
-        raw = questionary.text(f"{label}:", default=default,
-                               validate=lambda v: _pos_float_validator(v) if required else True,
-                               style=_STYLE).ask()
-        return None if raw is None else float(raw)
-
-    # str or anything else
-    if required:
-        default = str(default_val) if default_val is not None else ""
-        return questionary.text(f"{label}:", default=default, style=_STYLE).ask()
-
-    # Optional non-primitive — skip
-    return None
-
-
-def _ask_hw_params(type_name: str, existing: Optional[Dict] = None) -> Optional[Dict]:
-    """Prompt for all constructor params of a hardware type using the type index.
-
-    Returns a config dict (including 'type'), or None if the user aborted.
-    """
-    params_meta = _type_init_params(type_name)
-    existing = existing or {}
-
-    port_choices = _MOTOR_PORT_CHOICES if type_name == "Motor" else _PORT_CHOICES
-    result: Dict = {"type": type_name}
-
-    if not params_meta:
-        # Fallback for unknown types: just ask port and inverted
-        raw = questionary.select("  port:", choices=port_choices,
-                                 default=str(existing.get("port", port_choices[0])),
-                                 style=_STYLE).ask()
-        if raw is None:
-            return None
-        result["port"] = int(raw)
-        if type_name in ("Motor", "Servo", "DigitalSensor"):
-            inv = questionary.confirm("  inverted?",
-                                      default=bool(existing.get("inverted", False)),
-                                      style=_STYLE).ask()
-            if inv is None:
-                return None
-            result["inverted"] = inv
-        return result
-
-    for p in params_meta:
-        name = p["name"]
-        val = _prompt_param(p, default_val=existing.get(name), port_choices=port_choices)
-        if val is None and p["required"]:
-            return None  # user Ctrl-C'd
-        if val is not None:
-            result[name] = val
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +120,8 @@ def _connect_step(console: Console) -> bool:
     try:
         manager.connect_sync(address, port, user)
         console.print(f"[green]Connected to {manager.state.pi_hostname}[/green]")
+        manager.save_to_project(Path.cwd())
+        manager.save_to_global()
         return True
     except ParamikoVersionError as exc:
         console.print(f"[red]Paramiko version error: {exc}[/red]")
@@ -359,19 +218,17 @@ def _ask_motors(drivetrain: str, existing_defs: Dict) -> Dict[str, Tuple[int, bo
 _BUTTON_PORT_CHOICES = [str(i) for i in range(11)]  # 0-10; Wombat has 10 digital ports
 
 
-def _ask_button(existing_defs: Dict) -> Tuple[int, bool]:
-    """Return (port, inverted) for the start button DigitalSensor."""
+def _ask_button(existing_defs: Dict) -> int:
+    """Return port for the start button DigitalSensor."""
     print("\n  Button sensor (required — start/stop trigger)")
     ex = existing_defs.get("button", {})
     ex_port = ex.get("port", 10) if isinstance(ex, dict) else 10
-    ex_inv  = ex.get("inverted", False) if isinstance(ex, dict) else False
 
     port_raw = questionary.select(
         "  port:", choices=_BUTTON_PORT_CHOICES,
         default=str(ex_port), style=_STYLE
     ).ask()
-    inverted = questionary.confirm("  inverted?", default=ex_inv, style=_STYLE).ask()
-    return (int(port_raw or ex_port), bool(inverted))
+    return int(port_raw or ex_port)
 
 
 # ---------------------------------------------------------------------------
@@ -413,59 +270,7 @@ def _ask_measurements(existing_robot: Dict) -> Dict[str, float]:
 
 
 # ---------------------------------------------------------------------------
-# Step 6 — Additional hardware definitions (type-index powered)
-# ---------------------------------------------------------------------------
-
-def _ask_extra_definitions(existing_defs: Dict, skip_names: set) -> Dict:
-    """Optionally add sensor / servo definitions using stubs-derived prompts."""
-    available_types = _available_hw_types()
-    type_labels = [
-        questionary.Choice(_TYPE_LABELS.get(t, t), value=t)
-        for t in available_types
-    ]
-    added: Dict = {}
-
-    print()
-    while True:
-        more = questionary.confirm(
-            "Add another hardware definition (sensor, servo…)?",
-            default=False, style=_STYLE
-        ).ask()
-        if not more:
-            break
-
-        hw_type = questionary.select(
-            "Hardware type:", choices=type_labels, style=_STYLE
-        ).ask()
-        if hw_type is None:
-            break
-
-        default_name = hw_type.lower().replace("sensor", "_sensor")
-        name = questionary.text(
-            "Definition name (YAML key):",
-            default=default_name,
-            validate=lambda v: (
-                _identifier_validator(v) if v not in skip_names
-                else f"'{v}' is already defined."
-            ),
-            style=_STYLE,
-        ).ask()
-        if name is None:
-            break
-
-        print(f"  Configure {hw_type} '{name}':")
-        params = _ask_hw_params(hw_type, existing=existing_defs.get(name))
-        if params is None:
-            break
-
-        added[name] = params
-        skip_names.add(name)
-
-    return added
-
-
-# ---------------------------------------------------------------------------
-# Step 7 — Encoder ticks calibration (optional)
+# Step 6 — Encoder ticks calibration (optional)
 # ---------------------------------------------------------------------------
 
 def _read_remote(address: str, port: int, api_token: Optional[str], motor_port: int, inverted: bool) -> int:
@@ -620,16 +425,13 @@ def _build_motor_def(port: int, inverted: bool, ticks_to_rad: float, vel_lpf_alp
 def _build_definitions(
     motors: Dict[str, Tuple[int, bool]],
     button_port: int,
-    button_inverted: bool,
     ticks_to_rad: Dict[str, float],
     vel_lpf_alpha: float,
-    extra: Dict,
 ) -> Dict:
     defs: Dict = {"imu": {"type": "IMU"}}
     for name, (port, inverted) in motors.items():
         defs[name] = _build_motor_def(port, inverted, ticks_to_rad[name], vel_lpf_alpha)
-    defs["button"] = {"type": "DigitalSensor", "port": button_port, "inverted": button_inverted}
-    defs.update(extra)
+    defs["button"] = {"type": "DigitalSensor", "port": button_port}
     return defs
 
 
@@ -741,23 +543,17 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
     # ── 3. Motors ────────────────────────────────────────────────────────────
     print("  [Drive motors]")
     motor_defs = _ask_motors(drivetrain, ex_defs)
-    motor_names = set(motor_defs.keys())
     print()
 
     # ── 4. Button ────────────────────────────────────────────────────────────
-    button_port, button_inverted = _ask_button(ex_defs)
+    button_port = _ask_button(ex_defs)
     print()
 
     # ── 5. Physical measurements ─────────────────────────────────────────────
     measurements = _ask_measurements(ex_robot)
     print()
 
-    # ── 6. Extra definitions (type-index powered) ────────────────────────────
-    reserved = motor_names | {"imu", "button"}
-    extra_defs = _ask_extra_definitions(ex_defs, skip_names=set(reserved))
-    print()
-
-    # ── 7. Encoder ticks (optional) ──────────────────────────────────────────
+    # ── 6. Encoder ticks (optional) ──────────────────────────────────────────
     ticks_per_rev = _ask_ticks(motor_defs, ex_defs, is_connected)
 
     # ── Build config ──────────────────────────────────────────────────────────
@@ -770,9 +566,8 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
 
     merged_defs: Dict = dict(ex_defs)
     merged_defs.update(_build_definitions(
-        motor_defs, button_port, button_inverted,
+        motor_defs, button_port,
         ticks_to_rad, measurements["vel_filter_alpha"],
-        extra_defs,
     ))
     config["definitions"] = merged_defs
 

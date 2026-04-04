@@ -7,5 +7,4 @@ class M000SetupMission(Mission):
     def sequence(self) -> Sequential:
         return seq([
             calibrate(distance_cm=50),
-            wait_for_button(),
         ])
