@@ -797,3 +797,14 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
     })
 
     console.print("[green]raccoon.project.yml updated.[/green]")
+    console.print(
+        Panel(
+            "[bold yellow]Next step — physical configuration[/bold yellow]\n\n"
+            "Open the web IDE ([cyan]raccoon web[/cyan]) and go to the [bold]Device[/bold] tab "
+            "to set your robot's physical dimensions, sensor positions, rotation centre, "
+            "and starting pose.\n\n"
+            "[dim]The robot will not navigate correctly until these values are configured.[/dim]",
+            border_style="yellow",
+            expand=False,
+        )
+    )

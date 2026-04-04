@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from rich import box
+from rich.align import Align
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
@@ -100,19 +101,40 @@ def configure_logging(
     return summary
 
 
+# Pre-rendered raccoon silhouette — 28×15 unicode half-block art.
+# Generated from documentation/static/images/raccoon.svg via ImageMagick + Pillow.
+_RACCOON_ART = (
+    "       ███▄      ▄▄███      \n"
+    "▄█▀ ▄▄ ███████████████      \n"
+    "██▄▄██ ██████████████       \n"
+    "▀████▀▄▀▄██▄▄▄██▄▄▀███      \n"
+    " ███ ▄▄████████████▄▀██▄    \n"
+    " ███ ▀██████▄ ▀████████▀    \n"
+    "▄███▄  ▀██▄▀  ▄██████▀  ▄██▄\n"
+    "█████▄▄▄▄███████████▄ ▄█████\n"
+    " ███████████████████████▄▄▀█\n"
+    "▄███▀▀████████████████▀█████\n"
+    "██ █▀  ███████████████▄▄▄▀██\n"
+    "       ██████████████▀▀███▄█\n"
+    "       ███████████████ ▀██▀ \n"
+    "       █████████████████▀   \n"
+    "     ███████  ▄██████       "
+)
+
+
 def render_banner(console: Console) -> None:
     """Display an eye-catching banner at CLI start."""
-    title = Text("RACCOON TOOLCHAIN", style="bold cyan")
-    subtitle = Text("CLI for Raccoon Projects", style="bold white")
-
-    body = Text.from_markup(
-        "Generate and run your robot's competition code.",
-        style="dim white",
+    content = Text.assemble(
+        (_RACCOON_ART + "\n", "bold #9ca3af"),
+        "\n",
+        ("RACCOON TOOLCHAIN\n", "bold cyan"),
+        ("CLI for Raccoon Projects\n", "bold white"),
+        ("Generate and run your robot's competition code.", "dim white"),
     )
 
     console.print(
         Panel.fit(
-            Text.assemble(title, "\n", subtitle, "\n", body),
+            Align.center(content),
             border_style="cyan",
             box=box.ROUNDED,
             padding=(1, 4),
