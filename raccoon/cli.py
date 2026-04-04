@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import click
 from rich.console import Console
 
@@ -20,11 +18,10 @@ from raccoon.commands import (
     status_command,
     sync_command,
     lcm_group,
-    completion_group,
-    prompt_completion_setup,
     web_command,
     update_command,
     checkpoint_group,
+    reorder_command,
 )
 from raccoon.logging_utils import configure_logging, render_banner, render_summary
 
@@ -35,11 +32,6 @@ CONTEXT_SETTINGS = {
 
 def _setup_context(ctx: click.Context) -> None:
     """Ensure console and logging are ready for a command invocation."""
-    # Skip all output when generating shell completions
-    if os.environ.get("_RACCOON_COMPLETE"):
-        ctx.ensure_object(dict)
-        return
-
     ctx.ensure_object(dict)
 
     if not ctx.obj.get("initialized"):
@@ -49,8 +41,6 @@ def _setup_context(ctx: click.Context) -> None:
         ctx.obj["log_summary"] = summary
         ctx.obj["initialized"] = True
         render_banner(console)
-        # Offer shell completion setup on first run
-        prompt_completion_setup()
     else:
         summary = ctx.obj["log_summary"]
 
@@ -95,10 +85,10 @@ main.add_command(disconnect_command)
 main.add_command(status_command)
 main.add_command(sync_command)
 main.add_command(lcm_group)
-main.add_command(completion_group)
 main.add_command(web_command)
 main.add_command(update_command)
 main.add_command(checkpoint_group)
+main.add_command(reorder_command)
 
 
 if __name__ == "__main__":

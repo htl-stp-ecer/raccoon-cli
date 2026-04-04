@@ -11,10 +11,10 @@ from .connect import connect_command, disconnect_command
 from .status import status_command
 from .sync_cmd import sync_command
 from .lcm import lcm_group
-from .completion import completion_group, prompt_completion_setup
 from .web import web_command
 from .update import update_command
 from .checkpoint import checkpoint_group
+from .reorder_cmd import reorder_command
 
 __all__ = [
     "calibrate_command",
@@ -29,9 +29,8 @@ __all__ = [
     "status_command",
     "sync_command",
     "lcm_group",
-    "completion_group",
-    "prompt_completion_setup",
     "web_command",
     "update_command",
     "checkpoint_group",
+    "reorder_command",
 ]

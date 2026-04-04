@@ -81,6 +81,9 @@ def _prompt_and_connect_to_pi(console: Console, project_root: Path) -> Optional[
     return create_api_client(address, port, state.api_token)
 
 
+_MISSION_NUMBER_RE = re.compile(r'^[Mm](\d{3})')
+
+
 def _to_snake_case(name: str) -> str:
     """Convert a string to snake_case."""
     # Replace hyphens and spaces with underscores
@@ -100,6 +103,17 @@ def _to_pascal_case(name: str) -> str:
     words = re.split(r'[-_\s]+', snake)
     # Capitalize first letter of each word
     return ''.join(word.capitalize() for word in words if word)
+
+
+def _get_next_mission_number(missions: list) -> int:
+    """Return the next mission number (highest existing M-prefix + 10, or 0 if none)."""
+    max_num = -10
+    for entry in missions:
+        name = list(entry.keys())[0] if isinstance(entry, dict) else str(entry)
+        m = _MISSION_NUMBER_RE.match(name)
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+    return max(0, max_num + 10)
 
 
 def _get_templates_dir() -> Path:
@@ -353,50 +367,65 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
 def create_mission_command(ctx: click.Context, name: str) -> None:
     """Create a new mission with the given NAME in the current project."""
     console: Console = ctx.obj["console"]
-    
+
     # Ensure we're in a project
     try:
         project_root = find_project_root()
     except ProjectError as exc:
         logger.error(str(exc))
         raise SystemExit(1) from exc
-    
+
     # Load project config
     try:
         config = load_project_config(project_root)
         project_name = config.get('name', 'Raccoon Project')
+        existing_missions = config.get('missions', [])
+        if not isinstance(existing_missions, list):
+            existing_missions = []
     except ProjectError:
         project_name = 'Raccoon Project'
-    
-    # Check if user accidentally included "Mission" suffix
+        existing_missions = []
+
+    # Strip M-prefix if user already provided one (we'll re-add it)
     original_name = name
+    m = _MISSION_NUMBER_RE.match(name)
+    if m:
+        name = name[len(m.group(0)):]
+        console.print(f"[dim]Note: Stripped M-prefix from input — will be auto-assigned.[/dim]")
+
+    # Strip 'Mission' suffix if present
     if name.lower().endswith('mission'):
         name = name[:-7]
-
         console.print(f"[yellow]Note: Removed 'Mission' suffix from name.[/yellow]")
         console.print(f"[dim]  Input: '{original_name}' → Using: '{name}'[/dim]")
 
-    # Convert name to snake_case and PascalCase
-    mission_snake = _to_snake_case(name)
-    mission_pascal = _to_pascal_case(name)
-    mission_class = f"{mission_pascal}Mission"
-    
+    # Assign the next sequential mission number (M000, M010, M020 …)
+    mission_num = _get_next_mission_number(existing_missions)
+    mission_prefix = f"M{mission_num:03d}"
+
+    # Build names: M010DriveToSmth / m010_drive_to_smth
+    name_pascal = _to_pascal_case(name)
+    name_snake = _to_snake_case(name)
+    mission_pascal = f"{mission_prefix}{name_pascal}"   # M010DriveToSmth
+    mission_snake = f"m{mission_num:03d}_{name_snake}"  # m010_drive_to_smth
+    mission_class = f"{mission_pascal}Mission"           # M010DriveToSmthMission
+
     console.print(f"[cyan]Creating mission '{mission_class}'...[/cyan]")
-    
+
     # Check if mission already exists
     mission_file = project_root / "src" / "missions" / f"{mission_snake}_mission.py"
     if mission_file.exists():
         logger.error(f"Mission file already exists: {mission_file}")
         raise SystemExit(1)
-    
+
     # Get templates directory
     templates_dir = _get_templates_dir()
     mission_template = templates_dir / "mission" / "src" / "missions"
-    
+
     if not mission_template.exists():
         logger.error(f"Mission template not found at {mission_template}")
         raise SystemExit(1)
-    
+
     # Prepare template context
     import datetime
     context = {
@@ -405,17 +434,17 @@ def create_mission_command(ctx: click.Context, name: str) -> None:
         'project_name': project_name,
         'generated_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
-    
+
     # Render mission template
     template_file = mission_template / "{{mission_snake_case}}_mission.py.jinja"
     _render_template(template_file, mission_file, context)
-    
+
     # Add mission to project config
     _add_mission_to_project_config(project_root, mission_class)
-    
+
     # Add import to main.py
     _add_mission_import_to_main(project_root, mission_snake, mission_pascal)
-    
+
     console.print(f"[green]✓ Mission '{mission_class}' created successfully[/green]")
     console.print(f"[cyan]  File: {mission_file.relative_to(project_root)}[/cyan]")
     console.print(f"[cyan]  Added to raccoon.project.yml[/cyan]")
