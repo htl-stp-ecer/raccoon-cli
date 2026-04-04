@@ -248,6 +248,38 @@ async def get_command_status(command_id: str):
     )
 
 
+class RunningCommandResponse(BaseModel):
+    """Currently active command, if any."""
+
+    is_running: bool
+    command_id: Optional[str] = None
+    project_id: Optional[str] = None
+    command_type: Optional[CommandType] = None
+    started_at: Optional[str] = None
+
+
+@router.get("/commands/running", response_model=RunningCommandResponse)
+async def get_running_command():
+    """
+    Return the currently running (or pending) command, if any.
+    Returns is_running=false when the robot is idle.
+    """
+    from raccoon.server.services.executor import CommandStatus as ExecStatus
+
+    for cmd_id, cmd in _active_commands.items():
+        executor = cmd.get("executor")
+        if executor and executor.status in (ExecStatus.PENDING, ExecStatus.RUNNING):
+            return RunningCommandResponse(
+                is_running=True,
+                command_id=cmd_id,
+                project_id=cmd["project_id"],
+                command_type=cmd["command_type"],
+                started_at=cmd["started_at"],
+            )
+
+    return RunningCommandResponse(is_running=False)
+
+
 @router.post("/commands/{command_id}/cancel")
 async def cancel_command(command_id: str):
     """
