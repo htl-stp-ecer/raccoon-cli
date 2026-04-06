@@ -33,11 +33,12 @@ class DetailedMissionExtractor(cst.CSTVisitor):
         if isinstance(node.name, cst.Name):
             class_name = node.name.value
 
-            # Check if this class extends Mission
+            # Check if this class extends Mission or SetupMission
+            _MISSION_BASE_CLASSES = {"Mission", "SetupMission"}
             is_mission_class = False
             if node.bases:
                 for base in node.bases:
-                    if isinstance(base.value, cst.Name) and base.value.value == "Mission":
+                    if isinstance(base.value, cst.Name) and base.value.value in _MISSION_BASE_CLASSES:
                         is_mission_class = True
                         break
 

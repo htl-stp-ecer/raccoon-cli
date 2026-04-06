@@ -453,12 +453,10 @@ class MissionUpdater:
                     mission_file.rename(canonical_path)
                     mission_file = canonical_path
                 except OSError:
-                    # If rename fails, continue writing to the located file
                     pass
 
             if mission_file:
-                # Update existing file
-                return self.code_generator.update_mission_file(mission_file, parsed_mission)
+                return self._update_existing_file(mission_file, parsed_mission)
 
             # Create new file if none existed
             new_file = self.code_generator.create_mission_file(missions_dir, parsed_mission)
@@ -467,3 +465,27 @@ class MissionUpdater:
         except Exception as e:
             print(f"Error updating mission from JSON: {e}")
             return False
+
+    def _update_existing_file(self, mission_file: Path, parsed_mission: ParsedMission) -> bool:
+        """Update an existing mission file, preferring surgical diffing over full regen."""
+        from raccoon.ide.core.differential_mission_updater import differential_update
+        from raccoon.ide.core.analysis.detailed_mission_analyzer import DetailedMissionAnalyzer
+
+        # Parse the current on-disk state so the differ has a baseline
+        try:
+            old_mission = DetailedMissionAnalyzer().analyze_mission_file(mission_file)
+        except Exception:
+            old_mission = None
+
+        # Attempt surgical patch; fall back to full regen if it returns False
+        patched = differential_update(
+            mission_file_path=mission_file,
+            new_mission=parsed_mission,
+            old_mission=old_mission,
+            code_gen=self.code_generator,
+        )
+        if patched:
+            return True
+
+        # Full regeneration fallback
+        return self.code_generator.update_mission_file(mission_file, parsed_mission)

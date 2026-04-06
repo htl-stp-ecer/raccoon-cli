@@ -3,27 +3,16 @@
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 import click
 from rich.console import Console
 from rich.table import Table
 
+from raccoon.naming import normalize_name
 from raccoon.project import ProjectError, load_project_config, find_project_root
 
 logger = logging.getLogger("raccoon")
-
-
-def _to_snake_case(name: str) -> str:
-    """Convert a string to snake_case."""
-    # Replace hyphens and spaces with underscores
-    name = re.sub(r'[-\s]+', '_', name)
-    # Insert underscores before uppercase letters and convert to lowercase
-    name = re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
-    # Remove any duplicate underscores
-    name = re.sub(r'_+', '_', name)
-    return name.strip('_')
 
 
 @click.group(name="list")
@@ -86,7 +75,7 @@ def list_missions_command(ctx: click.Context) -> None:
             mission_base = mission_base[:-7]  # Remove 'Mission'
         
         # Convert to snake_case
-        mission_snake = _to_snake_case(mission_base)
+        mission_snake = normalize_name(mission_base, strip_suffix="").snake
         mission_file = missions_dir / f"{mission_snake}_mission.py"
         
         # Check if file exists

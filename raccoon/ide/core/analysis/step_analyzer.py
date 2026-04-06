@@ -1,6 +1,7 @@
 """Discover DSL-decorated step functions and classes from Python source."""
 
 import ast
+import textwrap
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -52,9 +53,11 @@ class StepFunction:
     file_path: str
     tags: List[str] | None = None
     chain_methods: List[StepChainMethod] | None = None
+    docstring: Optional[str] = None
+    signature: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "name": self.name,
             "import": self.import_path,
             "arguments": [arg.to_dict() for arg in self.arguments],
@@ -62,6 +65,11 @@ class StepFunction:
             "tags": self.tags or [],
             "chain_methods": [method.to_dict() for method in (self.chain_methods or [])],
         }
+        if self.docstring is not None:
+            d["docstring"] = self.docstring
+        if self.signature is not None:
+            d["signature"] = self.signature
+        return d
 
 
 class DSLStepAnalyzer:
@@ -134,15 +142,162 @@ class DSLStepAnalyzer:
             imports = self._extract_imports(ast_tree)
 
             # Find @dsl decorated functions and classes
+            found_dsl = False
             for node in ast.walk(ast_tree):
                 if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                     if self._is_dsl_step(node):
                         step_func = self._analyze_dsl_node(node, file_path, imports)
                         if step_func:
                             self.discovered_steps.append(step_func)
+                            found_dsl = True
+
+            # Fallback: for *_dsl.pyi stubs without @dsl decorator,
+            # extract DSL functions by naming convention
+            if not found_dsl and file_path.name.endswith('_dsl.pyi'):
+                self._analyze_stub_file(ast_tree, file_path, imports)
 
         except Exception as e:
             print(f"Error analyzing {file_path}: {e}")
+
+    def _analyze_stub_file(self, tree: ast.Module, file_path: Path, imports: Dict[str, str]):
+        """Extract DSL steps from stub (.pyi) files without @dsl decorator.
+
+        Stub files follow the pattern: Builder class + DSL factory function.
+        The factory function uses (*args, **kwargs) but has a rich docstring.
+        We reconstruct the signature from the builder class methods.
+        """
+        # Collect top-level nodes
+        builders: Dict[str, ast.ClassDef] = {}
+        functions: List[ast.FunctionDef] = []
+
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, ast.ClassDef) and node.name.endswith('Builder'):
+                builders[node.name] = node
+            elif isinstance(node, ast.FunctionDef) and not node.name.startswith('_'):
+                functions.append(node)
+
+        import_path = self._generate_import_path(file_path)
+
+        for func in functions:
+            docstring_raw = ast.get_docstring(func)
+            if not docstring_raw:
+                continue
+
+            docstring = textwrap.dedent(docstring_raw).strip()
+
+            # Try to find matching builder class
+            # e.g. calibrate → CalibrateBuilder
+            builder_name = func.name.replace('_', ' ').title().replace(' ', '') + 'Builder'
+            builder = builders.get(builder_name)
+
+            # Reconstruct signature from builder methods
+            signature = self._reconstruct_signature_from_builder(func.name, builder, docstring)
+
+            # Extract arguments from builder or docstring
+            arguments = self._extract_args_from_builder(builder, imports) if builder else []
+
+            # Extract tags from docstring module path
+            tags = self._infer_tags_from_path(file_path)
+
+            step = StepFunction(
+                name=func.name,
+                import_path=f"{import_path}.{func.name}",
+                arguments=arguments,
+                file_path=str(file_path),
+                tags=tags or None,
+                chain_methods=self._infer_chain_methods(func.name, tags or []),
+                docstring=docstring,
+                signature=signature,
+            )
+            self.discovered_steps.append(step)
+
+    def _reconstruct_signature_from_builder(self, func_name: str, builder: Optional[ast.ClassDef], docstring: str) -> str:
+        """Reconstruct a typed function signature from builder methods and docstring."""
+        if not builder:
+            # Parse params from docstring Args section
+            return self._signature_from_docstring(func_name, docstring)
+
+        params: List[str] = []
+        for node in ast.iter_child_nodes(builder):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if node.name.startswith('_') or node.name in ('__init__',):
+                continue
+            # Builder methods have pattern: def method_name(self, value: Type)
+            method_args = node.args.args[1:]  # skip self
+            if len(method_args) == 1:
+                arg = method_args[0]
+                annotation = f": {ast.unparse(arg.annotation)}" if arg.annotation else ""
+                # Check for default in docstring
+                default = self._find_default_in_docstring(node.name, docstring)
+                if default:
+                    params.append(f"{node.name}{annotation} = {default}")
+                else:
+                    params.append(f"{node.name}{annotation}")
+
+        return f"{func_name}({', '.join(params)})"
+
+    def _signature_from_docstring(self, func_name: str, docstring: str) -> str:
+        """Build a minimal signature from the docstring Args section."""
+        params: List[str] = []
+        in_args = False
+        for line in docstring.split('\n'):
+            trimmed = line.strip()
+            if trimmed == 'Args:':
+                in_args = True
+                continue
+            if in_args:
+                if trimmed.startswith(('Returns:', 'Example')):
+                    break
+                m = line.lstrip()
+                if m and not m[0].isspace() and ':' in m:
+                    param_name = m.split(':')[0].strip()
+                    if param_name and param_name.isidentifier():
+                        params.append(param_name)
+        return f"{func_name}({', '.join(params)})"
+
+    def _find_default_in_docstring(self, param_name: str, docstring: str) -> Optional[str]:
+        """Try to find a default value mentioned in the docstring for a parameter."""
+        # Look for patterns like "param_name: ... Defaults to X" or "param_name: ... (default: X)"
+        # This is a heuristic — not always available
+        return None
+
+    def _extract_args_from_builder(self, builder: ast.ClassDef, imports: Dict[str, str]) -> List[StepArgument]:
+        """Extract step arguments from a builder class's setter methods."""
+        args: List[StepArgument] = []
+        for node in ast.iter_child_nodes(builder):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if node.name.startswith('_'):
+                continue
+            method_args = node.args.args[1:]  # skip self
+            if len(method_args) == 1:
+                arg = method_args[0]
+                type_name, type_import, is_optional = self._resolve_type_annotation(arg.annotation, imports)
+                args.append(StepArgument(
+                    name=node.name,
+                    type_name=type_name,
+                    type_import=type_import,
+                    is_optional=is_optional,
+                    default_value=None,
+                ))
+        return args
+
+    def _infer_tags_from_path(self, file_path: Path) -> List[str]:
+        """Infer tags from the file's directory structure."""
+        parts = file_path.parts
+        tags: List[str] = []
+        # Look for known category directories
+        step_idx = None
+        for i, part in enumerate(parts):
+            if part == 'step':
+                step_idx = i
+                break
+        if step_idx is not None and step_idx + 1 < len(parts):
+            category = parts[step_idx + 1]
+            if category not in ('__pycache__',) and not category.endswith(('.py', '.pyi')):
+                tags.append(category)
+        return tags
 
     def _extract_imports(self, tree: ast.AST) -> Dict[str, str]:
         """Extract import statements to resolve type annotations"""
@@ -251,6 +406,44 @@ class DSLStepAnalyzer:
             return node.value
         return None
 
+    @staticmethod
+    def _format_function_signature(node: ast.FunctionDef) -> str:
+        """Build a human-readable function signature string."""
+        args = node.args
+        parts: list[str] = []
+
+        all_args = args.args
+        defaults = args.defaults
+        n_no_default = len(all_args) - len(defaults)
+
+        for i, arg in enumerate(all_args):
+            if arg.arg in ("self", "cls"):
+                continue
+            annotation = ""
+            if arg.annotation:
+                annotation = f": {ast.unparse(arg.annotation)}"
+            if i >= n_no_default:
+                default = ast.unparse(defaults[i - n_no_default])
+                parts.append(f"{arg.arg}{annotation} = {default}")
+            else:
+                parts.append(f"{arg.arg}{annotation}")
+
+        for i, arg in enumerate(args.kwonlyargs):
+            annotation = ""
+            if arg.annotation:
+                annotation = f": {ast.unparse(arg.annotation)}"
+            default = args.kw_defaults[i]
+            if default is not None:
+                parts.append(f"{arg.arg}{annotation} = {ast.unparse(default)}")
+            else:
+                parts.append(f"{arg.arg}{annotation}")
+
+        ret = ""
+        if node.returns:
+            ret = f" -> {ast.unparse(node.returns)}"
+
+        return f"{node.name}({', '.join(parts)}){ret}"
+
     def _analyze_dsl_node(self, node: ast.FunctionDef | ast.ClassDef, file_path: Path, imports: Dict[str, str]) -> Optional[StepFunction]:
         """Analyze a @dsl decorated function or class to extract its signature"""
         try:
@@ -276,6 +469,18 @@ class DSLStepAnalyzer:
 
             step_name = custom_name if custom_name else node.name
 
+            # Extract docstring
+            raw_docstring = ast.get_docstring(node)
+            docstring = textwrap.dedent(raw_docstring).strip() if raw_docstring else None
+
+            # Extract full signature for functions
+            signature = None
+            if isinstance(node, ast.FunctionDef):
+                try:
+                    signature = self._format_function_signature(node)
+                except Exception:
+                    pass
+
             return StepFunction(
                 name=step_name,
                 import_path=f"{import_path}.{node.name}",
@@ -283,6 +488,8 @@ class DSLStepAnalyzer:
                 file_path=str(file_path),
                 tags=tags or None,
                 chain_methods=self._infer_chain_methods(step_name, tags or []),
+                docstring=docstring,
+                signature=signature,
             )
 
         except Exception as e:

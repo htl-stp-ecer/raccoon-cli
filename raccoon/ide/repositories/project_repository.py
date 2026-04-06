@@ -62,8 +62,8 @@ class ProjectRepository:
         return data
 
     def _write_project_config(self, project_uuid: uuid.UUID, data: Dict[str, Any]) -> None:
-        config_path = self.get_project_config_path(project_uuid)
-        config_path.parent.mkdir(parents=True, exist_ok=True)
+        project_path = self.get_project_path(project_uuid)
+        project_path.mkdir(parents=True, exist_ok=True)
 
         def _normalize(obj: Dict[str, Any]) -> Dict[str, Any]:
             normalized: Dict[str, Any] = {}
@@ -74,9 +74,16 @@ class ProjectRepository:
                     normalized[key] = value
             return normalized
 
-        from raccoon.yaml_utils import save_yaml
+        from raccoon.project import save_project_keys
 
-        save_yaml(_normalize(data), config_path)
+        save_project_keys(project_path, _normalize(data))
+
+    def save_config_keys(self, project_uuid: uuid.UUID, updates: Dict[str, Any]) -> None:
+        """Write only the specified top-level keys, routing to correct files."""
+        project_path = self.get_project_path(project_uuid)
+        from raccoon.project import save_project_keys
+
+        save_project_keys(project_path, updates)
 
     def read_project_config(self, project_uuid: uuid.UUID) -> Dict[str, Any]:
         return self._load_project_config(project_uuid) or {}

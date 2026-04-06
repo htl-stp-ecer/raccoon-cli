@@ -3,77 +3,21 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 from pathlib import Path
 
 import click
 from rich.console import Console
 
+from raccoon.mission_codegen import remove_mission_import_from_main
+from raccoon.mission_config import remove_mission_from_config
+from raccoon.naming import normalize_name
 from raccoon.project import ProjectError, load_project_config, find_project_root
 
 logger = logging.getLogger("raccoon")
 
 
-def _to_snake_case(name: str) -> str:
-    """Convert a string to snake_case."""
-    # Replace hyphens and spaces with underscores
-    name = re.sub(r'[-\s]+', '_', name)
-    # Insert underscores before uppercase letters and convert to lowercase
-    name = re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
-    # Remove any duplicate underscores
-    name = re.sub(r'_+', '_', name)
-    return name.strip('_')
 
-
-def _to_pascal_case(name: str) -> str:
-    """Convert a string to PascalCase."""
-    # First convert to snake_case to handle camelCase/PascalCase inputs
-    snake = _to_snake_case(name)
-    # Split on underscores, hyphens, and spaces
-    words = re.split(r'[-_\s]+', snake)
-    # Capitalize first letter of each word
-    return ''.join(word.capitalize() for word in words if word)
-
-
-def _remove_mission_from_project_config(project_root: Path, mission_class: str) -> bool:
-    """Remove a mission from the raccoon.project.yml file. Returns True if removed."""
-    # Load existing config
-    config = load_project_config(project_root)
-    
-    # Get missions list
-    missions = config.get('missions', [])
-    if not isinstance(missions, list):
-        return False
-    
-    # Remove mission if present
-    if mission_class in missions:
-        missions.remove(mission_class)
-        config['missions'] = missions
-
-        # Write back to the correct file
-        from raccoon.project import save_project_keys
-
-        save_project_keys(project_root, {"missions": config["missions"]})
-        return True
-    
-    return False
-
-
-def _remove_mission_import_from_main(project_root: Path, mission_snake: str, mission_pascal: str) -> None:
-    """Remove mission import from main.py."""
-    main_py = project_root / "src" / "main.py"
-    
-    if not main_py.exists():
-        return
-    
-    content = main_py.read_text(encoding='utf-8')
-    import_line = f"from .missions.{mission_snake}_mission import {mission_pascal}Mission"
-    
-    lines = content.split('\n')
-    lines = [line for line in lines if import_line not in line]
-    
-    main_py.write_text('\n'.join(lines), encoding='utf-8')
 
 
 @click.group(name="remove")
@@ -105,14 +49,15 @@ def remove_mission_command(ctx: click.Context, name: str, keep_file: bool) -> No
         console.print(f"[dim]  Input: '{original_name}' → Using: '{name}'[/dim]")
 
     # Convert name to snake_case and PascalCase
-    mission_snake = _to_snake_case(name)
-    mission_pascal = _to_pascal_case(name)
+    nn = normalize_name(name, strip_suffix="")
+    mission_snake = nn.snake
+    mission_pascal = nn.pascal
     mission_class = f"{mission_pascal}Mission"
     
     console.print(f"[cyan]Removing mission '{mission_class}'...[/cyan]")
     
     # Remove from project config
-    removed_from_config = _remove_mission_from_project_config(project_root, mission_class)
+    removed_from_config = remove_mission_from_config(project_root, mission_class)
     
     if not removed_from_config:
         logger.warning(f"Mission '{mission_class}' not found in raccoon.project.yml")
@@ -120,7 +65,7 @@ def remove_mission_command(ctx: click.Context, name: str, keep_file: bool) -> No
         console.print(f"[green]✓ Removed '{mission_class}' from raccoon.project.yml[/green]")
     
     # Remove import from main.py
-    _remove_mission_import_from_main(project_root, mission_snake, mission_pascal)
+    remove_mission_import_from_main(project_root, mission_snake, mission_pascal)
     console.print(f"[green]✓ Removed import from main.py[/green]")
     
     # Remove mission file unless --keep-file is set

@@ -5,17 +5,21 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 import uuid as uuid_module
 from pathlib import Path
 from typing import Dict, Any
 
 import click
 import yaml
-from jinja2 import Environment, FileSystemLoader
 from rich.console import Console
 
 from raccoon.git_history import initialize_project_history
+from raccoon.mission_codegen import (
+    get_templates_dir, copy_template_dir, render_template,
+    add_mission_import_to_main,
+)
+from raccoon.mission_config import add_mission_to_config
+from raccoon.naming import normalize_name
 from raccoon.project import ProjectError, load_project_config, find_project_root
 
 logger = logging.getLogger("raccoon")
@@ -23,27 +27,6 @@ logger = logging.getLogger("raccoon")
 
 
 _MISSION_NUMBER_RE = re.compile(r'^[Mm](\d{3})')
-
-
-def _to_snake_case(name: str) -> str:
-    """Convert a string to snake_case."""
-    # Replace hyphens and spaces with underscores
-    name = re.sub(r'[-\s]+', '_', name)
-    # Insert underscores before uppercase letters and convert to lowercase
-    name = re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
-    # Remove any duplicate underscores
-    name = re.sub(r'_+', '_', name)
-    return name.strip('_')
-
-
-def _to_pascal_case(name: str) -> str:
-    """Convert a string to PascalCase."""
-    # First convert to snake_case to handle camelCase/PascalCase inputs
-    snake = _to_snake_case(name)
-    # Split on underscores, hyphens, and spaces
-    words = re.split(r'[-_\s]+', snake)
-    # Capitalize first letter of each word
-    return ''.join(word.capitalize() for word in words if word)
 
 
 def _get_next_mission_number(missions: list) -> int:
@@ -57,89 +40,8 @@ def _get_next_mission_number(missions: list) -> int:
     return max(0, max_num + 10)
 
 
-def _get_templates_dir() -> Path:
-    """Get the templates directory path."""
-    # Templates are inside the raccoon package at raccoon/templates/
-    import raccoon
-    package_dir = Path(raccoon.__file__).parent
-    templates_dir = package_dir / "templates"
-
-    if templates_dir.exists():
-        return templates_dir
-
-    raise ProjectError(
-        f"Templates directory not found at {templates_dir}.\n"
-        f"Please reinstall the raccoon package."
-    )
 
 
-def _render_template(template_path: Path, output_path: Path, context: Dict[str, Any]) -> None:
-    """Render a Jinja2 template file to an output path."""
-    # Set up Jinja2 environment
-    env = Environment(
-        loader=FileSystemLoader(str(template_path.parent)),
-        extensions=['jinja2_time.TimeExtension']
-    )
-    
-    # Load and render the template
-    template_name = template_path.name
-    template = env.get_template(template_name)
-    rendered = template.render(**context)
-    
-    # Write to output
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(rendered, encoding='utf-8')
-
-
-def _copy_template_dir(template_dir: Path, target_dir: Path, context: Dict[str, Any]) -> None:
-    """
-    Recursively copy and render a template directory.
-    
-    Files ending with .jinja are rendered as templates.
-    Other files are copied as-is.
-    Filenames with {{...}} are also rendered.
-    """
-    for item in template_dir.rglob('*'):
-        if item.is_file():
-            # Skip copier.yaml and other metadata files
-            if item.name in ['copier.yaml', 'codemods.yaml.jinja']:
-                continue
-            
-            # Get relative path
-            rel_path = item.relative_to(template_dir)
-            
-            # Render the output path (handle {{...}} in filenames)
-            output_path_str = str(rel_path)
-            for key, value in context.items():
-                output_path_str = output_path_str.replace(f"{{{{{key}}}}}", str(value))
-            
-            output_path = target_dir / output_path_str
-            
-            # Check if it's a Jinja template
-            if item.suffix == '.jinja':
-                # Remove .jinja extension from output
-                output_path = output_path.with_suffix('')
-                _render_template(item, output_path, context)
-            else:
-                # Copy file as-is
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(item, output_path)
-
-
-def _add_mission_to_project_config(project_root: Path, mission_class: str) -> None:
-    """Add a mission to the raccoon.project.yml file."""
-    config = load_project_config(project_root)
-
-    missions = config.get('missions', [])
-    if not isinstance(missions, list):
-        missions = []
-
-    if mission_class not in missions:
-        missions.append(mission_class)
-
-        from raccoon.project import save_project_keys
-
-        save_project_keys(project_root, {"missions": missions})
 
 
 
@@ -170,38 +72,6 @@ def _open_pycharm_with_instructions(console: Console, project_root: Path) -> Non
     console.print("[dim]Use your Pi's IP address, username 'pi', and interpreter path '/usr/bin/python3'[/dim]")
 
 
-def _add_mission_import_to_main(project_root: Path, mission_snake: str, mission_pascal: str) -> None:
-    """Add mission import and registration to main.py."""
-    main_py = project_root / "src" / "main.py"
-    
-    if not main_py.exists():
-        logger.warning(f"main.py not found at {main_py}")
-        return
-    
-    content = main_py.read_text(encoding='utf-8')
-    
-    # Add import after other mission imports
-    import_line = f"from .missions.{mission_snake}_mission import {mission_pascal}Mission"
-    
-    if import_line not in content:
-        # Find where to add the import (after other mission imports)
-        lines = content.split('\n')
-        insert_idx = 0
-        
-        for i, line in enumerate(lines):
-            if 'from .missions.' in line and 'import' in line:
-                insert_idx = i + 1
-        
-        if insert_idx == 0:
-            # No mission imports found, add after regular imports
-            for i, line in enumerate(lines):
-                if line.strip() and not line.startswith('#') and not line.startswith('"""') and 'import' not in line:
-                    insert_idx = i
-                    break
-        
-        lines.insert(insert_idx, import_line)
-        content = '\n'.join(lines)
-        main_py.write_text(content, encoding='utf-8')
 
 
 
@@ -234,7 +104,7 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
     target_dir.mkdir(parents=True, exist_ok=True)
 
     # Get templates directory
-    templates_dir = _get_templates_dir()
+    templates_dir = get_templates_dir()
     project_template = templates_dir / "project_scaffold"
 
     if not project_template.exists():
@@ -247,14 +117,14 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
     # Prepare template context
     import datetime
     context = {
-        'project_id': _to_snake_case(name),
+        'project_id': normalize_name(name, strip_suffix="").snake,
         'project_name': name,
         'project_uuid': project_uuid,
         'generated_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
     # Copy and render templates (includes raccoon.project.yml)
-    _copy_template_dir(project_template, target_dir, context)
+    copy_template_dir(project_template, target_dir, context)
 
     console.print(f"[green]✓ Project '{name}' scaffolded at {target_dir}[/green]")
     console.print(f"[cyan]Project UUID: {project_uuid}[/cyan]")
@@ -337,8 +207,9 @@ def create_mission_command(ctx: click.Context, name: str) -> None:
     mission_prefix = f"M{mission_num:03d}"
 
     # Build names: M010DriveToSmth / m010_drive_to_smth
-    name_pascal = _to_pascal_case(name)
-    name_snake = _to_snake_case(name)
+    nn = normalize_name(name, strip_suffix="")
+    name_pascal = nn.pascal
+    name_snake = nn.snake
     mission_pascal = f"{mission_prefix}{name_pascal}"   # M010DriveToSmth
     mission_snake = f"m{mission_num:03d}_{name_snake}"  # m010_drive_to_smth
     mission_class = f"{mission_pascal}Mission"           # M010DriveToSmthMission
@@ -352,7 +223,7 @@ def create_mission_command(ctx: click.Context, name: str) -> None:
         raise SystemExit(1)
 
     # Get templates directory
-    templates_dir = _get_templates_dir()
+    templates_dir = get_templates_dir()
     mission_template = templates_dir / "mission" / "src" / "missions"
 
     if not mission_template.exists():
@@ -370,13 +241,13 @@ def create_mission_command(ctx: click.Context, name: str) -> None:
 
     # Render mission template
     template_file = mission_template / "{{mission_snake_case}}_mission.py.jinja"
-    _render_template(template_file, mission_file, context)
+    render_template(template_file, mission_file, context)
 
     # Add mission to project config
-    _add_mission_to_project_config(project_root, mission_class)
+    add_mission_to_config(project_root, mission_class)
 
     # Add import to main.py
-    _add_mission_import_to_main(project_root, mission_snake, mission_pascal)
+    add_mission_import_to_main(project_root, mission_snake, mission_pascal)
 
     console.print(f"[green]✓ Mission '{mission_class}' created successfully[/green]")
     console.print(f"[cyan]  File: {mission_file.relative_to(project_root)}[/cyan]")

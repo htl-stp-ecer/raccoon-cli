@@ -1,26 +1,21 @@
-"""Project code generation using raccoon's existing CLI helpers."""
+"""Project code generation using raccoon's shared helpers."""
 
 from pathlib import Path
 from uuid import UUID
 
 from raccoon.ide.core.naming import NormalizedName
 from raccoon.ide.repositories.project_repository import ProjectRepository
-
-# Import raccoon's existing mission helpers
-from raccoon.commands.create import (
-    _get_templates_dir,
-    _copy_template_dir,
-    _add_mission_to_project_config,
-    _add_mission_import_to_main,
+from raccoon.mission_codegen import (
+    get_templates_dir,
+    copy_template_dir,
+    add_mission_import_to_main,
+    remove_mission_import_from_main,
 )
-from raccoon.commands.remove_cmd import (
-    _remove_mission_from_project_config,
-    _remove_mission_import_from_main,
-)
+from raccoon.mission_config import add_mission_to_config, remove_mission_from_config
 
 
 class ProjectCodeGen:
-    """Code generation for projects and missions using raccoon CLI helpers."""
+    """Code generation for projects and missions using raccoon shared helpers."""
 
     def __init__(
         self,
@@ -29,7 +24,7 @@ class ProjectCodeGen:
     ):
         self.project_repository = project_repository
         if template_root is None:
-            template_root = _get_templates_dir()
+            template_root = get_templates_dir()
         self.template_root = Path(template_root)
 
     def add_mission_to_project(
@@ -67,14 +62,14 @@ class ProjectCodeGen:
             "project_name": project_path.name,
             "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        _copy_template_dir(template_path, project_path, context)
+        copy_template_dir(template_path, project_path, context)
 
         # Add import to main.py
-        _add_mission_import_to_main(project_path, mission_name.snake, mission_name.pascal)
+        add_mission_import_to_main(project_path, mission_name.snake, mission_name.pascal)
 
         # Add to project config
         mission_class_name = f"{mission_name.pascal}Mission"
-        _add_mission_to_project_config(project_path, mission_class_name)
+        add_mission_to_config(project_path, mission_class_name)
 
     def remove_mission_from_project(
         self,
@@ -101,10 +96,10 @@ class ProjectCodeGen:
         mission_class = f"{mission_pascal}Mission"
 
         # Remove from config
-        _remove_mission_from_project_config(project_path, mission_class)
+        remove_mission_from_config(project_path, mission_class)
 
         # Remove import from main.py
-        _remove_mission_import_from_main(project_path, mission_snake, mission_pascal)
+        remove_mission_import_from_main(project_path, mission_snake, mission_pascal)
 
         # Delete file if requested
         if delete_file:

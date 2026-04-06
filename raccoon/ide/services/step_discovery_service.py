@@ -264,6 +264,8 @@ class StepDiscoveryService:
         # Extract tags from cached entry
         tags_raw = entry.get("tags")
         tags = [t for t in tags_raw if isinstance(t, str)] if isinstance(tags_raw, list) else None
+        docstring = entry.get("docstring")
+        signature = entry.get("signature")
         return StepFunction(
             name=name,
             import_path=import_path,
@@ -271,6 +273,8 @@ class StepDiscoveryService:
             file_path=file_path,
             tags=tags if tags else None,
             chain_methods=chain_methods if chain_methods else None,
+            docstring=docstring if isinstance(docstring, str) else None,
+            signature=signature if isinstance(signature, str) else None,
         )
 
     def _chain_method_from_dict(self, entry: Dict[str, Any]) -> Optional[StepChainMethod]:

@@ -18,7 +18,7 @@ from contextlib import suppress
 from raccoon.ide.core.analysis.detailed_mission_analyzer import DetailedMissionAnalyzer
 from raccoon.ide.core.analysis.mission_analyzer import MissionAnalyzer
 from raccoon.ide.core.mission_code_generator import MissionUpdater
-from raccoon.commands.remove_cmd import _remove_mission_import_from_main
+from raccoon.mission_codegen import remove_mission_import_from_main
 from raccoon.ide.core.project_config import (
     ensure_mission_list,
     is_special_mission,
@@ -846,7 +846,7 @@ class MissionService:
             else:
                 insert_idx = remaining_normals[desired_pos]
             missions_payload.insert(insert_idx, entry)
-            self._repo.write_project_config(project_uuid, config)
+            self._repo.save_config_keys(project_uuid, {"missions": config["missions"]})
             return True
         except Exception as e:
             logger.error(
@@ -872,10 +872,10 @@ class MissionService:
             config = self._repo.read_project_config(project_uuid)
             refs_removed = remove_mission_entry(config, mission_class)
             if refs_removed:
-                self._repo.write_project_config(project_uuid, config)
+                self._repo.save_config_keys(project_uuid, {"missions": config["missions"]})
 
             # Remove import from main.py
-            _remove_mission_import_from_main(project_path, nn.snake, nn.pascal)
+            remove_mission_import_from_main(project_path, nn.snake, nn.pascal)
 
             # Delete the mission file if present
             missions_dir = project_path / "src" / "missions"
@@ -931,7 +931,7 @@ class MissionService:
             config = self._repo.read_project_config(project_uuid)
             refs_changed = rename_mission_entry(config, old_class, new_class)
             if refs_changed:
-                self._repo.write_project_config(project_uuid, config)
+                self._repo.save_config_keys(project_uuid, {"missions": config["missions"]})
 
             # Rename the mission file and class definition
             missions_dir = project_path / "src" / "missions"
