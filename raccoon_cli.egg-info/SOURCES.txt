@@ -176,7 +176,7 @@ raccoon/web-ide-dist/chunk-AS23F5I6.js
 raccoon/web-ide-dist/chunk-TYQ52JMZ.js
 raccoon/web-ide-dist/favicon.ico
 raccoon/web-ide-dist/index.html
-raccoon/web-ide-dist/main-QSABTCSX.js
+raccoon/web-ide-dist/main-SGXJ2QLA.js
 raccoon/web-ide-dist/polyfills-DHHU6LMO.js
 raccoon/web-ide-dist/styles-DB4QMXHW.css
 raccoon/web-ide-dist/worker-GRH3XMWF.js
