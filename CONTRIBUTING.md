@@ -7,7 +7,7 @@
 raccoon-cli is a standard Python package. Install it in editable mode:
 
 ```bash
-git clone https://github.com/htl-stp-ecer/raccoon-cli.git
+git clone https://github.com/htl-stp-ecer/raccoon-cli.git --recurse-submodules
 cd raccoon-cli
 pip install -e .
 ```
@@ -154,3 +154,5 @@ Keep laptop-only code in `client/` and Pi-only code in `server/`. Commands that 
 3. Stream output back with `OutputHandler`
 
 See `commands/run.py` for a full example.
+
+Client and Server should use shared services & repositiories and only differ in the interfacing layer - Especially important for the web ide server and cli
