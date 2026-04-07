@@ -7,7 +7,7 @@
 **The dev toolchain for RaccoonOS — scaffold, configure, sync, and run Botball robots.**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
-![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=ffdd54)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=ffdd54)
 ![PyPI](https://img.shields.io/pypi/v/raccoon-cli?logo=pypi&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-KIPR%20Wombat-orange)
 
