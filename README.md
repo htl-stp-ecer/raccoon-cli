@@ -1,15 +1,25 @@
-# Raccoon
+<div align="center">
 
-A toolchain CLI for Botball robot development on Raspberry Pi (Wombat). Raccoon streamlines project creation, hardware configuration, code generation, motor calibration, and remote development.
+<img src="https://raw.githubusercontent.com/htl-stp-ecer/.github/main/profile/raccoon-logo.svg" alt="raccoon-cli" width="100"/>
 
-## Features
+# raccoon-cli
 
-- **Project Scaffolding** - Create new robot projects with proper structure and configuration
-- **Interactive Hardware Wizard** - Configure motors, sensors, and drivetrain through guided prompts
-- **Code Generation** - Generate Python hardware classes from YAML configuration
-- **Motor Calibration** - Determine optimal PID and feedforward parameters for your motors
-- **Remote Development** - Develop on your laptop and run on the Pi with automatic file sync
-- **Web IDE** - Browser-based development environment
+**The dev toolchain for RaccoonOS — scaffold, configure, sync, and run Botball robots.**
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=ffdd54)
+![PyPI](https://img.shields.io/pypi/v/raccoon-cli?logo=pypi&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-KIPR%20Wombat-orange)
+
+> 📖 **Full documentation at [raccoon-docs.pages.dev](https://raccoon-docs.pages.dev/)**
+
+</div>
+
+---
+
+`raccoon` is the command-line companion to [RaccoonLib](https://github.com/htl-stp-ecer/raccoon-lib). It handles everything outside the robot code itself: creating projects, generating hardware boilerplate from a YAML config, syncing files to the Pi, and running your missions remotely.
+
+---
 
 ## Installation
 
@@ -17,161 +27,179 @@ A toolchain CLI for Botball robot development on Raspberry Pi (Wombat). Raccoon 
 pip install raccoon-cli
 ```
 
-### Development (from source)
-
-```bash
-git clone <repository-url>
-cd toolchain
-pip install -e .
-```
-
-### Transport Package
-
-If you need the shared Python LCM transport package during development, install it separately:
-
-```bash
-pip install -e raccoon-transport/python
-```
+---
 
 ## Quick Start
 
-### Create a New Project
-
 ```bash
+# 1. Create a new project (runs the hardware wizard automatically)
 raccoon create project MyRobot
 cd MyRobot
-```
 
-### Configure Hardware
+# 2. Connect to your Pi
+raccoon connect 192.168.4.1
 
-```bash
-raccoon wizard
-```
-
-The wizard will guide you through:
-- Drivetrain type (mecanum or differential)
-- Motor ports and inversion settings
-- Robot measurements (wheel diameter, track width)
-
-### Generate Hardware Code
-
-```bash
-raccoon codegen
-```
-
-This generates `src/hardware/defs.py` and `src/hardware/robot.py` from your `raccoon.project.yml` configuration.
-
-### Calibrate Motors
-
-```bash
-raccoon calibrate
-```
-
-Runs calibration routines to determine PID and feedforward parameters, saving results to your project config.
-
-### Run Your Project
-
-```bash
+# 3. Sync + run
 raccoon run
 ```
 
-Automatically regenerates code and executes `src/main.py`.
+That's it. `raccoon run` regenerates any stale code, syncs changed files to the Pi, and streams output back to your terminal.
 
-## Remote Development
+---
 
-Develop on your laptop and run on the Raspberry Pi:
+## How it works
 
-### 1. Connect to Your Pi
+raccoon uses a **client-server architecture**. Your laptop runs the CLI; the Pi runs a small FastAPI daemon (`raccoon-server`) that receives commands, manages execution, and streams logs back.
 
-```bash
-raccoon connect 192.168.4.1
-```
-
-### 2. Sync and Run
+### Pi setup (one time)
 
 ```bash
-raccoon run  # Auto-syncs files and runs on Pi
+# On the Pi -- install raccoon-server as a systemd service
+sudo raccoon-server install
 ```
 
-### 3. Manual Sync
+After that, the server starts automatically on boot and `raccoon connect` can reach it.
 
-```bash
-raccoon sync           # Sync changed files
-raccoon sync --force   # Re-upload all files
-```
+---
 
-See [Remote Development Guide](docs/REMOTE_DEVELOPMENT.md) for detailed setup instructions.
-See [Python API Reference](docs/PYTHON_API.md) for maintained package- and module-level docs.
+## Commands
 
-## Project Structure
+### Project management
 
-After creating a project:
+| Command | Description |
+|:--------|:------------|
+| `raccoon create project <name>` | Scaffold a new project and run the hardware wizard |
+| `raccoon create mission <name>` | Add a new mission to the current project |
+| `raccoon list projects` | List all projects in the current directory |
+| `raccoon list missions` | List missions in the current project |
+| `raccoon remove mission <name>` | Remove a mission |
+| `raccoon reorder` | Interactively reorder missions |
+
+### Hardware & code generation
+
+| Command | Description |
+|:--------|:------------|
+| `raccoon wizard` | Re-run the interactive hardware configuration |
+| `raccoon codegen` | Regenerate `src/hardware/defs.py` and `src/hardware/robot.py` from config |
+| `raccoon calibrate` | Two-phase calibration: measure encoder ticks/rev, then run autotune |
+
+### Remote development
+
+| Command | Description |
+|:--------|:------------|
+| `raccoon connect <address>` | Connect to a Pi server |
+| `raccoon disconnect` | Disconnect from the current Pi |
+| `raccoon status` | Show connection status |
+| `raccoon sync` | Sync changed files to the Pi (uses content hashing) |
+| `raccoon sync --force` | Re-upload all files |
+| `raccoon run` | Regenerate code, sync, and run on the Pi |
+
+### Debugging
+
+| Command | Description |
+|:--------|:------------|
+| `raccoon lcm spy` | Live-inspect LCM messages on the bus |
+| `raccoon lcm record <file>` | Record LCM traffic to a file |
+| `raccoon checkpoint list` | List saved checkpoints |
+| `raccoon checkpoint restore <id>` | Restore project to a checkpoint |
+
+### Tooling
+
+| Command | Description |
+|:--------|:------------|
+| `raccoon update` | Update raccoon-cli to the latest version |
+| `raccoon completion` | Install shell tab-completion |
+| `raccoon web` | Launch the web IDE |
+
+---
+
+## Project structure
+
+`raccoon create project` generates:
 
 ```
 MyRobot/
-├── raccoon.project.yml    # Main configuration (hardware, motors, connection)
+├── raccoon.project.yml    # Hardware config -- motors, sensors, drivetrain, connection
 ├── src/
-│   ├── main.py            # Entry point
+│   ├── main.py
 │   ├── hardware/
-│   │   ├── defs.py        # Generated hardware definitions
-│   │   └── robot.py       # Generated robot class
+│   │   ├── defs.py        # Generated -- do not edit by hand
+│   │   └── robot.py       # Generated -- do not edit by hand
 │   ├── missions/
 │   │   ├── setup_mission.py
 │   │   └── shutdown_mission.py
 │   └── steps/
-└── ...
+└── .raccoonignore         # match patterns excluded from sync
 ```
 
-## Commands Reference
+`defs.py` and `robot.py` are regenerated by `raccoon codegen` (and automatically on every `raccoon run`). Edit `raccoon.project.yml` or re-run `raccoon wizard` to change hardware config - never edit the generated files directly.
 
-| Command | Description |
-|---------|-------------|
-| `raccoon create project <name>` | Create a new project |
-| `raccoon create mission <name>` | Add a mission to current project |
-| `raccoon list projects` | List all projects in directory |
-| `raccoon list missions` | List missions in current project |
-| `raccoon remove mission <name>` | Remove a mission |
-| `raccoon wizard` | Interactive hardware configuration |
-| `raccoon codegen` | Generate code from configuration |
-| `raccoon calibrate` | Calibrate motor parameters |
-| `raccoon run` | Run the project |
-| `raccoon connect <address>` | Connect to a Pi server |
-| `raccoon sync` | Sync files to connected Pi |
-| `raccoon status` | Show connection status |
-| `raccoon disconnect` | Disconnect from Pi |
-| `raccoon web` | Launch web IDE |
-
-See [COMMANDS.md](COMMANDS.md) for detailed command documentation.
+---
 
 ## Configuration
 
-### Project Configuration (`raccoon.project.yml`)
+`raccoon create project` generates a split config layout. The root file just glues things together:
+
+### `raccoon.project.yml`
 
 ```yaml
 name: MyRobot
-uuid: unique-identifier
-missions:
-  - SetupMission
-  - ShutdownMission
+uuid: <auto-generated>
 
-drivetrain_type: mecanum  # or differential
-
-motors:
-  front_left_motor:
-    type: Motor
-    port: 0
-    inverted: false
-    calibration:
-      pid: {kp: 4.4, ki: 10.0, kd: 0.165}
-      ff: {kS: 0.024, kV: 0.041, kA: 0.007}
-
-connection:
-  pi_address: 192.168.4.1
-  pi_port: 8421
-  pi_user: pi
+robot:       !include 'config/robot.yml'
+missions:    !include 'config/missions.yml'
+definitions: !include 'config/hardware.yml'
+connection:  !include 'config/connection.yml'
 ```
 
-### Global Configuration (`~/.raccoon/config.yml`)
+### `config/hardware.yml` -- sensors, motors, servos
+
+```yaml
+button:
+  type: DigitalSensor
+  port: 10
+imu:
+  type: IMU
+front_left_ir_sensor:
+  type: IRSensor
+  port: 1
+front_right_ir_sensor:
+  type: IRSensor
+  port: 2
+
+_motors: !include-merge 'motors.yml'
+_servos: !include-merge 'servos.yml'
+```
+
+### `config/motors.yml`
+
+```yaml
+left_motor:
+  type: Motor
+  port: 0
+  inverted: false
+  calibration:
+    ticks_to_rad: 0.00002   # set by raccoon calibrate
+    vel_lpf_alpha: 1.0
+right_motor:
+  type: Motor
+  port: 1
+  inverted: true
+  calibration:
+    ticks_to_rad: 0.00002
+    vel_lpf_alpha: 1.0
+```
+
+### `config/connection.yml`
+
+```yaml
+pi_address: 192.168.4.1
+pi_port: 8421
+pi_user: pi
+auto_connect: true
+```
+
+### `~/.raccoon/config.yml` (global)
 
 ```yaml
 known_pis:
@@ -180,54 +208,25 @@ known_pis:
 default_pi_user: pi
 ```
 
+---
+
+## Part of RaccoonOS
+
+| Repository | What it is |
+|:-----------|:-----------|
+| [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib) | Core robotics library |
+| [raccoon-example](https://github.com/htl-stp-ecer/raccoon-example) | Reference robot -- start here if you're new |
+| [raccoon-transport](https://github.com/htl-stp-ecer/raccoon-transport) | LCM messaging layer |
+| [documentation](https://raccoon-docs.pages.dev/) | Full platform docs |
+
+---
+
 ## Contributing
 
-### Development Setup
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get started contributing
 
-```bash
-git clone <repository-url>
-cd toolchain
-pip install -e .
-```
-
-### Running Tests
-
-```bash
-pytest tests/
-pytest tests/test_sftp_sync.py -v  # Specific test file
-```
-
-### Project Layout
-
-```
-raccoon/
-├── cli.py              # Main CLI entry point (Click)
-├── project.py          # Project discovery and validation
-├── commands/           # CLI command implementations
-├── codegen/            # Code generation system
-│   ├── pipeline.py     # Generation orchestrator
-│   └── generators/     # Pluggable generators
-├── client/             # Laptop-side (SSH, SFTP, HTTP client)
-├── server/             # Pi-side FastAPI daemon
-└── templates/          # Jinja2 project templates
-```
-
-### Key Concepts
-
-- **Generators** are pluggable modules in `codegen/generators/` that transform YAML config into Python code
-- **SFTP Sync** uses content hashing to efficiently sync only changed files
-- **Client-Server** architecture separates laptop CLI from Pi execution daemon
-
-### Code Style
-
-- Use [Black](https://black.readthedocs.io/) for formatting
-- Follow existing patterns in the codebase
-
-## Requirements
-
-- Python 3.8+
-- Raspberry Pi with Botball Wombat controller (for robot execution)
 
 ## License
 
-[Add license information]
+Copyright (C) 2026 Tobias Madlberger  
+Licensed under the GNU General Public License v3.0 -- see [COPYING](COPYING) for details.

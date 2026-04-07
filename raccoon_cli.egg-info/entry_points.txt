@@ -1,3 +1,0 @@
-[console_scripts]
-raccoon = raccoon.cli:main
-raccoon-server = raccoon.server.cli:main
