@@ -606,6 +606,54 @@ class MissionService:
                 return candidate
         return None
 
+    def get_mission_source(self, project_uuid: UUID, mission_name: str) -> Optional[str]:
+        """Return the raw Python source code for a mission file.
+
+        Falls back to generating code from the parsed mission (snapshot or
+        analysis) when no physical .py file exists on disk.
+        """
+        project_path = self._repo.get_project_path(project_uuid)
+        if not project_path or not project_path.exists():
+            return None
+
+        # Try the on-disk file first
+        file_path = self._mission_file_path(project_path, mission_name)
+        if file_path and file_path.is_file():
+            try:
+                return file_path.read_text(encoding="utf-8")
+            except Exception as exc:
+                logger.error("Failed to read mission source %s: %s", file_path, exc)
+
+        # No file on disk — generate from parsed mission data
+        parsed = self.get_detailed_mission_by_name(project_uuid, mission_name)
+        if parsed is None:
+            return None
+        try:
+            from raccoon.ide.core.mission_code_generator import MissionCodeGenerator
+            return MissionCodeGenerator().generate_mission_code(parsed)
+        except Exception as exc:
+            logger.error("Failed to generate mission source for '%s': %s", mission_name, exc)
+            return None
+
+    def save_mission_source(self, project_uuid: UUID, mission_name: str, source: str) -> bool:
+        """Write raw Python source code back to a mission file."""
+        project_path = self._repo.get_project_path(project_uuid)
+        if not project_path or not project_path.exists():
+            return False
+        file_path = self._mission_file_path(project_path, mission_name)
+        if not file_path:
+            # File doesn't exist yet — create it in src/missions/
+            missions_dir = project_path / "src" / "missions"
+            missions_dir.mkdir(parents=True, exist_ok=True)
+            normalized = normalize_name(mission_name).snake
+            file_path = missions_dir / f"{normalized}_mission.py"
+        try:
+            file_path.write_text(source, encoding="utf-8")
+            return True
+        except Exception as exc:
+            logger.error("Failed to write mission source %s: %s", file_path, exc)
+            return False
+
     def _count_breakpoints(self, mission: ParsedMission | None) -> int:
         if not mission or not mission.steps:
             return 0

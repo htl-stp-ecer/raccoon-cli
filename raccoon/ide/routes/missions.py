@@ -110,6 +110,61 @@ async def parse_mission_detailed(
         raise HTTPException(status_code=500, detail="Internal server error while fetching mission details")
 
 
+@router.get("/{project_uuid}/source/{mission_name}")
+async def get_mission_source(
+        project_uuid: UUID,
+        mission_name: str,
+        svc: MissionService = Depends(get_mission_service),
+):
+    """Return the raw Python source code for a mission file."""
+    if not mission_name or not mission_name.strip():
+        raise HTTPException(status_code=400, detail="Mission name cannot be empty")
+
+    mission_name = mission_name.strip()
+
+    try:
+        source = await asyncio.to_thread(svc.get_mission_source, project_uuid, mission_name)
+        if source is None:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_name}' source not found")
+        return {"name": mission_name, "source": source}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get source for mission '{mission_name}' in project {project_uuid}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error while fetching mission source")
+
+
+class SaveMissionSourceRequest(BaseModel):
+    """Payload for saving raw mission source code."""
+
+    source: str = Field(..., description="Python source code")
+
+
+@router.put("/{project_uuid}/source/{mission_name}")
+async def save_mission_source(
+        project_uuid: UUID,
+        mission_name: str,
+        request: SaveMissionSourceRequest,
+        svc: MissionService = Depends(get_mission_service),
+):
+    """Save raw Python source code back to a mission file."""
+    if not mission_name or not mission_name.strip():
+        raise HTTPException(status_code=400, detail="Mission name cannot be empty")
+
+    mission_name = mission_name.strip()
+
+    try:
+        success = await asyncio.to_thread(svc.save_mission_source, project_uuid, mission_name, request.source)
+        if not success:
+            raise HTTPException(status_code=404, detail=f"Mission '{mission_name}' not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save source for mission '{mission_name}' in project {project_uuid}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error while saving mission source")
+
+
 @router.post("/{project_uuid}")
 async def create_mission(
         project_uuid: UUID,
