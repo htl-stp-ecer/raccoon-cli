@@ -230,4 +230,5 @@ raccoon/
 
 ## License
 
-[Add license information]
+Copyright (C) 2026 Tobias Madlberger  
+Licensed under the GNU General Public License v3.0 — see [COPYING](COPYING) for details.
