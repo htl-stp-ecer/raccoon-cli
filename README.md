@@ -221,6 +221,11 @@ default_pi_user: pi
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get started contributing
+
+
 ## License
 
 Copyright (C) 2026 Tobias Madlberger  
