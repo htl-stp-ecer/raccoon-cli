@@ -12,7 +12,6 @@ jobs:
     runs-on: self-hosted
     permissions:
       contents: write
-      id-token: write  # required for PyPI Trusted Publishing
 
     steps:
       - name: Checkout (with submodules)
@@ -120,14 +119,44 @@ jobs:
             raccoon-transport/python/dist/raccoon_transport-*.whl
             raccoon-server-v${{ env.VERSION }}.tar.gz
 
-      # --- Publish raccoon-transport to PyPI ---
+      # --- Upload wheels as artifacts for the publish job ---
+      - name: Upload raccoon-cli wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: raccoon-cli-wheel
+          path: dist/raccoon_cli-*.whl
+
+      - name: Upload raccoon-transport wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: raccoon-transport-wheel
+          path: raccoon-transport/python/dist/raccoon_transport-*.whl
+
+  publish-pypi:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # required for PyPI Trusted Publishing
+
+    steps:
+      - name: Download raccoon-cli wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: raccoon-cli-wheel
+          path: cli-dist/
+
+      - name: Download raccoon-transport wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: raccoon-transport-wheel
+          path: transport-dist/
+
       - name: Publish raccoon-transport to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: raccoon-transport/python/dist/
+          packages-dir: transport-dist/
 
-      # --- Publish raccoon-cli to PyPI ---
       - name: Publish raccoon-cli to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist/
+          packages-dir: cli-dist/
