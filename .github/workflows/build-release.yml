@@ -75,7 +75,7 @@ jobs:
         run: |
           mkdir -p server-release
           cp raccoon-transport/python/dist/raccoon_transport-*.whl server-release/
-          cp dist/raccoon-*.whl server-release/
+          cp dist/raccoon_cli-*.whl server-release/
           cp install.py server-release/
           cd server-release && tar czf ../raccoon-server-v${{ env.VERSION }}.tar.gz *
 
@@ -83,7 +83,7 @@ jobs:
       - name: Resolve artifact filenames
         id: artifacts
         run: |
-          echo "raccoon_whl=$(basename dist/raccoon-*.whl)" >> "$GITHUB_OUTPUT"
+          echo "raccoon_whl=$(basename dist/raccoon_cli-*.whl)" >> "$GITHUB_OUTPUT"
           echo "transport_whl=$(basename raccoon-transport/python/dist/raccoon_transport-*.whl)" >> "$GITHUB_OUTPUT"
           echo "server_tar=raccoon-server-v${{ env.VERSION }}.tar.gz" >> "$GITHUB_OUTPUT"
 
@@ -116,7 +116,7 @@ jobs:
             gh release download v${{ env.VERSION }} -R ${{ github.repository }} -p "${{ steps.artifacts.outputs.server_tar }}" && tar xzf ${{ steps.artifacts.outputs.server_tar }} && RPI_HOST=192.168.4.1 python3 install.py
             ```
           files: |
-            dist/raccoon-*.whl
+            dist/raccoon_cli-*.whl
             raccoon-transport/python/dist/raccoon_transport-*.whl
             raccoon-server-v${{ env.VERSION }}.tar.gz
 
