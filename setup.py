@@ -65,21 +65,19 @@ class BuildWithExtras(build_py):
                 "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
             )
 
-        # Install npm dependencies if needed
-        node_modules = web_ide_dir / "node_modules"
-        if not node_modules.exists():
-            print("Installing web IDE dependencies...")
-            result = subprocess.run(
-                [npm_cmd, "install"],
-                cwd=web_ide_dir,
-                capture_output=True,
-                text=True,
+        # Install npm dependencies (always run to keep node_modules in sync)
+        print("Installing web IDE dependencies...")
+        result = subprocess.run(
+            [npm_cmd, "install"],
+            cwd=web_ide_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise WebIDEBuildError(
+                f"npm install failed:\n{result.stderr}\n"
+                "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
             )
-            if result.returncode != 0:
-                raise WebIDEBuildError(
-                    f"npm install failed:\n{result.stderr}\n"
-                    "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
-                )
 
         # Build Angular app
         print("Building web IDE...")

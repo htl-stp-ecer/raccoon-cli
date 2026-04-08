@@ -34,7 +34,7 @@ jobs:
           cache-dependency-path: web-ide/package-lock.json
 
       - name: Install web-IDE dependencies
-        run: npm ci
+        run: npm install
         working-directory: web-ide
 
       - name: Cache pip
