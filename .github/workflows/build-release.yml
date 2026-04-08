@@ -119,18 +119,12 @@ jobs:
             raccoon-transport/python/dist/raccoon_transport-*.whl
             raccoon-server-v${{ env.VERSION }}.tar.gz
 
-      # --- Upload wheels as artifacts for the publish job ---
+      # --- Upload wheel as artifact for the publish job ---
       - name: Upload raccoon-cli wheel
         uses: actions/upload-artifact@v4
         with:
           name: raccoon-cli-wheel
           path: dist/raccoon_cli-*.whl
-
-      - name: Upload raccoon-transport wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: raccoon-transport-wheel
-          path: raccoon-transport/python/dist/raccoon_transport-*.whl
 
   publish-pypi:
     needs: build-and-release
@@ -143,20 +137,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: raccoon-cli-wheel
-          path: cli-dist/
-
-      - name: Download raccoon-transport wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: raccoon-transport-wheel
-          path: transport-dist/
-
-      - name: Publish raccoon-transport to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: transport-dist/
+          path: dist/
 
       - name: Publish raccoon-cli to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: cli-dist/
+          packages-dir: dist/
