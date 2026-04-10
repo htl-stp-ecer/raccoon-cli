@@ -15,7 +15,7 @@ from raccoon.client.connection import (
 )
 from raccoon.client.api import create_api_client
 from raccoon.project import find_project_root, load_project_config
-from raccoon.version_checker import check_all_versions, check_gh_available, render_version_table
+from raccoon.version_checker import check_all_versions, render_version_table
 
 
 @click.command(name="status")
@@ -155,11 +155,6 @@ def _try_auto_connect(console, manager, project_root):
 
 def _show_package_versions(console: Console, manager) -> None:
     """Show package version information."""
-    if not check_gh_available():
-        console.print()
-        console.print("[dim]Install the GitHub CLI (gh) to see package versions.[/dim]")
-        return
-
     ssh_client = None
     if manager.is_connected:
         try:

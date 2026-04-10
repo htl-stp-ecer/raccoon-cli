@@ -6,12 +6,12 @@ import fnmatch
 import json
 import logging
 import os
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import httpx
 import yaml
 from rich.console import Console
 from rich.table import Table
@@ -19,6 +19,8 @@ from rich.table import Table
 logger = logging.getLogger("raccoon")
 
 INSTALLED_VERSIONS_PATH = ".raccoon/installed_versions.yml"
+
+GITHUB_API = "https://api.github.com"
 
 
 @dataclass
@@ -32,31 +34,35 @@ class PackageInfo:
     # SSH command that exits 0 if the package is installed on Pi.
     # Used as fallback when pip_name is None and tracked versions are missing.
     detect_cmd: Optional[str] = None
+    # True if the package is installable from PyPI by ``pip_name``. If False,
+    # updates fall back to downloading the wheel from the GitHub release.
+    on_pypi: bool = True
 
 
 PACKAGE_REGISTRY: list[PackageInfo] = [
     PackageInfo(
-        name="raccoon",
+        name="raccoon-cli",
         repo="htl-stp-ecer/raccoon-cli",
-        pip_name="raccoon",
+        pip_name="raccoon-cli",
         targets=["laptop", "pi"],
     ),
     PackageInfo(
         name="raccoon-transport",
-        repo="htl-stp-ecer/raccoon-cli",
+        repo="htl-stp-ecer/raccoon-transport",
         pip_name="raccoon-transport",
         targets=["pi"],
     ),
     PackageInfo(
-        name="libstp",
+        name="raccoon-lib",
         repo="htl-stp-ecer/raccoon-lib",
         pip_name="libstp",
         targets=["pi"],
+        on_pypi=False,
     ),
     PackageInfo(
-        name="libstp-stubs",
+        name="raccoon-stubs",
         repo="htl-stp-ecer/raccoon-lib",
-        pip_name="libstp-stubs",
+        pip_name="raccoon-stubs",
         targets=["laptop"],
     ),
     PackageInfo(
@@ -86,36 +92,43 @@ class PackageStatus:
     pi_version: Optional[str] = None
 
 
-def check_gh_available() -> bool:
-    """Check if the GitHub CLI is available."""
-    return shutil.which("gh") is not None
+def _github_headers() -> dict[str, str]:
+    return {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "raccoon-cli",
+    }
+
+
+def _fetch_release(repo: str, tag: str = "latest") -> Optional[dict]:
+    """Fetch a release JSON payload from the public GitHub API."""
+    if tag == "latest":
+        url = f"{GITHUB_API}/repos/{repo}/releases/latest"
+    else:
+        url = f"{GITHUB_API}/repos/{repo}/releases/tags/{tag}"
+    try:
+        resp = httpx.get(url, headers=_github_headers(), timeout=15, follow_redirects=True)
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning("GitHub API %s returned %s", url, resp.status_code)
+    except httpx.HTTPError as e:
+        logger.warning("Failed to fetch %s: %s", url, e)
+    return None
 
 
 def get_latest_version(repo: str) -> Optional[str]:
-    """Get the latest release version for a GitHub repo using `gh`."""
-    try:
-        result = subprocess.run(
-            ["gh", "release", "view", "--repo", repo, "--json", "tagName", "-q", ".tagName"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            tag = result.stdout.strip()
-            return tag.lstrip("v") if tag else None
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    return None
+    """Get the latest release version for a public GitHub repo."""
+    data = _fetch_release(repo, "latest")
+    if not data:
+        return None
+    tag = data.get("tag_name") or ""
+    return tag.lstrip("v") if tag else None
 
 
 def download_release_assets(
     repo: str, pattern: str, dest_dir: str, tag: str = "latest"
 ) -> list[str]:
-    """Download release assets from a GitHub repo using the gh API.
-
-    Uses ``gh api`` with ``Accept: application/octet-stream`` which works
-    reliably for both public and private repos (``gh release download``
-    silently produces empty files on some private-repo configurations).
+    """Download release assets from a public GitHub repo via the REST API.
 
     Args:
         repo: GitHub repo in ``owner/repo`` format.
@@ -126,48 +139,31 @@ def download_release_assets(
     Returns:
         List of downloaded file paths.
     """
-    # Resolve release assets via the API
-    if tag == "latest":
-        api_path = f"repos/{repo}/releases/latest"
-    else:
-        api_path = f"repos/{repo}/releases/tags/{tag}"
-
-    try:
-        result = subprocess.run(
-            ["gh", "api", api_path, "-q", ".assets[] | .name + \"\\t\" + .url"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode != 0:
-            logger.warning("Failed to list assets for %s: %s", repo, result.stderr.strip())
-            return []
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    data = _fetch_release(repo, tag)
+    if not data:
         return []
 
     downloaded: list[str] = []
-    for line in result.stdout.strip().splitlines():
-        if "\t" not in line:
-            continue
-        name, api_url = line.split("\t", 1)
-        if not fnmatch.fnmatch(name, pattern):
-            continue
-
-        dest_path = os.path.join(dest_dir, name)
-        try:
-            dl = subprocess.run(
-                ["gh", "api", api_url, "-H", "Accept: application/octet-stream"],
-                capture_output=True,
-                timeout=120,
-            )
-            if dl.returncode == 0 and dl.stdout:
-                with open(dest_path, "wb") as f:
-                    f.write(dl.stdout)
+    with httpx.Client(timeout=120, follow_redirects=True, headers={"User-Agent": "raccoon-cli"}) as client:
+        for asset in data.get("assets", []):
+            name = asset.get("name", "")
+            if not name or not fnmatch.fnmatch(name, pattern):
+                continue
+            url = asset.get("browser_download_url")
+            if not url:
+                continue
+            dest_path = os.path.join(dest_dir, name)
+            try:
+                with client.stream("GET", url) as resp:
+                    if resp.status_code != 200:
+                        logger.warning("Failed to download %s: HTTP %s", name, resp.status_code)
+                        continue
+                    with open(dest_path, "wb") as f:
+                        for chunk in resp.iter_bytes():
+                            f.write(chunk)
                 downloaded.append(dest_path)
-            else:
-                logger.warning("Failed to download %s", name)
-        except subprocess.TimeoutExpired:
-            logger.warning("Timeout downloading %s", name)
+            except httpx.HTTPError as e:
+                logger.warning("Failed to download %s: %s", name, e)
 
     return downloaded
 
@@ -294,9 +290,6 @@ def check_all_versions(ssh_client=None) -> list[PackageStatus]:
     Fetches latest versions from GitHub and installed versions from local pip
     and (if ssh_client provided) the Pi.
     """
-    if not check_gh_available():
-        logger.warning("gh CLI not found — cannot check latest versions")
-
     # Deduplicate repo lookups (raccoon + raccoon-transport share a repo)
     latest_cache: dict[str, Optional[str]] = {}
     tracked_versions: dict[str, str] = {}
@@ -310,9 +303,7 @@ def check_all_versions(ssh_client=None) -> list[PackageStatus]:
 
         # Latest version
         if pkg.repo not in latest_cache:
-            latest_cache[pkg.repo] = (
-                get_latest_version(pkg.repo) if check_gh_available() else None
-            )
+            latest_cache[pkg.repo] = get_latest_version(pkg.repo)
         status.latest_version = latest_cache[pkg.repo]
 
         # Laptop version (pip packages only)

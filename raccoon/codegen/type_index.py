@@ -146,7 +146,7 @@ def _introspect_pyi_file(mod_name: str, pyi_path: Path) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def generate_index(output_path: Optional[Path] = None) -> Path:
-    """Generate a type index from .pyi stub files installed by libstp-stubs.
+    """Generate a type index from .pyi stub files installed by raccoon-stubs.
 
     Returns the path to the written JSON file.
     """
@@ -155,15 +155,15 @@ def generate_index(output_path: Optional[Path] = None) -> Path:
     package_dir = _find_libstp_package_dir()
     if package_dir is None:
         raise RuntimeError(
-            "No libstp package directory found. Is libstp-stubs installed?\n"
-            "Install it with: pip install libstp-stubs"
+            "No libstp package directory found. Is raccoon-stubs installed?\n"
+            "Install it with: pip install raccoon-stubs"
         )
 
     pyi_files = _find_pyi_files(package_dir)
     if not pyi_files:
         raise RuntimeError(
             "No .pyi stub files found in libstp package.\n"
-            "Install stubs with: pip install libstp-stubs"
+            "Install stubs with: pip install raccoon-stubs"
         )
 
     logger.info(f"Generating type index from {len(pyi_files)} .pyi stub files...")

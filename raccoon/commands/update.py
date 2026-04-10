@@ -23,10 +23,8 @@ from raccoon.client.connection import (
 )
 from raccoon.project import find_project_root
 from raccoon.version_checker import (
-    PACKAGE_REGISTRY,
     PackageStatus,
     check_all_versions,
-    check_gh_available,
     download_release_assets,
     render_version_table,
     write_remote_tracked_version,
@@ -60,17 +58,6 @@ def update_command(
         raccoon update --pi-only      # Only update Pi packages
     """
     console: Console = ctx.obj.get("console", Console())
-
-    # Preflight: check gh CLI
-    if not check_gh_available():
-        console.print("[red]GitHub CLI (gh) is not installed.[/red]")
-        console.print()
-        console.print("Install it from: [cyan]https://cli.github.com/[/cyan]")
-        console.print("  macOS:  [dim]brew install gh[/dim]")
-        console.print("  Linux:  [dim]sudo apt install gh[/dim]  or  [dim]sudo dnf install gh[/dim]")
-        console.print()
-        console.print("Then authenticate: [cyan]gh auth login[/cyan]")
-        raise SystemExit(1)
 
     # Get SSH client for Pi if needed
     ssh_client = None
@@ -126,6 +113,14 @@ def update_command(
             )
         else:
             _update_pi(console, ssh_client, pi_updates, force)
+
+    # After pip installs, refresh the server-side install (systemd units etc.)
+    # on both client and Pi by running install.py from the raccoon-cli release.
+    raccoon_cli_updated = any(
+        s.info.name == "raccoon-cli" for s in (laptop_updates + pi_updates)
+    )
+    if raccoon_cli_updated:
+        _run_raccoon_server_install(console, ssh_client)
 
 
 def _get_ssh_client(console: Console):
@@ -219,36 +214,25 @@ def _get_pi_updates(
     return updates
 
 
-def _filter_compatible_wheels(wheels: list[str]) -> list[str]:
-    """Filter wheel files to only those compatible with this platform.
-
-    Keeps pure-Python wheels (``py3-none-any``) and wheels whose platform
-    tag matches the current machine architecture.
-    """
-    import platform
-
-    machine = platform.machine().lower()  # e.g. "x86_64", "aarch64"
-
-    compatible = []
-    for w in wheels:
-        basename = os.path.basename(w)
-        # Pure Python wheels are always compatible
-        if "none-any" in basename:
-            compatible.append(w)
-        # Platform-specific wheels must match this machine
-        elif machine in basename:
-            compatible.append(w)
-        else:
-            logger.info(f"Skipping incompatible wheel: {basename} (need {machine})")
-    return compatible
-
-
 def _update_laptop(
     console: Console, updates: list[PackageStatus], force: bool
 ) -> None:
-    """Update laptop packages by downloading wheels from GitHub releases."""
+    """Update laptop pip packages directly from PyPI."""
     console.print()
     console.print("[bold]Updating laptop packages...[/bold]")
+
+    specs = [
+        f"{s.info.pip_name}=={s.latest_version}"
+        for s in updates
+        if s.info.pip_name and s.info.on_pypi and s.latest_version
+    ]
+    skipped = [s for s in updates if not (s.info.pip_name and s.info.on_pypi)]
+    for s in skipped:
+        console.print(
+            f"[yellow]Skipping {s.info.name} on laptop — not installable from PyPI.[/yellow]"
+        )
+    if not specs:
+        return
 
     # Clean up stale .old exe from a previous Windows update
     if sys.platform == "win32":
@@ -261,82 +245,52 @@ def _update_laptop(
                 except OSError:
                     pass
 
-    # Group updates by repo
-    by_repo: dict[str, list[PackageStatus]] = {}
-    for s in updates:
-        by_repo.setdefault(s.info.repo, []).append(s)
+    for spec in specs:
+        console.print(f"  [dim]{spec}[/dim]")
 
-    all_wheels: list[str] = []
+    # On Windows, the running raccoon.exe is locked and pip cannot
+    # overwrite it. Windows *does* allow renaming a locked file, so we
+    # move the exe out of the way before pip install and clean up after.
+    renamed_exe: str | None = None
+    if sys.platform == "win32":
+        exe_path = shutil.which("raccoon")
+        if exe_path and os.path.isfile(exe_path):
+            old_path = exe_path + ".old"
+            try:
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+                os.rename(exe_path, old_path)
+                renamed_exe = old_path
+                logger.info(f"Renamed {exe_path} → {old_path} to avoid lock")
+            except OSError:
+                logger.debug("Could not rename raccoon exe, proceeding anyway")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for repo, repo_updates in by_repo.items():
-            for s in repo_updates:
-                pip_name = s.info.pip_name
-                if not pip_name:
-                    continue
-                pattern = f"{pip_name.replace('-', '_')}-*.whl"
+    pip_args = [sys.executable, "-m", "pip", "install", "--upgrade"]
+    if force:
+        pip_args.append("--force-reinstall")
+    pip_args.extend(specs)
 
-                console.print(f"[dim]Downloading {s.info.name} wheels from {repo}...[/dim]")
-                wheels = download_release_assets(repo, pattern, tmpdir)
-                wheels = _filter_compatible_wheels(wheels)
-                if not wheels:
-                    console.print(f"[yellow]No compatible wheel for {s.info.name} on this platform — skipping.[/yellow]")
-                    continue
-                for w in wheels:
-                    console.print(f"  {os.path.basename(w)}")
-                all_wheels.extend(wheels)
-
-        if not all_wheels:
-            console.print("[red]No wheels downloaded.[/red]")
-            return
-
-        console.print(f"[dim]Installing {len(all_wheels)} wheel(s)...[/dim]")
-        for w in all_wheels:
-            console.print(f"  [dim]{os.path.basename(w)}[/dim]")
-
-        # On Windows, the running raccoon.exe is locked and pip cannot
-        # overwrite it.  Windows *does* allow renaming a locked file, so we
-        # move the exe out of the way before pip install and clean up after.
-        renamed_exe: str | None = None
-        if sys.platform == "win32":
-            exe_path = shutil.which("raccoon")
-            if exe_path and os.path.isfile(exe_path):
-                old_path = exe_path + ".old"
-                try:
-                    if os.path.exists(old_path):
-                        os.remove(old_path)
-                    os.rename(exe_path, old_path)
-                    renamed_exe = old_path
-                    logger.info(f"Renamed {exe_path} → {old_path} to avoid lock")
-                except OSError:
-                    logger.debug("Could not rename raccoon exe, proceeding anyway")
-
-        pip_args = [sys.executable, "-m", "pip", "install"]
-        if force:
-            pip_args.append("--force-reinstall")
-        pip_args.extend(all_wheels)
-
-        result = subprocess.run(pip_args, capture_output=True, text=True)
-        if result.returncode != 0:
-            if "externally-managed-environment" in result.stderr:
-                console.print("[yellow]System Python detected — retrying with --break-system-packages[/yellow]")
-                pip_args.insert(4, "--break-system-packages")
-                result = subprocess.run(pip_args, capture_output=True, text=True)
-                if result.returncode != 0:
-                    console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
-                    return
-            else:
+    result = subprocess.run(pip_args, capture_output=True, text=True)
+    if result.returncode != 0:
+        if "externally-managed-environment" in result.stderr:
+            console.print("[yellow]System Python detected — retrying with --break-system-packages[/yellow]")
+            pip_args.insert(4, "--break-system-packages")
+            result = subprocess.run(pip_args, capture_output=True, text=True)
+            if result.returncode != 0:
                 console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
                 return
+        else:
+            console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
+            return
 
-        # Clean up renamed exe on Windows
-        if renamed_exe and os.path.exists(renamed_exe):
-            try:
-                os.remove(renamed_exe)
-            except OSError:
-                logger.debug(f"Could not remove {renamed_exe} — will be cleaned up next run")
+    # Clean up renamed exe on Windows
+    if renamed_exe and os.path.exists(renamed_exe):
+        try:
+            os.remove(renamed_exe)
+        except OSError:
+            logger.debug(f"Could not remove {renamed_exe} — will be cleaned up next run")
 
-        console.print("[green]Laptop packages updated successfully.[/green]")
+    console.print("[green]Laptop packages updated successfully.[/green]")
 
 
 def _update_pi(
@@ -345,7 +299,15 @@ def _update_pi(
     updates: list[PackageStatus],
     force: bool,
 ) -> None:
-    """Update Pi packages by downloading assets and running install scripts."""
+    """Update Pi packages.
+
+    Three paths depending on how the package is shipped:
+    - PyPI pip packages: single ``pip3 install`` over SSH.
+    - GitHub wheel (``on_pypi=False``): download wheel locally, SFTP to Pi,
+      then ``pip3 install`` the uploaded wheel.
+    - Non-pip packages: download the release tarball locally and run its
+      ``install.py`` on the laptop (script SSHes to Pi using RPI_HOST/RPI_USER).
+    """
     console.print()
     console.print("[bold]Updating Pi packages...[/bold]")
 
@@ -353,89 +315,138 @@ def _update_pi(
     pi_host = manager.state.pi_address
     pi_user = manager.state.pi_user
 
-    # Group updates by repo to avoid duplicate downloads
-    by_repo: dict[str, list[PackageStatus]] = {}
-    for s in updates:
-        by_repo.setdefault(s.info.repo, []).append(s)
+    pypi_updates = [s for s in updates if s.info.pip_name and s.info.on_pypi]
+    wheel_updates = [s for s in updates if s.info.pip_name and not s.info.on_pypi]
+    tarball_updates = [s for s in updates if not s.info.pip_name]
 
-    for repo, repo_updates in by_repo.items():
-        _update_pi_repo(console, ssh_client, repo, repo_updates, pi_host, pi_user, force)
+    if pypi_updates:
+        _pi_install_from_pypi(console, ssh_client, pypi_updates, force)
+
+    if wheel_updates:
+        _pi_install_github_wheels(console, ssh_client, wheel_updates, force)
+
+    if tarball_updates:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            by_repo: dict[str, list[PackageStatus]] = {}
+            for s in tarball_updates:
+                by_repo.setdefault(s.info.repo, []).append(s)
+            for repo, repo_updates in by_repo.items():
+                repo_short = repo.split("/")[-1]
+                console.print(f"\n[cyan]Updating {repo_short} from {repo}...[/cyan]")
+                _update_pi_tarball(console, tmpdir, repo, repo_short, pi_host, pi_user)
+                latest = repo_updates[0].latest_version
+                if latest:
+                    for s in repo_updates:
+                        write_remote_tracked_version(ssh_client, s.info.name, latest)
 
 
-def _update_pi_repo(
+def _pi_pip_install(
+    console: Console, ssh_client, install_args: list[str], force: bool
+) -> bool:
+    """Run ``pip3 install`` on the Pi with sudo/break-system-packages fallbacks.
+
+    ``install_args`` are the args after ``install`` (e.g. pinned specs or wheel
+    paths). Returns True on success.
+    """
+    force_flag = " --force-reinstall" if force else ""
+    args_joined = " ".join(install_args)
+
+    commands = [
+        f"pip3 install --upgrade{force_flag} {args_joined}",
+        f"sudo pip3 install --upgrade{force_flag} {args_joined}",
+        f"sudo pip3 install --upgrade --break-system-packages{force_flag} {args_joined}",
+    ]
+
+    last_err = ""
+    for cmd in commands:
+        try:
+            _, stdout, stderr = ssh_client.exec_command(cmd, timeout=300)
+            exit_code = stdout.channel.recv_exit_status()
+            err = stderr.read().decode(errors="replace")
+            if exit_code == 0:
+                return True
+            last_err = err
+            if "externally-managed-environment" not in err and "Permission denied" not in err:
+                # Unrelated failure — don't try escalating further
+                break
+        except Exception as e:
+            last_err = str(e)
+            break
+
+    console.print(f"[red]pip3 install failed on Pi:[/red]\n{last_err.strip()}")
+    return False
+
+
+def _pi_install_from_pypi(
     console: Console,
     ssh_client,
-    repo: str,
     updates: list[PackageStatus],
-    pi_host: str,
-    pi_user: str,
     force: bool,
 ) -> None:
-    """Update Pi packages from a single repo."""
-    repo_short = repo.split("/")[-1]
-    console.print(f"\n[cyan]Updating from {repo}...[/cyan]")
+    """Install PyPI packages on the Pi via ``pip3 install`` over SSH."""
+    specs = [
+        f"{s.info.pip_name}=={s.latest_version}"
+        for s in updates
+        if s.info.pip_name and s.latest_version
+    ]
+    if not specs:
+        return
+
+    console.print("\n[cyan]Installing from PyPI on Pi...[/cyan]")
+    for spec in specs:
+        console.print(f"  [dim]{spec}[/dim]")
+
+    if _pi_pip_install(console, ssh_client, specs, force):
+        console.print("[green]PyPI packages updated on Pi.[/green]")
+
+
+def _pi_install_github_wheels(
+    console: Console,
+    ssh_client,
+    updates: list[PackageStatus],
+    force: bool,
+) -> None:
+    """Download GitHub wheels for each package and pip-install them on the Pi."""
+    console.print("\n[cyan]Installing GitHub wheels on Pi...[/cyan]")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        if repo == "htl-stp-ecer/raccoon-cli":
-            # raccoon-cli has a server tarball with install script
-            _update_pi_raccoon_cli(console, ssh_client, tmpdir, repo, pi_host, pi_user, force)
-        else:
-            # Other repos have tarballs with install script
-            _update_pi_tarball(console, ssh_client, tmpdir, repo, repo_short, pi_host, pi_user)
+        remote_paths: list[str] = []
+        sftp = ssh_client.open_sftp()
+        try:
+            for s in updates:
+                pip_name = s.info.pip_name
+                if not pip_name:
+                    continue
+                pattern = f"{pip_name.replace('-', '_')}-*.whl"
+                console.print(f"[dim]Downloading {pip_name} wheels from {s.info.repo}...[/dim]")
+                wheels = download_release_assets(s.info.repo, pattern, tmpdir)
+                if not wheels:
+                    console.print(f"[yellow]No wheel found for {s.info.name} — skipping.[/yellow]")
+                    continue
+                for local_path in wheels:
+                    name = os.path.basename(local_path)
+                    remote_path = f"/tmp/{name}"
+                    console.print(f"  [dim]Uploading {name} → Pi:{remote_path}[/dim]")
+                    sftp.put(local_path, remote_path)
+                    remote_paths.append(remote_path)
+        finally:
+            sftp.close()
 
-        # Track versions for non-pip packages
-        latest = updates[0].latest_version
-        for s in updates:
-            if s.info.pip_name is None and latest:
-                write_remote_tracked_version(ssh_client, s.info.name, latest)
+        if not remote_paths:
+            console.print("[yellow]No wheels to install on Pi.[/yellow]")
+            return
 
+        success = _pi_pip_install(console, ssh_client, remote_paths, force)
 
-def _update_pi_raccoon_cli(
-    console: Console,
-    ssh_client,
-    tmpdir: str,
-    repo: str,
-    pi_host: str,
-    pi_user: str,
-    force: bool,
-) -> None:
-    """Update raccoon server on Pi using the server tarball."""
-    console.print("[dim]Downloading server tarball...[/dim]")
-    tarballs = download_release_assets(repo, "raccoon-server-*.tar.gz", tmpdir)
-    if not tarballs:
-        console.print("[red]No server tarball found in release.[/red]")
-        return
+        # Clean up uploaded wheels regardless of success
+        ssh_client.exec_command("rm -f " + " ".join(remote_paths))
 
-    tarball = tarballs[0]
-    console.print(f"[dim]Extracting {os.path.basename(tarball)}...[/dim]")
-    with tarfile.open(tarball, "r:gz") as tf:
-        tf.extractall(tmpdir)
-
-    install_script = _find_install_script(tmpdir)
-    if not install_script:
-        console.print("[red]install script not found in tarball.[/red]")
-        return
-
-    console.print(f"[dim]Running {os.path.basename(install_script)} for Pi ({pi_host})...[/dim]")
-    env = os.environ.copy()
-    env["RPI_HOST"] = pi_host
-    env["RPI_USER"] = pi_user
-
-    result = subprocess.run(
-        [sys.executable, install_script],
-        env=env,
-        cwd=os.path.dirname(install_script),
-    )
-    if result.returncode != 0:
-        console.print(f"[red]{os.path.basename(install_script)} failed.[/red]")
-        return
-
-    console.print("[green]raccoon server updated on Pi.[/green]")
+        if success:
+            console.print("[green]GitHub wheels installed on Pi.[/green]")
 
 
 def _update_pi_tarball(
     console: Console,
-    ssh_client,
     tmpdir: str,
     repo: str,
     repo_short: str,
@@ -474,6 +485,63 @@ def _update_pi_tarball(
         return
 
     console.print(f"[green]{repo_short} updated on Pi.[/green]")
+
+
+def _run_raccoon_server_install(console: Console, ssh_client) -> None:
+    """Run the raccoon-server install.py from the raccoon-cli release.
+
+    Downloads ``raccoon-server-*.tar.gz`` from the latest raccoon-cli release,
+    extracts it, and runs the bundled ``install.py`` so client-side and
+    wombat-side setup (systemd units, service config, etc.) is refreshed.
+
+    If an SSH connection to a Pi exists, ``RPI_HOST``/``RPI_USER`` are passed
+    through so the script can also update the wombat side.
+    """
+    console.print()
+    console.print("[bold]Running raccoon-server install...[/bold]")
+
+    repo = "htl-stp-ecer/raccoon-cli"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        console.print("[dim]Downloading raccoon-server tarball...[/dim]")
+        tarballs = download_release_assets(repo, "raccoon-server-*.tar.gz", tmpdir)
+        if not tarballs:
+            console.print("[red]No raccoon-server tarball found in release.[/red]")
+            return
+
+        tarball = tarballs[0]
+        console.print(f"[dim]Extracting {os.path.basename(tarball)}...[/dim]")
+        with tarfile.open(tarball, "r:gz") as tf:
+            tf.extractall(tmpdir)
+
+        install_script = _find_install_script(tmpdir)
+        if not install_script:
+            console.print("[red]install.py not found in raccoon-server tarball.[/red]")
+            return
+
+        env = os.environ.copy()
+        if ssh_client is not None:
+            manager = get_connection_manager()
+            env["RPI_HOST"] = manager.state.pi_address or ""
+            env["RPI_USER"] = manager.state.pi_user or "pi"
+            console.print(
+                f"[dim]Running {os.path.basename(install_script)} "
+                f"(client + wombat {env.get('RPI_HOST', '?')})...[/dim]"
+            )
+        else:
+            console.print(
+                f"[dim]Running {os.path.basename(install_script)} (client only)...[/dim]"
+            )
+
+        result = subprocess.run(
+            [sys.executable, install_script],
+            env=env,
+            cwd=os.path.dirname(install_script),
+        )
+        if result.returncode != 0:
+            console.print("[red]raccoon-server install.py failed.[/red]")
+            return
+
+        console.print("[green]raccoon-server install complete.[/green]")
 
 
 def _find_install_script(tmpdir: str) -> str | None:
