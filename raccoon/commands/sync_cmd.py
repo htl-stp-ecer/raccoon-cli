@@ -1,10 +1,12 @@
 """Sync command - synchronize project files to Pi."""
 
 import asyncio
+import concurrent.futures
 import getpass
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Awaitable, Callable, TypeVar
 
 import click
 import httpx
@@ -42,6 +44,32 @@ def _fingerprint_exclude_patterns(project_root: Path) -> list[str]:
     patterns = default_exclude_patterns()
     patterns.extend(load_raccoonignore(project_root))
     return patterns
+
+
+_T = TypeVar("_T")
+
+
+def _run_coroutine_from_sync(make_coro: Callable[[], Awaitable[_T]]) -> _T:
+    """Run an async coroutine factory from synchronous code, safely.
+
+    ``raccoon sync`` is invoked from a plain Click callback (no event loop),
+    but ``raccoon run`` wraps a call to ``do_sync`` inside its own
+    ``asyncio.run(...)``, so by the time verification runs there is already
+    a loop on this thread. Calling ``asyncio.run`` again in that case raises
+    ``RuntimeError: asyncio.run() cannot be called from a running event loop``.
+
+    Detect the situation and offload to a worker thread with its own loop
+    when necessary. The coroutine is created inside the worker so its owning
+    loop is the one that will run it.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(make_coro())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(lambda: asyncio.run(make_coro()))
+        return future.result()
 
 
 def _format_diff(diff: dict[str, list[str]], limit: int = 10) -> list[str]:
@@ -353,7 +381,7 @@ def _verify_and_commit_sync(
             return True
 
     try:
-        return asyncio.run(_run())
+        return _run_coroutine_from_sync(_run)
     except Exception as e:
         console.print(f"[red]Verify failed: {e}[/red]")
         return False
