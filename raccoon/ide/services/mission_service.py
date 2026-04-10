@@ -36,6 +36,7 @@ import asyncio
 from asyncio.subprocess import PIPE
 import re
 import random
+import sqlite3
 import time
 from typing import Optional as _OptionalBool
 
@@ -1147,6 +1148,21 @@ class MissionService:
             if detailed:
                 flattened_steps = self.build_step_timeline(detailed)
 
+            # Send historical timings from step_timing.db before the run
+            try:
+                historical = await self._read_step_timings(project_path)
+                if historical:
+                    yield _stamped({"type": "step_timing_status", "status": "loaded", "count": len(historical)})
+                    for timing_event in historical:
+                        yield {**timing_event, "timestamp": time.time()}
+                else:
+                    yield _stamped({"type": "step_timing_status", "status": "empty"})
+            except Exception as exc:
+                logger.warning("Failed to load historical timings: %s", exc)
+                yield _stamped({"type": "step_timing_status", "status": "unavailable"})
+
+            run_start_unix = time.time()
+
             if do_sim:
                 # Simulation mode - yield fake events
                 async for event in self._simulate_mission(project_uuid, mission_name, flattened_steps, debug_mode):
@@ -1155,6 +1171,15 @@ class MissionService:
                 # Real execution - run run.sh and stream output
                 async for event in self._execute_mission(project_uuid, project_path, mission_name, flattened_steps):
                     yield event
+
+                # After execution, send newly recorded timings from this run
+                try:
+                    new_timings = await self._read_step_timings(project_path, since_unix=run_start_unix)
+                    for timing_event in new_timings:
+                        yield {**timing_event, "timestamp": time.time()}
+                except Exception as exc:
+                    logger.warning("Failed to read post-run timings: %s", exc)
+                    yield _stamped({"type": "step_timing_error", "message": str(exc)})
 
         except Exception as e:
             logger.error(f"Error streaming mission '{mission_name}' for project {project_uuid}: {e}")
@@ -1240,6 +1265,60 @@ class MissionService:
         finally:
             self._sim_cancel.pop(project_uuid, None)
             self._breakpoint_waiters.pop(project_uuid, None)
+
+    async def _read_step_timings(
+        self,
+        project_path: Path,
+        *,
+        since_unix: float | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Read step timing records from the project's step_timing.db.
+
+        Returns a list of dicts suitable for sending as ``step_timing`` WebSocket
+        events.  If *since_unix* is given only rows with ``timestamp_unix >=``
+        that value are returned; otherwise all rows are returned.
+        """
+        db_path = project_path / "logs" / "step_timing.db"
+        if not db_path.exists():
+            return []
+
+        def _query() -> List[Dict[str, Any]]:
+            results: List[Dict[str, Any]] = []
+            try:
+                conn = sqlite3.connect(str(db_path), timeout=3)
+                conn.row_factory = sqlite3.Row
+                try:
+                    if since_unix is not None:
+                        rows = conn.execute(
+                            "SELECT * FROM step_executions WHERE timestamp_unix >= ? ORDER BY timestamp_unix ASC",
+                            (since_unix,),
+                        ).fetchall()
+                    else:
+                        rows = conn.execute(
+                            "SELECT * FROM step_executions ORDER BY timestamp_unix ASC",
+                        ).fetchall()
+                    for row in rows:
+                        event: Dict[str, Any] = {
+                            "type": "step_timing",
+                            "signature": row["step_signature"],
+                            "duration_seconds": row["duration_seconds"],
+                            "recorded_at": row["timestamp_unix"],
+                            "anomaly": bool(row["anomaly"]),
+                        }
+                        if row["expected_mean"] is not None:
+                            event["expected_mean"] = row["expected_mean"]
+                        if row["expected_stddev"] is not None:
+                            event["expected_stddev"] = row["expected_stddev"]
+                        if row["deviation_sigma"] is not None:
+                            event["deviation_sigma"] = row["deviation_sigma"]
+                        results.append(event)
+                finally:
+                    conn.close()
+            except Exception as exc:
+                logger.warning("Failed to read step_timing.db at %s: %s", db_path, exc)
+            return results
+
+        return await asyncio.to_thread(_query)
 
     async def _execute_mission(
         self,

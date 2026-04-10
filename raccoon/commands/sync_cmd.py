@@ -1,8 +1,16 @@
 """Sync command - synchronize project files to Pi."""
 
+import asyncio
+import getpass
+import socket
+from datetime import datetime, timezone
+from pathlib import Path
+
 import click
+import httpx
 from rich.console import Console
 
+from raccoon.client.api import RemoteSyncState, create_api_client
 from raccoon.client.connection import (
     get_connection_manager,
     ParamikoVersionError,
@@ -10,7 +18,50 @@ from raccoon.client.connection import (
 )
 from raccoon.checkpoint import create_checkpoint
 from raccoon.client.sftp_sync import create_sync, SyncDirection, SyncOptions, load_raccoonignore
+from raccoon.fingerprint import FingerprintResult, compute_fingerprint, default_exclude_patterns
 from raccoon.project import find_project_root, load_project_config
+from raccoon.sync_state import SyncState as LocalSyncState
+from raccoon.sync_state import read_sync_state, write_sync_state
+
+
+def _synced_by_label() -> str:
+    """Short identifier for audit purposes: ``user@host``."""
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = "unknown"
+    try:
+        host = socket.gethostname()
+    except Exception:
+        host = "unknown"
+    return f"{user}@{host}"
+
+
+def _fingerprint_exclude_patterns(project_root: Path) -> list[str]:
+    """Exclude list for fingerprinting: defaults + .raccoonignore (matches the server)."""
+    patterns = default_exclude_patterns()
+    patterns.extend(load_raccoonignore(project_root))
+    return patterns
+
+
+def _format_diff(diff: dict[str, list[str]], limit: int = 10) -> list[str]:
+    """Format a fingerprint diff into human-readable lines."""
+    lines: list[str] = []
+    for label, key in (
+        ("only local", "only_in_self"),
+        ("only remote", "only_in_other"),
+        ("changed", "changed"),
+    ):
+        entries = diff.get(key, [])
+        if not entries:
+            continue
+        shown = entries[:limit]
+        extra = len(entries) - len(shown)
+        for entry in shown:
+            lines.append(f"  [{label}] {entry}")
+        if extra > 0:
+            lines.append(f"  [{label}] … and {extra} more")
+    return lines
 
 
 def do_sync(
@@ -149,10 +200,162 @@ def do_sync(
             for error in result.errors:
                 console.print(f"  - {error}")
 
-        return True
+        # Verify: hash both sides, require an exact match, bump the counter.
+        verified = _verify_and_commit_sync(
+            project_root=project_root,
+            project_uuid=project_uuid,
+            direction=direction,
+            console=console,
+        )
+        return verified
 
     except Exception as e:
         console.print(f"[red]Sync error: {e}[/red]")
+        return False
+
+
+def _verify_and_commit_sync(
+    project_root: Path,
+    project_uuid: str,
+    direction: SyncDirection,
+    console: Console,
+) -> bool:
+    """Verify sync integrity by comparing content fingerprints.
+
+    Runs regardless of the transfer backend (rsync or SFTP). On match, bumps the
+    server sync counter and records the new state on both sides. On mismatch,
+    prints a per-file diff and refuses to bump — callers should treat this as
+    a failed sync even though the transfer itself returned success.
+    """
+    manager = get_connection_manager()
+    state = manager.state
+    if not state.api_token:
+        console.print(
+            "[yellow]Warning: cannot verify sync (no API token). "
+            "Run 'raccoon connect' again to enable verification.[/yellow]"
+        )
+        return True  # transfer succeeded; we just couldn't verify
+
+    patterns = _fingerprint_exclude_patterns(project_root)
+    console.print("[cyan]Verifying sync integrity...[/cyan]")
+    local_fp = compute_fingerprint(project_root, exclude_patterns=patterns)
+    prev_state = read_sync_state(project_root)
+
+    async def _run() -> bool:
+        async with create_api_client(
+            state.pi_address, state.pi_port, api_token=state.api_token
+        ) as client:
+            try:
+                remote_fp = await client.get_fingerprint(project_uuid)
+            except httpx.HTTPStatusError as e:
+                console.print(
+                    f"[red]Verify failed: server returned {e.response.status_code} "
+                    f"fetching fingerprint ({e.response.text.strip()})[/red]"
+                )
+                return False
+            except httpx.HTTPError as e:
+                console.print(f"[red]Verify failed: {e}[/red]")
+                return False
+
+            if local_fp.root_hash != remote_fp.root_hash:
+                console.print("[red]Fingerprint MISMATCH[/red]")
+                console.print(
+                    f"  local  : {local_fp.root_hash}  "
+                    f"({local_fp.file_count} files, {local_fp.total_bytes} bytes)"
+                )
+                console.print(
+                    f"  remote : {remote_fp.root_hash}  "
+                    f"({remote_fp.file_count} files, {remote_fp.total_bytes} bytes)"
+                )
+                try:
+                    remote_files = await client.get_fingerprint_files(project_uuid)
+                except httpx.HTTPError:
+                    remote_files = {}
+                diff = local_fp.diff(
+                    FingerprintResult(root_hash=remote_fp.root_hash, files=remote_files)
+                )
+                for line in _format_diff(diff):
+                    console.print(line)
+                console.print(
+                    "[red]Sync is NOT trustworthy. Re-run 'raccoon sync' "
+                    "or investigate the diff above.[/red]"
+                )
+                return False
+
+            # Local and remote agree. Bump the counter (PUSH only) or
+            # just snapshot the server's state (PULL).
+            if direction == SyncDirection.PUSH:
+                try:
+                    current = await client.get_sync_state(project_uuid)
+                except httpx.HTTPError as e:
+                    console.print(f"[red]Failed to read sync state: {e}[/red]")
+                    return False
+                try:
+                    new_state = await client.update_sync_state(
+                        project_id=project_uuid,
+                        fingerprint=local_fp.root_hash,
+                        expected_prev_version=current.version,
+                        synced_by=_synced_by_label(),
+                    )
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 409:
+                        console.print(
+                            f"[red]Counter conflict: {e.response.json().get('detail', e.response.text)}[/red]"
+                        )
+                    else:
+                        console.print(
+                            f"[red]Failed to bump sync counter: {e.response.status_code} {e.response.text}[/red]"
+                        )
+                    return False
+                except httpx.HTTPError as e:
+                    console.print(f"[red]Failed to bump sync counter: {e}[/red]")
+                    return False
+            else:  # PULL: server state did not change, just snapshot it locally.
+                try:
+                    server_state = await client.get_sync_state(project_uuid)
+                except httpx.HTTPError as e:
+                    console.print(f"[red]Failed to read sync state: {e}[/red]")
+                    return False
+                new_state = RemoteSyncState(
+                    version=server_state.version,
+                    fingerprint=local_fp.root_hash,
+                    synced_at=server_state.synced_at
+                    or datetime.now(timezone.utc).isoformat(),
+                    synced_by=server_state.synced_by,
+                )
+
+            write_sync_state(
+                project_root,
+                LocalSyncState(
+                    version=new_state.version,
+                    fingerprint=new_state.fingerprint,
+                    synced_at=new_state.synced_at,
+                    synced_by=new_state.synced_by,
+                ),
+            )
+            # Show both hashes explicitly so devs can eyeball the match.
+            console.print("[green]Fingerprints match[/green]")
+            console.print(f"  local  : {local_fp.root_hash}")
+            console.print(f"  remote : {remote_fp.root_hash}")
+            console.print(
+                f"  files  : {local_fp.file_count}  "
+                f"bytes: {local_fp.total_bytes}"
+            )
+            if direction == SyncDirection.PUSH:
+                console.print(
+                    f"[green]Sync version: v{prev_state.version} → "
+                    f"v{new_state.version}[/green]"
+                )
+            else:
+                console.print(
+                    f"[green]Sync version: v{new_state.version} (pulled)[/green]"
+                )
+            return True
+
+    try:
+        return asyncio.run(_run())
+    except Exception as e:
+        console.print(f"[red]Verify failed: {e}[/red]")
         return False
 
 

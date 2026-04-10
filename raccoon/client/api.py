@@ -30,6 +30,26 @@ class CommandResult:
 
 
 @dataclass
+class RemoteFingerprint:
+    """Fingerprint summary returned by the server."""
+
+    project_id: str
+    root_hash: str
+    file_count: int
+    total_bytes: int
+
+
+@dataclass
+class RemoteSyncState:
+    """Persisted sync state as returned by the server."""
+
+    version: int
+    fingerprint: Optional[str] = None
+    synced_at: Optional[str] = None
+    synced_by: Optional[str] = None
+
+
+@dataclass
 class EncoderReading:
     """Result of reading encoder position."""
 
@@ -118,6 +138,80 @@ class RaccoonApiClient:
             if e.response.status_code == 404:
                 return None
             raise
+
+    async def get_fingerprint(self, project_id: str) -> RemoteFingerprint:
+        """Fetch the server's current fingerprint for a project (recomputed each call)."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/projects/{project_id}/fingerprint",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        data = response.json()
+        return RemoteFingerprint(
+            project_id=data["project_id"],
+            root_hash=data["root_hash"],
+            file_count=data["file_count"],
+            total_bytes=data["total_bytes"],
+        )
+
+    async def get_fingerprint_files(self, project_id: str) -> dict[str, str]:
+        """Fetch per-file hashes for diffing on mismatch."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/projects/{project_id}/fingerprint/files",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()["files"]
+
+    async def get_sync_state(self, project_id: str) -> RemoteSyncState:
+        """Fetch the last persisted sync state."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/projects/{project_id}/sync_state",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        data = response.json()
+        return RemoteSyncState(
+            version=data["version"],
+            fingerprint=data.get("fingerprint"),
+            synced_at=data.get("synced_at"),
+            synced_by=data.get("synced_by"),
+        )
+
+    async def update_sync_state(
+        self,
+        project_id: str,
+        fingerprint: str,
+        expected_prev_version: int,
+        synced_by: Optional[str] = None,
+    ) -> RemoteSyncState:
+        """Bump the sync counter after a verified sync.
+
+        Raises ``httpx.HTTPStatusError`` with status 409 if the server's
+        version does not match ``expected_prev_version`` or its fingerprint
+        diverges from the one supplied.
+        """
+        client = self._get_client()
+        response = await client.post(
+            f"{self.base_url}/api/v1/projects/{project_id}/sync_state",
+            json={
+                "fingerprint": fingerprint,
+                "expected_prev_version": expected_prev_version,
+                "synced_by": synced_by,
+            },
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        data = response.json()
+        return RemoteSyncState(
+            version=data["version"],
+            fingerprint=data.get("fingerprint"),
+            synced_at=data.get("synced_at"),
+            synced_by=data.get("synced_by"),
+        )
 
     async def run_project(
         self, project_id: str, args: list[str] = None, env: dict = None
