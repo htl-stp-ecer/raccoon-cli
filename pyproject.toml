@@ -53,18 +53,18 @@ dependencies = [
 ]
 
 [project.scripts]
-raccoon = "raccoon.cli:main"
-raccoon-server = "raccoon.server.cli:main"
+raccoon = "raccoon_cli.cli:main"
+raccoon-server = "raccoon_cli.server.cli:main"
 
 [tool.setuptools.dynamic]
-version = {attr = "raccoon._version.__version__"}
+version = {attr = "raccoon_cli._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["raccoon*"]
+include = ["raccoon_cli*"]
 
 [tool.setuptools.package-data]
-raccoon = [
+raccoon_cli = [
     "templates/**/*",
     "templates/**/*.jinja",
     "templates/**/*.py",

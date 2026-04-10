@@ -100,7 +100,7 @@ from .my_command import my_command
 ### 3. Register in `cli.py`
 
 ```python
-from raccoon.commands import my_command
+from raccoon_cli.commands import my_command
 # ...
 main.add_command(my_command)
 ```

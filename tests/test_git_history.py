@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from raccoon.git_history import create_pre_sync_snapshot, initialize_project_history
+from raccoon_cli.git_history import create_pre_sync_snapshot, initialize_project_history
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 

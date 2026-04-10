@@ -7,7 +7,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock, call
 
-from raccoon.client.sftp_sync import (
+from raccoon_cli.client.sftp_sync import (
     RsyncSync,
     SftpSync,
     create_sync,
@@ -175,7 +175,7 @@ class TestRaccoonIgnore:
 class TestRsyncExecution:
     """Test rsync execution and result parsing."""
 
-    @patch("raccoon.client.sftp_sync.subprocess.run")
+    @patch("raccoon_cli.client.sftp_sync.subprocess.run")
     def test_successful_push(self, mock_run):
         """Successful push should parse stats correctly."""
         mock_run.return_value = MagicMock(
@@ -196,7 +196,7 @@ class TestRsyncExecution:
         assert result.files_downloaded == 0
         assert result.bytes_transferred == 4096
 
-    @patch("raccoon.client.sftp_sync.subprocess.run")
+    @patch("raccoon_cli.client.sftp_sync.subprocess.run")
     def test_successful_pull(self, mock_run):
         """Successful pull should count files as downloaded."""
         mock_run.return_value = MagicMock(
@@ -216,7 +216,7 @@ class TestRsyncExecution:
         assert result.files_downloaded == 5
         assert result.files_uploaded == 0
 
-    @patch("raccoon.client.sftp_sync.subprocess.run")
+    @patch("raccoon_cli.client.sftp_sync.subprocess.run")
     def test_rsync_failure(self, mock_run):
         """Non-zero exit code should return failure."""
         mock_run.return_value = MagicMock(
@@ -231,7 +231,7 @@ class TestRsyncExecution:
         assert result.success is False
         assert "exit 12" in result.errors[0]
 
-    @patch("raccoon.client.sftp_sync.subprocess.run")
+    @patch("raccoon_cli.client.sftp_sync.subprocess.run")
     def test_deleted_files_parsed(self, mock_run):
         """Deleted file count should be parsed from stats."""
         mock_run.return_value = MagicMock(
@@ -249,7 +249,7 @@ class TestRsyncExecution:
 
         assert result.files_deleted == 2
 
-    @patch("raccoon.client.sftp_sync.subprocess.run")
+    @patch("raccoon_cli.client.sftp_sync.subprocess.run")
     def test_nothing_transferred(self, mock_run):
         """Zero transfers should still be success."""
         mock_run.return_value = MagicMock(
@@ -268,7 +268,7 @@ class TestRsyncExecution:
         assert result.files_uploaded == 0
         assert result.files_downloaded == 0
 
-    @patch("raccoon.client.sftp_sync.subprocess.run", side_effect=TimeoutError)
+    @patch("raccoon_cli.client.sftp_sync.subprocess.run", side_effect=TimeoutError)
     def test_timeout_handling(self, mock_run):
         """Timeout should be caught and reported."""
         from subprocess import TimeoutExpired
@@ -442,23 +442,23 @@ class TestSftpSync:
 class TestCreateSync:
     """Test the create_sync factory function."""
 
-    @patch("raccoon.client.sftp_sync.sys")
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
+    @patch("raccoon_cli.client.sftp_sync.sys")
+    @patch("raccoon_cli.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
     def test_returns_rsync_on_linux(self, mock_which, mock_sys):
         mock_sys.platform = "linux"
         sync = create_sync(host="192.168.4.1", user="pi")
         assert isinstance(sync, RsyncSync)
 
-    @patch("raccoon.client.sftp_sync.sys")
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value=None)
+    @patch("raccoon_cli.client.sftp_sync.sys")
+    @patch("raccoon_cli.client.sftp_sync.shutil.which", return_value=None)
     def test_returns_sftp_when_rsync_missing(self, mock_which, mock_sys):
         mock_sys.platform = "linux"
         sync = create_sync(host="192.168.4.1", user="pi", ssh_port=2222)
         assert isinstance(sync, SftpSync)
         assert sync.ssh_port == 2222
 
-    @patch("raccoon.client.sftp_sync.sys")
-    @patch("raccoon.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
+    @patch("raccoon_cli.client.sftp_sync.sys")
+    @patch("raccoon_cli.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
     def test_returns_sftp_on_windows(self, mock_which, mock_sys):
         """Windows should always use SFTP even if rsync is somehow on PATH."""
         mock_sys.platform = "win32"

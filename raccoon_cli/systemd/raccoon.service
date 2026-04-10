@@ -1,0 +1,33 @@
+[Unit]
+Description=Raccoon Robotics Toolchain Server
+Documentation=https://github.com/your-org/raccoon
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi
+
+# Environment variables
+Environment=RACCOON_PROJECTS_DIR=/home/pi/programs
+Environment=RACCOON_PORT=8421
+Environment=RACCOON_HOST=0.0.0.0
+
+# Run the server
+ExecStart=/usr/bin/python3 -m raccoon_cli.server
+
+# Restart on failure
+Restart=always
+RestartSec=3
+
+# Resource limits
+MemoryMax=256M
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raccoon
+
+[Install]
+WantedBy=multi-user.target

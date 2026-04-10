@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from raccoon.checkpoint import (
+from raccoon_cli.checkpoint import (
     _MAX_CHECKPOINTS,
     _prune_excess_checkpoints,
     clean_checkpoints,
@@ -128,7 +128,7 @@ class TestListCheckpoints:
 
         # Create two checkpoints with different timestamps
         (tmp_path / "file.txt").write_text("v1\n")
-        with patch("raccoon.checkpoint.time") as mock_time:
+        with patch("raccoon_cli.checkpoint.time") as mock_time:
             mock_time.time.return_value = 1000000
             create_checkpoint(tmp_path, label="first")
 
@@ -136,7 +136,7 @@ class TestListCheckpoints:
         _git(tmp_path, "commit", "-m", "commit v1")
 
         (tmp_path / "file.txt").write_text("v2\n")
-        with patch("raccoon.checkpoint.time") as mock_time:
+        with patch("raccoon_cli.checkpoint.time") as mock_time:
             mock_time.time.return_value = 2000000
             create_checkpoint(tmp_path, label="second")
 
@@ -266,7 +266,7 @@ class TestCleanCheckpoints:
 
         # Create an "old" checkpoint (timestamp in the past)
         (tmp_path / "file.txt").write_text("old\n")
-        with patch("raccoon.checkpoint.time") as mock_time:
+        with patch("raccoon_cli.checkpoint.time") as mock_time:
             mock_time.time.return_value = time.time() - 30 * 86400  # 30 days ago
             create_checkpoint(tmp_path, label="old")
 
@@ -303,10 +303,10 @@ class TestPruneExcessCheckpoints:
 
         limit = 5  # use small limit for fast test
 
-        with patch("raccoon.checkpoint._MAX_CHECKPOINTS", limit):
+        with patch("raccoon_cli.checkpoint._MAX_CHECKPOINTS", limit):
             for i in range(limit + 3):
                 (tmp_path / "file.txt").write_text(f"v{i}\n")
-                with patch("raccoon.checkpoint.time") as mock_time:
+                with patch("raccoon_cli.checkpoint.time") as mock_time:
                     mock_time.time.return_value = 1000000 + i
                     create_checkpoint(tmp_path, label=f"cp-{i}")
                 # Commit so the next stash create sees a diff

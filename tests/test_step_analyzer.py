@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from raccoon.ide.core.analysis.step_analyzer import DSLStepAnalyzer
+from raccoon_cli.ide.core.analysis.step_analyzer import DSLStepAnalyzer
 
 
 def _analyze_source(tmp_path: Path, source: str):

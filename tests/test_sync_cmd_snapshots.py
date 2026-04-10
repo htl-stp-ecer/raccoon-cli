@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 from rich.console import Console
 
-from raccoon.client.sftp_sync import SyncDirection, SyncResult
-from raccoon.commands import sync_cmd
-from raccoon.git_history import GitSnapshotResult
+from raccoon_cli.client.sftp_sync import SyncDirection, SyncResult
+from raccoon_cli.commands import sync_cmd
+from raccoon_cli.git_history import GitSnapshotResult
 
 
 def test_do_sync_creates_snapshot_for_push(monkeypatch):

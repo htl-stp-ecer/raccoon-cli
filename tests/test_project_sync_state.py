@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from raccoon.fingerprint import compute_fingerprint, default_exclude_patterns
-from raccoon.server import app as app_module
-from raccoon.server.app import create_app
-from raccoon.server.config import ServerConfig
+from raccoon_cli.fingerprint import compute_fingerprint, default_exclude_patterns
+from raccoon_cli.server import app as app_module
+from raccoon_cli.server.app import create_app
+from raccoon_cli.server.config import ServerConfig
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def server_client(tmp_path: Path, monkeypatch):
     app_module._config = config  # bypass load_config()
 
     # The auth dependency re-reads the token from disk; stub it to match.
-    from raccoon.server import auth as auth_module
+    from raccoon_cli.server import auth as auth_module
 
     monkeypatch.setattr(auth_module, "get_or_create_api_token", lambda: "test-token")
 

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rich.console import Console
 
-from raccoon.client.output_handler import OutputHandler
+from raccoon_cli.client.output_handler import OutputHandler
 
 
 class FakeWebSocket:
@@ -49,7 +49,7 @@ def _make_handler(messages, recv_timeout=0.01):
     ws = FakeWebSocket(messages)
     handler = OutputHandler("ws://fake:1234/ws/output/test-id", recv_timeout=recv_timeout)
 
-    with patch("raccoon.client.output_handler.create_connection", return_value=ws):
+    with patch("raccoon_cli.client.output_handler.create_connection", return_value=ws):
         yield handler, ws
 
 
@@ -58,10 +58,20 @@ def console():
     return Console(force_terminal=True, width=120)
 
 
+def _status(exit_code=0, status="completed"):
+    return json.dumps(
+        {
+            "__raccoon": "control",
+            "kind": "status",
+            "status": status,
+            "exit_code": exit_code,
+        }
+    )
+
+
 def test_normal_output_then_completed(console):
     """Lines are printed, then final status JSON stops the loop."""
-    status_msg = json.dumps({"status": "completed", "exit_code": 0})
-    messages = ["line 1", "line 2", status_msg]
+    messages = ["line 1", "line 2", _status()]
 
     gen = _make_handler(messages)
     handler, ws = next(gen)
@@ -72,9 +82,13 @@ def test_normal_output_then_completed(console):
     assert ws.closed
 
 
-def test_error_json_returns_failed(console):
-    """An error JSON message returns failed status."""
-    messages = [json.dumps({"error": "something broke"})]
+def test_error_control_returns_failed(console):
+    """A tagged error control message returns failed status."""
+    messages = [
+        json.dumps(
+            {"__raccoon": "control", "kind": "error", "error": "something broke"}
+        )
+    ]
 
     gen = _make_handler(messages)
     handler, ws = next(gen)
@@ -82,6 +96,58 @@ def test_error_json_returns_failed(console):
 
     assert result["status"] == "failed"
     assert "something broke" in result["error"]
+
+
+def test_untagged_json_with_error_is_printed_as_output(console):
+    """Program output that looks like JSON with 'error' is not a protocol msg."""
+    # A run that prints JSON-like log lines should NOT be interpreted as a
+    # protocol error. The stream must continue until the real status arrives.
+    lines: list[str] = []
+    messages = [
+        json.dumps({"level": "info", "error": None, "msg": "heartbeat"}),
+        "plain line",
+        _status(exit_code=0),
+    ]
+
+    gen = _make_handler(messages)
+    handler, ws = next(gen)
+    result = handler.stream_to_console(console, on_line=lines.append)
+
+    assert result["status"] == "completed"
+    assert result["exit_code"] == 0
+    # Both the JSON-looking line and the plain line were delivered as output.
+    assert len(lines) == 2
+    assert "plain line" in lines
+
+
+def test_untagged_json_with_status_is_printed_as_output(console):
+    """Output lines that happen to contain a 'status' key are not protocol msgs."""
+    messages = [
+        json.dumps({"status": "running", "exit_code": 3}),
+        _status(exit_code=0),
+    ]
+
+    gen = _make_handler(messages)
+    handler, ws = next(gen)
+    result = handler.stream_to_console(console)
+
+    assert result["status"] == "completed"
+    assert result["exit_code"] == 0
+
+
+def test_cancelling_control_is_ignored(console):
+    """The server's cancelling ack doesn't end the stream."""
+    messages = [
+        json.dumps({"__raccoon": "control", "kind": "cancelling"}),
+        "still streaming",
+        _status(exit_code=0),
+    ]
+
+    gen = _make_handler(messages)
+    handler, ws = next(gen)
+    result = handler.stream_to_console(console)
+
+    assert result["status"] == "completed"
 
 
 def test_connection_closed_returns_failed(console):
@@ -126,12 +192,11 @@ def test_timeout_loops_until_data(console):
     """WebSocketTimeoutException is retried, then real data is received."""
     from websocket import WebSocketTimeoutException
 
-    status_msg = json.dumps({"status": "completed", "exit_code": 0})
     messages = [
         WebSocketTimeoutException(),
         WebSocketTimeoutException(),
         "output line",
-        status_msg,
+        _status(exit_code=0),
     ]
 
     gen = _make_handler(messages)
@@ -171,8 +236,7 @@ def test_cancel_sends_json_to_ws():
 
 def test_on_line_callback(console):
     """on_line callback is invoked for each output line."""
-    status_msg = json.dumps({"status": "completed", "exit_code": 0})
-    messages = ["alpha", "beta", status_msg]
+    messages = ["alpha", "beta", _status(exit_code=0)]
 
     lines: list[str] = []
     gen = _make_handler(messages)

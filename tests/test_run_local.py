@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from raccoon.commands.run import _run_local
+from raccoon_cli.commands.run import _run_local
 
 
 class FakePopen:
@@ -57,9 +57,9 @@ def test_normal_exit(fake_project, click_ctx):
     """Normal execution returns exit code 0 via Popen.wait()."""
     fake = FakePopen(returncode=0)
 
-    with patch("raccoon.commands.run.subprocess.Popen", return_value=fake), \
-         patch("raccoon.commands.run.create_checkpoint"), \
-         patch("raccoon.commands.run.create_pipeline") as mock_pipe:
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake), \
+         patch("raccoon_cli.commands.run.create_checkpoint"), \
+         patch("raccoon_cli.commands.run.create_pipeline") as mock_pipe:
         mock_pipe.return_value.run_all = MagicMock()
 
         _run_local(
@@ -73,9 +73,9 @@ def test_nonzero_exit_raises(fake_project, click_ctx):
     """Non-zero exit code raises SystemExit."""
     fake = FakePopen(returncode=1)
 
-    with patch("raccoon.commands.run.subprocess.Popen", return_value=fake), \
-         patch("raccoon.commands.run.create_checkpoint"), \
-         patch("raccoon.commands.run.create_pipeline"):
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake), \
+         patch("raccoon_cli.commands.run.create_checkpoint"), \
+         patch("raccoon_cli.commands.run.create_pipeline"):
 
         with pytest.raises(SystemExit) as exc_info:
             _run_local(
@@ -92,9 +92,9 @@ def test_keyboard_interrupt_terminates(fake_project, click_ctx):
         wait_side_effect=[KeyboardInterrupt],
     )
 
-    with patch("raccoon.commands.run.subprocess.Popen", return_value=fake), \
-         patch("raccoon.commands.run.create_checkpoint"), \
-         patch("raccoon.commands.run.create_pipeline"):
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake), \
+         patch("raccoon_cli.commands.run.create_checkpoint"), \
+         patch("raccoon_cli.commands.run.create_pipeline"):
 
         with pytest.raises(SystemExit):
             _run_local(
@@ -116,9 +116,9 @@ def test_keyboard_interrupt_escalates_to_kill(fake_project, click_ctx):
         ],
     )
 
-    with patch("raccoon.commands.run.subprocess.Popen", return_value=fake), \
-         patch("raccoon.commands.run.create_checkpoint"), \
-         patch("raccoon.commands.run.create_pipeline"):
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake), \
+         patch("raccoon_cli.commands.run.create_checkpoint"), \
+         patch("raccoon_cli.commands.run.create_pipeline"):
 
         with pytest.raises(SystemExit):
             _run_local(

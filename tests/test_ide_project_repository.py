@@ -2,8 +2,8 @@ from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
-from raccoon.ide.repositories.project_repository import ProjectRepository
-from raccoon.ide.schemas.project import ProjectCreate
+from raccoon_cli.ide.repositories.project_repository import ProjectRepository
+from raccoon_cli.ide.schemas.project import ProjectCreate
 
 
 def test_create_project_invokes_raccoon_cli_and_returns_scaffolded_project(tmp_path: Path):
@@ -18,7 +18,7 @@ def test_create_project_invokes_raccoon_cli_and_returns_scaffolded_project(tmp_p
         )
         return CompletedProcess(args=args[0], returncode=0, stdout="created", stderr="")
 
-    with patch("raccoon.ide.repositories.project_repository.subprocess.run", side_effect=fake_run) as run_mock:
+    with patch("raccoon_cli.ide.repositories.project_repository.subprocess.run", side_effect=fake_run) as run_mock:
         project = repository.create_project(ProjectCreate(name="Demo Bot"))
 
     run_mock.assert_called_once_with(

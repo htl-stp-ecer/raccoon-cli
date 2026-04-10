@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from raccoon.fingerprint import (
+from raccoon_cli.fingerprint import (
     FingerprintResult,
     compute_fingerprint,
     default_exclude_patterns,

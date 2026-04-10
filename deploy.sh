@@ -5,7 +5,7 @@ USER="pi"
 
 rsync -a --info=progress2 ./ $USER@$HOST:/home/$USER/toolchain --exclude-from='.gitignore' --delete
 # Remove stale user-level install that would shadow the system-wide one
-ssh $USER@$HOST 'python3 -m pip uninstall raccoon -y --break-system-packages 2>/dev/null || true'
+ssh $USER@$HOST 'python3 -m pip uninstall raccoon-cli -y --break-system-packages 2>/dev/null || true'
 ssh $USER@$HOST 'cd toolchain && sudo RACCOON_SKIP_WEBIDE=1 python3 -m pip install . --break-system-packages'
 # Configure the systemd service
 ssh $USER@$HOST 'sudo raccoon-server install'

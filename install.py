@@ -49,10 +49,10 @@ def main() -> None:
 
     # --- Preflight: check that wheels exist ---
     transport_whls = glob.glob(str(script_dir / "raccoon_transport-*.whl"))
-    raccoon_whls = glob.glob(str(script_dir / "raccoon-*.whl"))
+    raccoon_whls = glob.glob(str(script_dir / "raccoon_cli-*.whl"))
 
     if not transport_whls or not raccoon_whls:
-        print(f"ERROR: Expected raccoon_transport-*.whl and raccoon-*.whl in {script_dir}")
+        print(f"ERROR: Expected raccoon_transport-*.whl and raccoon_cli-*.whl in {script_dir}")
         sys.exit(1)
 
     transport_whl = transport_whls[0]
@@ -83,7 +83,7 @@ def main() -> None:
     ssh(
         host,
         user,
-        "python3 -m pip uninstall raccoon -y --break-system-packages 2>/dev/null || true",
+        "python3 -m pip uninstall raccoon-cli -y --break-system-packages 2>/dev/null || true",
     )
 
     # --- Install ---
@@ -92,8 +92,8 @@ def main() -> None:
         host,
         user,
         f"sudo pip3 install --break-system-packages --force-reinstall --no-deps "
-        f"{remote_tmp}/raccoon_transport-*.whl {remote_tmp}/raccoon-*.whl "
-        f"&& sudo pip3 install --break-system-packages {remote_tmp}/raccoon-*.whl",
+        f"{remote_tmp}/raccoon_transport-*.whl {remote_tmp}/raccoon_cli-*.whl "
+        f"&& sudo pip3 install --break-system-packages {remote_tmp}/raccoon_cli-*.whl",
     )
 
     # --- Install & start systemd service ---

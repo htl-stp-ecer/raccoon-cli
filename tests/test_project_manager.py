@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from raccoon.server.services.project_manager import ProjectManager
+from raccoon_cli.server.services.project_manager import ProjectManager
 
 
 def test_create_project_invokes_raccoon_cli(tmp_path: Path):
@@ -19,7 +19,7 @@ def test_create_project_invokes_raccoon_cli(tmp_path: Path):
         )
         return CompletedProcess(args=args[0], returncode=0, stdout="created", stderr="")
 
-    with patch("raccoon.server.services.project_manager.subprocess.run", side_effect=fake_run) as run_mock:
+    with patch("raccoon_cli.server.services.project_manager.subprocess.run", side_effect=fake_run) as run_mock:
         project = manager.create_project("Demo Bot")
 
     run_mock.assert_called_once_with(
@@ -45,7 +45,7 @@ def test_create_project_invokes_raccoon_cli(tmp_path: Path):
 def test_create_project_rejects_invalid_name(tmp_path: Path):
     manager = ProjectManager(tmp_path)
 
-    with patch("raccoon.server.services.project_manager.subprocess.run") as run_mock:
+    with patch("raccoon_cli.server.services.project_manager.subprocess.run") as run_mock:
         with pytest.raises(ValueError):
             manager.create_project("bad/name")
 

@@ -2,8 +2,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from raccoon.ide.app import create_app
-from raccoon.ide.services.step_discovery_service import StepDiscoveryService
+from raccoon_cli.ide.app import create_app
+from raccoon_cli.ide.services.step_discovery_service import StepDiscoveryService
 
 
 class _DummyProjectService:

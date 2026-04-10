@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from raccoon.server.routes.commands import (
+from raccoon_cli.server.routes.commands import (
     _active_commands,
     _cancel_running_commands_for_project,
     _reject_if_another_project_running,
 )
-from raccoon.server.services.executor import CommandExecutor, CommandStatus
+from raccoon_cli.server.services.executor import CommandExecutor, CommandStatus
 
 
 @pytest.fixture(autouse=True)
