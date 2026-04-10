@@ -10,3 +10,6 @@ raccoon/web-ide-dist
 web-ide/node_modules
 web-ide/dist
 web-ide/.angular
+build
+raccoon_cli.egg-info
+dist
