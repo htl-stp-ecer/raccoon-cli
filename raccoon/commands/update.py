@@ -518,6 +518,11 @@ def _run_raccoon_server_install(console: Console, ssh_client) -> None:
             console.print("[red]install.py not found in raccoon-server tarball.[/red]")
             return
 
+        # Workaround: install.py globs for ``raccoon-*.whl`` but the release
+        # now ships ``raccoon_cli-*.whl`` (pip rename). Copy the wheel under a
+        # matching name so install.py's preflight finds it.
+        _ensure_raccoon_whl_alias(os.path.dirname(install_script))
+
         env = os.environ.copy()
         if ssh_client is not None:
             manager = get_connection_manager()
@@ -542,6 +547,29 @@ def _run_raccoon_server_install(console: Console, ssh_client) -> None:
             return
 
         console.print("[green]raccoon-server install complete.[/green]")
+
+
+def _ensure_raccoon_whl_alias(directory: str) -> None:
+    """Make sure ``raccoon-*.whl`` exists next to install.py.
+
+    The server tarball now ships ``raccoon_cli-*.whl`` but install.py's
+    preflight glob still looks for the old ``raccoon-*.whl`` name. Copy the
+    wheel under a matching name if needed; this is a no-op once install.py
+    upstream is updated to glob ``raccoon_cli-*.whl``.
+    """
+    import glob
+
+    if glob.glob(os.path.join(directory, "raccoon-*.whl")):
+        return
+    cli_whls = glob.glob(os.path.join(directory, "raccoon_cli-*.whl"))
+    if not cli_whls:
+        return
+    src = cli_whls[0]
+    dst = os.path.join(
+        directory, os.path.basename(src).replace("raccoon_cli-", "raccoon-", 1)
+    )
+    shutil.copyfile(src, dst)
+    logger.info("Aliased %s → %s for install.py compatibility", os.path.basename(src), os.path.basename(dst))
 
 
 def _find_install_script(tmpdir: str) -> str | None:
