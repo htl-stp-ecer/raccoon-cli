@@ -488,88 +488,53 @@ def _update_pi_tarball(
 
 
 def _run_raccoon_server_install(console: Console, ssh_client) -> None:
-    """Run the raccoon-server install.py from the raccoon-cli release.
+    """Refresh the raccoon-server systemd setup on the Pi.
 
-    Downloads ``raccoon-server-*.tar.gz`` from the latest raccoon-cli release,
-    extracts it, and runs the bundled ``install.py`` so client-side and
-    wombat-side setup (systemd units, service config, etc.) is refreshed.
-
-    If an SSH connection to a Pi exists, ``RPI_HOST``/``RPI_USER`` are passed
-    through so the script can also update the wombat side.
+    The pip install of ``raccoon-cli`` has already happened at this point
+    (either on the laptop, the Pi, or both). This step just runs the
+    service-lifecycle commands that the legacy ``install.py`` used to do:
+    stop the service, (re)install the systemd unit, restart, and report
+    status.
     """
+    if ssh_client is None:
+        return
+
     console.print()
-    console.print("[bold]Running raccoon-server install...[/bold]")
+    console.print("[bold]Running raccoon-server install on Pi...[/bold]")
 
-    repo = "htl-stp-ecer/raccoon-cli"
-    with tempfile.TemporaryDirectory() as tmpdir:
-        console.print("[dim]Downloading raccoon-server tarball...[/dim]")
-        tarballs = download_release_assets(repo, "raccoon-server-*.tar.gz", tmpdir)
-        if not tarballs:
-            console.print("[red]No raccoon-server tarball found in release.[/red]")
+    steps: list[tuple[str, str, bool]] = [
+        ("Stopping raccoon service", "sudo systemctl stop raccoon.service 2>/dev/null || true", True),
+        ("Configuring systemd unit", "sudo raccoon-server install", False),
+        ("Restarting raccoon service", "sudo systemctl restart raccoon.service", False),
+    ]
+
+    for desc, cmd, allow_fail in steps:
+        console.print(f"[dim]{desc}...[/dim]")
+        try:
+            _, stdout, stderr = ssh_client.exec_command(cmd, timeout=120)
+            exit_code = stdout.channel.recv_exit_status()
+        except Exception as e:
+            console.print(f"[red]{desc} failed: {e}[/red]")
+            return
+        if exit_code != 0 and not allow_fail:
+            err = stderr.read().decode(errors="replace").strip()
+            console.print(f"[red]{desc} failed (exit {exit_code}):[/red]\n{err}")
             return
 
-        tarball = tarballs[0]
-        console.print(f"[dim]Extracting {os.path.basename(tarball)}...[/dim]")
-        with tarfile.open(tarball, "r:gz") as tf:
-            tf.extractall(tmpdir)
-
-        install_script = _find_install_script(tmpdir)
-        if not install_script:
-            console.print("[red]install.py not found in raccoon-server tarball.[/red]")
-            return
-
-        # Workaround: install.py globs for ``raccoon-*.whl`` but the release
-        # now ships ``raccoon_cli-*.whl`` (pip rename). Copy the wheel under a
-        # matching name so install.py's preflight finds it.
-        _ensure_raccoon_whl_alias(os.path.dirname(install_script))
-
-        env = os.environ.copy()
-        if ssh_client is not None:
-            manager = get_connection_manager()
-            env["RPI_HOST"] = manager.state.pi_address or ""
-            env["RPI_USER"] = manager.state.pi_user or "pi"
-            console.print(
-                f"[dim]Running {os.path.basename(install_script)} "
-                f"(client + wombat {env.get('RPI_HOST', '?')})...[/dim]"
-            )
-        else:
-            console.print(
-                f"[dim]Running {os.path.basename(install_script)} (client only)...[/dim]"
-            )
-
-        result = subprocess.run(
-            [sys.executable, install_script],
-            env=env,
-            cwd=os.path.dirname(install_script),
+    # Status check — best-effort, don't fail the whole update if it's noisy
+    try:
+        _, stdout, _ = ssh_client.exec_command(
+            "systemctl is-active raccoon.service", timeout=10
         )
-        if result.returncode != 0:
-            console.print("[red]raccoon-server install.py failed.[/red]")
-            return
+        state = stdout.read().decode().strip()
+        if state == "active":
+            console.print("[green]raccoon service is active.[/green]")
+        else:
+            console.print(f"[yellow]raccoon service state: {state or 'unknown'}[/yellow]")
+    except Exception:
+        pass
 
-        console.print("[green]raccoon-server install complete.[/green]")
-
-
-def _ensure_raccoon_whl_alias(directory: str) -> None:
-    """Make sure ``raccoon-*.whl`` exists next to install.py.
-
-    The server tarball now ships ``raccoon_cli-*.whl`` but install.py's
-    preflight glob still looks for the old ``raccoon-*.whl`` name. Copy the
-    wheel under a matching name if needed; this is a no-op once install.py
-    upstream is updated to glob ``raccoon_cli-*.whl``.
-    """
-    import glob
-
-    if glob.glob(os.path.join(directory, "raccoon-*.whl")):
-        return
-    cli_whls = glob.glob(os.path.join(directory, "raccoon_cli-*.whl"))
-    if not cli_whls:
-        return
-    src = cli_whls[0]
-    dst = os.path.join(
-        directory, os.path.basename(src).replace("raccoon_cli-", "raccoon-", 1)
-    )
-    shutil.copyfile(src, dst)
-    logger.info("Aliased %s → %s for install.py compatibility", os.path.basename(src), os.path.basename(dst))
+    console.print("[green]raccoon-server install complete.[/green]")
 
 
 def _find_install_script(tmpdir: str) -> str | None:
