@@ -66,13 +66,13 @@ class DefsStubGenerator(BaseGenerator):
 
         # Always need these
         imports.add("from typing import List")
-        imports.add("from libstp.step.servo.preset import ServoPreset, _PresetPosition")
+        imports.add("from raccoon.step.servo.preset import ServoPreset, _PresetPosition")
 
         # Collect field info
         fields: List[Tuple[str, str]] = []  # (name, type_str)
 
         # IMU is always first
-        imports.add("from libstp import IMU as Imu")
+        imports.add("from raccoon import IMU as Imu")
         fields.append(("imu", "Imu"))
 
         has_wfl_sensor = False
@@ -87,7 +87,7 @@ class DefsStubGenerator(BaseGenerator):
 
             if type_name == "SensorGroup":
                 # SensorGroup is a regular definition type
-                imports.add("from libstp.step.motion.sensor_group import SensorGroup")
+                imports.add("from raccoon.step.motion.sensor_group import SensorGroup")
                 fields.append((field_name, "SensorGroup"))
             elif type_name == "Servo" and positions and isinstance(positions, dict):
                 # Generate a typed preset class for this servo
@@ -100,7 +100,7 @@ class DefsStubGenerator(BaseGenerator):
                 # Regular hardware type
                 import_name = _TYPE_IMPORTS.get(type_name, type_name)
                 if import_name:
-                    imports.add(f"from libstp import {import_name}")
+                    imports.add(f"from raccoon import {import_name}")
                 fields.append((field_name, import_name or "Any"))
 
             if field_name == "wait_for_light_sensor":
@@ -108,7 +108,7 @@ class DefsStubGenerator(BaseGenerator):
                 wfl_has_drop_fraction = "drop_fraction" in hw_cfg
 
         # analog_sensors list
-        imports.add("from libstp import AnalogSensor")
+        imports.add("from raccoon import AnalogSensor")
         fields.append(("analog_sensors", "List[AnalogSensor]"))
 
         # wait_for_light config attributes (generated alongside wait_for_light_sensor)

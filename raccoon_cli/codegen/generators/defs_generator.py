@@ -244,7 +244,7 @@ class DefsGenerator(BaseGenerator):
         offset: float,
     ) -> str:
         """Build a ServoPreset(...) expression wrapping a Servo constructor."""
-        self.imports._entries.add(("libstp.step.servo.preset", "ServoPreset"))
+        self.imports._entries.add(("raccoon.step.servo.preset", "ServoPreset"))
         positions_literal = build_literal_expr(positions)
         if offset:
             return f"ServoPreset({servo_expr}, positions={positions_literal}, offset={build_literal_expr(offset)})"
@@ -263,9 +263,9 @@ class DefsGenerator(BaseGenerator):
             return
 
         candidates = [
-            "libstp.hal.AnalogSensor",
-            "libstp.AnalogSensor",
-            "libstp.foundation.AnalogSensor",
+            "raccoon.hal.AnalogSensor",
+            "raccoon.AnalogSensor",
+            "raccoon.foundation.AnalogSensor",
         ]
 
         for qualname in candidates:
@@ -281,7 +281,7 @@ class DefsGenerator(BaseGenerator):
         # the None short-circuit.
         from ..type_index import ClassProxy, get_type_index
 
-        proxy = get_type_index().resolve("libstp.hal.AnalogSensor")
+        proxy = get_type_index().resolve("raccoon.hal.AnalogSensor")
         if proxy is not None:
             self._analog_sensor_class = proxy  # type: ignore[assignment]
             logger.debug("Resolved AnalogSensor from type index (offline)")
@@ -301,7 +301,7 @@ class DefsGenerator(BaseGenerator):
 
         # Handle ClassProxy objects (offline codegen)
         if isinstance(hw_class, ClassProxy):
-            return hw_class.is_subclass_of("libstp.hal.AnalogSensor")
+            return hw_class.is_subclass_of("raccoon.hal.AnalogSensor")
 
         try:
             return issubclass(hw_class, self._analog_sensor_class)
@@ -314,8 +314,8 @@ class DefsGenerator(BaseGenerator):
             return
 
         candidates = [
-            ("from libstp import Imu", "libstp.imu.Imu"),
-            ("from libstp import IMU as Imu", "libstp.hal.IMU"),
+            ("from raccoon import Imu", "raccoon.imu.Imu"),
+            ("from raccoon import IMU as Imu", "raccoon.hal.IMU"),
         ]
 
         for import_line, qualname in candidates:
@@ -327,11 +327,11 @@ class DefsGenerator(BaseGenerator):
             except (ImportError, AttributeError):
                 continue
 
-        # Fall back to libstp import so generation still succeeds.
-        self._imu_import_line = "from libstp import IMU as Imu"
+        # Fall back to raccoon import so generation still succeeds.
+        self._imu_import_line = "from raccoon import IMU as Imu"
         logger.warning(
-            "Could not import libstp.imu.Imu or libstp.hal.IMU during generation. "
-            "Defaulting to 'from libstp import IMU as Imu'; ensure the target "
+            "Could not import raccoon.imu.Imu or raccoon.hal.IMU during generation. "
+            "Defaulting to 'from raccoon import IMU as Imu'; ensure the target "
             "environment provides a compatible IMU class."
         )
 
@@ -360,7 +360,7 @@ class DefsGenerator(BaseGenerator):
     def _build_sensor_group_expr(self, hw_cfg: Dict[str, Any]) -> str:
         """Build a SensorGroup(...) constructor expression."""
         self.imports._entries.add(
-            ("libstp.step.motion.sensor_group", "SensorGroup")
+            ("raccoon.step.motion.sensor_group", "SensorGroup")
         )
 
         pieces: List[str] = []

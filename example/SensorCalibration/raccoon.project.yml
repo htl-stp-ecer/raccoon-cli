@@ -1,6 +1,0 @@
-name: SensorCalibration
-uuid: fa0c0c16-fa65-4a75-82f6-f9136e0ac085
-robot: !include config/robot.yml
-definitions: !include config/hardware.yml
-missions: !include config/missions.yml
-connection: !include config/connection.yml

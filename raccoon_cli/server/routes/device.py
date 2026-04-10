@@ -183,7 +183,7 @@ def _get_ip() -> str:
 def _get_battery_info() -> tuple[Optional[float], Optional[float]]:
     """Get battery voltage and percentage from the Wombat HAL."""
     try:
-        from libstp.hal import Wombat
+        from raccoon.hal import Wombat
 
         wombat = Wombat()
         voltage = wombat.battery_voltage()

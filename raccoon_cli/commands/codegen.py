@@ -135,7 +135,7 @@ def codegen_command(
 ) -> None:
     """Generate Python code from raccoon.project.yml.
 
-    Runs locally using the libstp type index — no Pi connection needed.
+    Runs locally using the raccoon type index — no Pi connection needed.
     """
     console: Console = ctx.obj["console"]
 

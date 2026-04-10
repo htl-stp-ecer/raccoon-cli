@@ -34,7 +34,7 @@ async def read_encoder_position(request: EncoderReadRequest):
     This provides direct hardware access for calibration purposes.
     """
     try:
-        from libstp.hal import Motor as HalMotor  # type: ignore
+        from raccoon.hal import Motor as HalMotor  # type: ignore
 
         motor = HalMotor(port=request.port, inverted=request.inverted)
         position = motor.get_position()
@@ -47,7 +47,7 @@ async def read_encoder_position(request: EncoderReadRequest):
     except ImportError as e:
         raise HTTPException(
             status_code=503,
-            detail="libstp not available on this system. Hardware access requires running on the Pi.",
+            detail="raccoon not available on this system. Hardware access requires running on the Pi.",
         ) from e
     except Exception as e:
         return EncoderReadResponse(

@@ -107,12 +107,12 @@ class DSLStepAnalyzer:
         return step_files
 
     def _find_library_steps(self) -> List[Path]:
-        """Find all step files in the libstp library.
+        """Find all step files in the raccoon library.
 
         Prefer ``.py`` over ``.pyi`` when both exist for the same module so we
         don't emit duplicate steps from stub/runtime pairs.
         """
-        lib_dir = self.project_root / "libstp"
+        lib_dir = self.project_root / "raccoon"
         if lib_dir.exists():
             module_files: Dict[Path, Path] = {}
             for pattern in ("*.pyi", "*.py"):

@@ -69,7 +69,7 @@ def _print_summary(ctx: click.Context) -> None:
 @click.group(context_settings=CONTEXT_SETTINGS, no_args_is_help=True)
 @click.pass_context
 def main(ctx: click.Context) -> None:
-    """Raccoon - Toolchain CLI for libstp projects."""
+    """Raccoon - Toolchain CLI for raccoon projects."""
     _setup_context(ctx)
 
 

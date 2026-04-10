@@ -14,15 +14,15 @@ class _DummyProjectService:
         return Path(".")
 
 
-def test_refresh_libstp_cache_locally_indexes_installed_package(tmp_path, monkeypatch):
+def test_refresh_raccoon_cache_locally_indexes_installed_package(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    libstp_dir = tmp_path / "site-packages" / "libstp"
-    step_file = libstp_dir / "step" / "motion" / "drive_dsl.py"
+    raccoon_dir = tmp_path / "site-packages" / "raccoon"
+    step_file = raccoon_dir / "step" / "motion" / "drive_dsl.py"
     step_file.parent.mkdir(parents=True)
     step_file.write_text(
         """
-from libstp import dsl
+from raccoon import dsl
 
 @dsl
 def local_drive(speed: float = 0.5):
@@ -32,9 +32,9 @@ def local_drive(speed: float = 0.5):
     )
 
     service = StepDiscoveryService(project_service=_DummyProjectService())
-    monkeypatch.setattr(service, "_find_installed_libstp_dir", lambda: libstp_dir)
+    monkeypatch.setattr(service, "_find_installed_raccoon_dir", lambda: raccoon_dir)
 
-    status = service.refresh_libstp_cache_locally()
+    status = service.refresh_raccoon_cache_locally()
     steps = service.get_library_steps()
 
     assert status["status"] == "ready"
@@ -51,7 +51,7 @@ def test_refresh_route_allows_local_indexing_without_device_url(tmp_path, monkey
             "error": None,
         }
 
-    monkeypatch.setattr(StepDiscoveryService, "refresh_libstp_cache_locally", fake_refresh)
+    monkeypatch.setattr(StepDiscoveryService, "refresh_raccoon_cache_locally", fake_refresh)
 
     client = TestClient(create_app(project_root=tmp_path))
     response = client.post("/api/v1/steps/index/refresh")

@@ -221,7 +221,7 @@ class RobotGenerator(BaseGenerator):
         motion_pid_cfg = data.get("motion_pid")
         if motion_pid_cfg is not None:
             try:
-                motion_pid_class = resolve_class("libstp.motion.UnifiedMotionPidConfig")
+                motion_pid_class = resolve_class("raccoon.motion.UnifiedMotionPidConfig")
                 self.imports.add(motion_pid_class)
                 motion_pid_expr = build_constructor_expr(
                     motion_pid_class, motion_pid_cfg, "robot.motion_pid", self.imports
@@ -229,7 +229,7 @@ class RobotGenerator(BaseGenerator):
                 builder.add_class_attribute("motion_pid_config", motion_pid_expr)
             except (ImportError, AttributeError):
                 logger.warning(
-                    "Could not resolve libstp.motion.UnifiedMotionPidConfig"
+                    "Could not resolve raccoon.motion.UnifiedMotionPidConfig"
                     " - skipping motion_pid config generation"
                 )
 
@@ -422,10 +422,10 @@ class RobotGenerator(BaseGenerator):
     def _build_table_map_expr(self, data: Dict[str, Any]) -> str:
         """Build a TableMap.from_ftmap(...) expression from the config dict."""
         try:
-            table_map_cls = resolve_class("libstp.robot.table_map.TableMap")
+            table_map_cls = resolve_class("raccoon.robot.table_map.TableMap")
             self.imports.add(table_map_cls)
         except (ImportError, AttributeError):
-            self.imports._entries.add(("libstp.robot.table_map", "TableMap"))
+            self.imports._entries.add(("raccoon.robot.table_map", "TableMap"))
         return f"TableMap.from_ftmap({data!r})"
 
     def _build_sensor_positions_expr(
@@ -754,10 +754,10 @@ class RobotGenerator(BaseGenerator):
             Constructor expression string
         """
         try:
-            drive_class = resolve_class("libstp.drive.Drive")
+            drive_class = resolve_class("raccoon.drive.Drive")
             self.imports.add(drive_class)
         except (ImportError, AttributeError):
-            logger.error("Could not resolve libstp.drive.Drive")
+            logger.error("Could not resolve raccoon.drive.Drive")
             return ""
 
         # Get Drive's __init__ parameters
@@ -820,7 +820,7 @@ class RobotGenerator(BaseGenerator):
         """
         # Import the necessary classes
         try:
-            chassis_vel_cls = resolve_class("libstp.drive.ChassisVelocityControlConfig")
+            chassis_vel_cls = resolve_class("raccoon.drive.ChassisVelocityControlConfig")
             self.imports.add(chassis_vel_cls)
         except (ImportError, AttributeError):
             logger.warning("Could not resolve ChassisVelocityControlConfig, using unresolved name")
@@ -830,7 +830,7 @@ class RobotGenerator(BaseGenerator):
 
         # Build per-axis configs
         try:
-            axis_vel_cls = resolve_class("libstp.drive.AxisVelocityControlConfig")
+            axis_vel_cls = resolve_class("raccoon.drive.AxisVelocityControlConfig")
             self.imports.add(axis_vel_cls)
         except (ImportError, AttributeError):
             pass
@@ -872,7 +872,7 @@ class RobotGenerator(BaseGenerator):
         args = []
         if pid_cfg:
             try:
-                pid_cls = resolve_class("libstp.foundation.PidGains")
+                pid_cls = resolve_class("raccoon.foundation.PidGains")
                 self.imports.add(pid_cls)
             except (ImportError, AttributeError):
                 pass
@@ -883,7 +883,7 @@ class RobotGenerator(BaseGenerator):
 
         if ff_cfg:
             try:
-                ff_cls = resolve_class("libstp.foundation.Feedforward")
+                ff_cls = resolve_class("raccoon.foundation.Feedforward")
                 self.imports.add(ff_cls)
             except (ImportError, AttributeError):
                 pass
@@ -913,10 +913,10 @@ class RobotGenerator(BaseGenerator):
 
     ODOMETRY_PARAM_HINTS = {
         # IMU-only odometry
-        "libstp.odometry_imu.ImuOdometry": ["imu", "kinematics"],
+        "raccoon.odometry_imu.ImuOdometry": ["imu", "kinematics"],
         "ImuOdometry": ["imu", "kinematics"],
         # Fused odometry combines IMU + kinematics with invert flags
-        "libstp.odometry_fused.FusedOdometry": [
+        "raccoon.odometry_fused.FusedOdometry": [
             "imu",
             "kinematics",
             "invert_x",
@@ -979,7 +979,7 @@ class RobotGenerator(BaseGenerator):
         except ValueError as e:
             logger.warning(
                 "robot.odometry: %s. Falling back to heuristic parameter mapping "
-                "for '%s'. Ensure libstp is available during generation for full validation.",
+                "for '%s'. Ensure raccoon is available during generation for full validation.",
                 e,
                 qualified_name,
             )
@@ -988,7 +988,7 @@ class RobotGenerator(BaseGenerator):
             if not init_params:
                 raise ValueError(
                     f"robot.odometry: Unable to determine parameters for '{qualified_name}'. "
-                    "Install libstp to enable introspection or provide parameter hints."
+                    "Install raccoon to enable introspection or provide parameter hints."
                 ) from e
 
         self.imports.add(odometry_class)
@@ -1145,8 +1145,8 @@ class RobotGenerator(BaseGenerator):
         if lookup:
             return lookup
 
-        # Assume the type is declared in libstp.odometry.<lowercase> by convention
-        module_name = f"libstp.odometry_{odometry_type.lower()}"
+        # Assume the type is declared in raccoon.odometry.<lowercase> by convention
+        module_name = f"raccoon.odometry_{odometry_type.lower()}"
         return f"{module_name}.{odometry_type}"
 
     def _create_placeholder_class(self, qualified_name: str) -> type:
@@ -1192,14 +1192,14 @@ class RobotGenerator(BaseGenerator):
 
     def generate_imports(self) -> str:
         """Generate import statements including Defs, GenericRobot, and mission imports."""
-        # Add GenericRobot to imports (will be consolidated with other libstp imports)
+        # Add GenericRobot to imports (will be consolidated with other raccoon imports)
         from ..introspection import resolve_class
         try:
-            generic_robot_cls = resolve_class("libstp.GenericRobot")
+            generic_robot_cls = resolve_class("raccoon.GenericRobot")
             self.imports.add(generic_robot_cls)
         except (ImportError, AttributeError):
             # Fallback: add import entry directly so GenericRobot always appears
-            self.imports._entries.add(("libstp", "GenericRobot"))
+            self.imports._entries.add(("raccoon", "GenericRobot"))
 
         # Add geometry dataclass imports if needed (SensorPosition, WheelPosition)
         if hasattr(self, '_full_config'):
@@ -1210,17 +1210,17 @@ class RobotGenerator(BaseGenerator):
             # Import if we have physical sensors or kinematics for wheel positions
             if physical.get("sensors") or kinematics:
                 try:
-                    sensor_pos_cls = resolve_class("libstp.robot.geometry.SensorPosition")
+                    sensor_pos_cls = resolve_class("raccoon.robot.geometry.SensorPosition")
                     self.imports.add(sensor_pos_cls)
                 except (ImportError, AttributeError):
-                    self.imports._entries.add(("libstp.robot.geometry", "SensorPosition"))
+                    self.imports._entries.add(("raccoon.robot.geometry", "SensorPosition"))
                 try:
-                    wheel_pos_cls = resolve_class("libstp.robot.geometry.WheelPosition")
+                    wheel_pos_cls = resolve_class("raccoon.robot.geometry.WheelPosition")
                     self.imports.add(wheel_pos_cls)
                 except (ImportError, AttributeError):
-                    self.imports._entries.add(("libstp.robot.geometry", "WheelPosition"))
+                    self.imports._entries.add(("raccoon.robot.geometry", "WheelPosition"))
 
-        # Get consolidated libstp imports from ImportSet
+        # Get consolidated raccoon imports from ImportSet
         base_imports = super().generate_imports()
 
         # Add Defs import - always use src.hardware.defs

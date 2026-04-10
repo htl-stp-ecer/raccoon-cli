@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class StepDiscoveryService:
-    """Discover DSL steps from the locally installed libstp and project source."""
+    """Discover DSL steps from the locally installed raccoon and project source."""
 
     def __init__(self, project_service: ProjectService):
         self.project_service = project_service
@@ -35,7 +35,7 @@ class StepDiscoveryService:
     def get_project_steps(self, project_uuid: UUID) -> List[Dict[str, Any]]:
         return self._deduplicate(self._scan_project_steps(project_uuid))
 
-    def get_libstp_cache_status(self) -> Dict[str, Any]:
+    def get_raccoon_cache_status(self) -> Dict[str, Any]:
         return {
             "status": "ready" if self._library_steps else "empty",
             "count": len(self._library_steps),
@@ -43,40 +43,40 @@ class StepDiscoveryService:
             "error": None,
         }
 
-    def refresh_libstp_cache_locally(self) -> Dict[str, Any]:
-        """Force re-scan of the local libstp install."""
+    def refresh_raccoon_cache_locally(self) -> Dict[str, Any]:
+        """Force re-scan of the local raccoon install."""
         self._library_steps = self._scan_library_steps()
         logger.info("Re-indexed %d library steps", len(self._library_steps))
-        return self.get_libstp_cache_status()
+        return self.get_raccoon_cache_status()
 
-    def clear_libstp_cache(self) -> None:
+    def clear_raccoon_cache(self) -> None:
         self._library_steps = []
 
-    def import_libstp_cache(self, steps: List[Dict[str, Any]], last_indexed_at: Optional[str] = None) -> None:
+    def import_raccoon_cache(self, steps: List[Dict[str, Any]], last_indexed_at: Optional[str] = None) -> None:
         """No-op — kept for API compatibility. Steps are discovered locally."""
         pass
 
     def _scan_library_steps(self) -> List[StepFunction]:
-        """Scan both the installed libstp package and any local libstp/ dir."""
+        """Scan both the installed raccoon package and any local raccoon/ dir."""
         steps: List[StepFunction] = []
 
-        # Installed libstp package (stubs or real)
-        libstp_dir = self._find_installed_libstp_dir()
-        if libstp_dir:
-            analyzer = DSLStepAnalyzer(libstp_dir.parent)
+        # Installed raccoon package (stubs or real)
+        raccoon_dir = self._find_installed_raccoon_dir()
+        if raccoon_dir:
+            analyzer = DSLStepAnalyzer(raccoon_dir.parent)
             for f in analyzer._find_library_steps():
                 analyzer._analyze_file(f)
             steps.extend(analyzer.discovered_steps)
-            logger.debug("Found %d steps from installed libstp at %s", len(analyzer.discovered_steps), libstp_dir)
+            logger.debug("Found %d steps from installed raccoon at %s", len(analyzer.discovered_steps), raccoon_dir)
 
-        # Local libstp/ directory under cwd (if present)
+        # Local raccoon/ directory under cwd (if present)
         local_analyzer = DSLStepAnalyzer(Path.cwd())
         local_files = local_analyzer._find_library_steps()
         if local_files:
             for f in local_files:
                 local_analyzer._analyze_file(f)
             steps.extend(local_analyzer.discovered_steps)
-            logger.debug("Found %d steps from local libstp/", len(local_analyzer.discovered_steps))
+            logger.debug("Found %d steps from local raccoon/", len(local_analyzer.discovered_steps))
 
         return steps
 
@@ -107,9 +107,9 @@ class StepDiscoveryService:
 
     # ── Helpers ────────────────────────────────────────────
 
-    def _find_installed_libstp_dir(self) -> Optional[Path]:
+    def _find_installed_raccoon_dir(self) -> Optional[Path]:
         try:
-            spec = importlib.util.find_spec("libstp")
+            spec = importlib.util.find_spec("raccoon")
         except Exception:
             return None
         if spec is None:

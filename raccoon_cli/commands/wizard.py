@@ -371,7 +371,7 @@ def _ask_ticks(
     if read_fn is None:
         # Try local HAL
         try:
-            from libstp.hal import Motor as HalMotor  # type: ignore
+            from raccoon.hal import Motor as HalMotor  # type: ignore
 
             def _local_read(mp: int, inv: bool) -> int:
                 return HalMotor(port=mp, inverted=inv).get_position()
@@ -500,7 +500,7 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
     Guides you through drivetrain type, motor ports, physical measurements,
     button sensor, optional extra definitions, and encoder ticks calibration.
     Hardware types and their parameters are read directly from the installed
-    libstp stubs so the wizard always reflects the available API.
+    raccoon stubs so the wizard always reflects the available API.
     """
     console: Console = ctx.obj["console"]
 

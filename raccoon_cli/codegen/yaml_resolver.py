@@ -34,7 +34,7 @@ class YamlResolver:
         Add a namespace to search for simple type names.
 
         Args:
-            namespace: Fully qualified namespace (e.g., "libstp.hal")
+            namespace: Fully qualified namespace (e.g., "raccoon.hal")
         """
         if namespace not in self.default_namespaces:
             self.default_namespaces.append(namespace)
@@ -45,7 +45,7 @@ class YamlResolver:
 
         Args:
             simple_name: Simple name (e.g., "differential")
-            qualified_name: Fully qualified name (e.g., "libstp.kinematics_differential.DifferentialKinematics")
+            qualified_name: Fully qualified name (e.g., "raccoon.kinematics_differential.DifferentialKinematics")
         """
         self.type_lookup[simple_name.lower()] = qualified_name
 
@@ -54,8 +54,8 @@ class YamlResolver:
         Resolve a type name to a class object.
 
         Supports three formats:
-        1. Fully qualified names (e.g., "libstp.hal.Motor")
-        2. Simple names with lookup table (e.g., "differential" -> "libstp.kinematics_differential.DifferentialKinematics")
+        1. Fully qualified names (e.g., "raccoon.hal.Motor")
+        2. Simple names with lookup table (e.g., "differential" -> "raccoon.kinematics_differential.DifferentialKinematics")
         3. Simple names with namespace search (e.g., "Motor" searches in default_namespaces)
 
         Args:
@@ -138,23 +138,23 @@ class YamlResolver:
 
 def create_hardware_resolver() -> YamlResolver:
     """Create a resolver configured for hardware types."""
-    resolver = YamlResolver(default_namespaces=["libstp", "libstp.hal", "libstp.foundation", "libstp.imu"])
+    resolver = YamlResolver(default_namespaces=["raccoon", "raccoon.hal", "raccoon.foundation", "raccoon.imu"])
     return resolver
 
 
 def create_kinematics_resolver() -> YamlResolver:
     """Create a resolver configured for kinematics types."""
     resolver = YamlResolver()
-    resolver.add_type_mapping("differential", "libstp.kinematics_differential.DifferentialKinematics")
-    resolver.add_type_mapping("mecanum", "libstp.kinematics_mecanum.MecanumKinematics")
+    resolver.add_type_mapping("differential", "raccoon.kinematics_differential.DifferentialKinematics")
+    resolver.add_type_mapping("mecanum", "raccoon.kinematics_mecanum.MecanumKinematics")
     return resolver
 
 
 def create_odometry_resolver() -> YamlResolver:
     """Create a resolver configured for odometry types."""
-    resolver = YamlResolver(default_namespaces=["libstp.odometry", "libstp"])
-    resolver.add_type_mapping("imuodometry", "libstp.odometry_imu.ImuOdometry")
-    resolver.add_type_mapping("imu", "libstp.odometry_imu.ImuOdometry")
-    resolver.add_type_mapping("fusedodometry", "libstp.odometry_fused.FusedOdometry")
-    resolver.add_type_mapping("fused", "libstp.odometry_fused.FusedOdometry")
+    resolver = YamlResolver(default_namespaces=["raccoon.odometry", "raccoon"])
+    resolver.add_type_mapping("imuodometry", "raccoon.odometry_imu.ImuOdometry")
+    resolver.add_type_mapping("imu", "raccoon.odometry_imu.ImuOdometry")
+    resolver.add_type_mapping("fusedodometry", "raccoon.odometry_fused.FusedOdometry")
+    resolver.add_type_mapping("fused", "raccoon.odometry_fused.FusedOdometry")
     return resolver

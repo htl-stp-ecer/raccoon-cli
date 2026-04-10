@@ -55,7 +55,7 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
     PackageInfo(
         name="raccoon-lib",
         repo="htl-stp-ecer/raccoon-lib",
-        pip_name="libstp",
+        pip_name="raccoon",
         targets=["pi"],
         on_pypi=False,
     ),

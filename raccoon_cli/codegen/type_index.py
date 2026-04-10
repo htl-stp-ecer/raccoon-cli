@@ -1,8 +1,8 @@
-"""Offline type index for libstp — enables codegen without live hardware imports.
+"""Offline type index for raccoon — enables codegen without live hardware imports.
 
 The index is a JSON file that captures class metadata (init params, bases,
 docstrings) from .pyi stub files.  It is auto-generated on first access
-and used as a fallback when live ``import libstp`` is unavailable.
+and used as a fallback when live ``import raccoon`` is unavailable.
 """
 
 from __future__ import annotations
@@ -18,21 +18,21 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("raccoon")
 
 INDEX_VERSION = 1
-DEFAULT_INDEX_PATH = Path.home() / ".raccoon" / "libstp_type_index.json"
+DEFAULT_INDEX_PATH = Path.home() / ".raccoon" / "raccoon_type_index.json"
 
 
 # ---------------------------------------------------------------------------
-# Find libstp package directory
+# Find raccoon package directory
 # ---------------------------------------------------------------------------
 
-def _find_libstp_package_dir() -> Optional[Path]:
-    """Find the libstp package directory without importing it."""
+def _find_raccoon_package_dir() -> Optional[Path]:
+    """Find the raccoon package directory without importing it."""
     import site
 
     # Check common install locations
     search_dirs = site.getsitepackages() + [site.getusersitepackages()]
     for d in search_dirs:
-        candidate = Path(d) / "libstp"
+        candidate = Path(d) / "raccoon"
         if candidate.is_dir():
             return candidate
 
@@ -44,14 +44,14 @@ def _find_libstp_package_dir() -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 def _find_pyi_files(package_dir: Path) -> Dict[str, Path]:
-    """Find all .pyi stub files in the libstp package directory."""
+    """Find all .pyi stub files in the raccoon package directory."""
     pyi_files = {}
     for pyi_path in package_dir.glob("*.pyi"):
         stem = pyi_path.stem
         if stem == "__init__":
-            mod_name = "libstp"
+            mod_name = "raccoon"
         else:
-            mod_name = f"libstp.{stem}"
+            mod_name = f"raccoon.{stem}"
         pyi_files[mod_name] = pyi_path
     return pyi_files
 
@@ -152,17 +152,17 @@ def generate_index(output_path: Optional[Path] = None) -> Path:
     """
     output_path = output_path or DEFAULT_INDEX_PATH
 
-    package_dir = _find_libstp_package_dir()
+    package_dir = _find_raccoon_package_dir()
     if package_dir is None:
         raise RuntimeError(
-            "No libstp package directory found. Is raccoon-stubs installed?\n"
+            "No raccoon package directory found. Is raccoon-stubs installed?\n"
             "Install it with: pip install raccoon-stubs"
         )
 
     pyi_files = _find_pyi_files(package_dir)
     if not pyi_files:
         raise RuntimeError(
-            "No .pyi stub files found in libstp package.\n"
+            "No .pyi stub files found in raccoon package.\n"
             "Install stubs with: pip install raccoon-stubs"
         )
 
@@ -170,7 +170,7 @@ def generate_index(output_path: Optional[Path] = None) -> Path:
 
     # Try to get version from __init__.pyi
     version = "unknown"
-    init_pyi = pyi_files.get("libstp")
+    init_pyi = pyi_files.get("raccoon")
     if init_pyi:
         try:
             source = init_pyi.read_text(encoding="utf-8")
@@ -192,7 +192,7 @@ def generate_index(output_path: Optional[Path] = None) -> Path:
 
     # Parse .pyi files for submodules (skip __init__.pyi for now)
     for mod_name, pyi_path in pyi_files.items():
-        if mod_name == "libstp":
+        if mod_name == "raccoon":
             continue  # Handle __init__ separately for namespace map
         class_entries = _introspect_pyi_file(mod_name, pyi_path)
         exports = []
@@ -201,8 +201,8 @@ def generate_index(output_path: Optional[Path] = None) -> Path:
             exports.append(entry["name"])
         module_exports[mod_name] = exports
 
-    # Build the top-level libstp namespace mapping from __init__.pyi imports
-    libstp_exports: Dict[str, str] = {}
+    # Build the top-level raccoon namespace mapping from __init__.pyi imports
+    raccoon_exports: Dict[str, str] = {}
     if init_pyi:
         try:
             source = init_pyi.read_text(encoding="utf-8")
@@ -214,25 +214,25 @@ def generate_index(output_path: Optional[Path] = None) -> Path:
                         qualified = f"{node.module}.{alias.name}"
                         # Only include classes that exist in our index
                         if qualified in classes:
-                            libstp_exports[imported_name] = qualified
+                            raccoon_exports[imported_name] = qualified
         except Exception:
             pass
 
     # Also map any class in submodules that isn't already mapped
     for qualname, entry in classes.items():
         name = entry["name"]
-        if name not in libstp_exports:
-            libstp_exports[name] = qualname
+        if name not in raccoon_exports:
+            raccoon_exports[name] = qualname
 
-    module_exports["libstp"] = sorted(libstp_exports.keys())
+    module_exports["raccoon"] = sorted(raccoon_exports.keys())
 
     index = {
         "version": INDEX_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "libstp_version": version,
+        "raccoon_version": version,
         "classes": classes,
         "module_exports": module_exports,
-        "namespace_map": libstp_exports,
+        "namespace_map": raccoon_exports,
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,7 +242,7 @@ def generate_index(output_path: Optional[Path] = None) -> Path:
 
     logger.info(
         f"Type index written to {output_path} "
-        f"({len(classes)} classes, libstp v{version})"
+        f"({len(classes)} classes, raccoon v{version})"
     )
     return output_path
 
@@ -299,9 +299,9 @@ class ClassProxy:
 # TypeIndex — loads and queries the cached index
 # ---------------------------------------------------------------------------
 
-def _get_installed_libstp_version() -> Optional[str]:
-    """Read __version__ from the installed libstp __init__.pyi without importing."""
-    package_dir = _find_libstp_package_dir()
+def _get_installed_raccoon_version() -> Optional[str]:
+    """Read __version__ from the installed raccoon __init__.pyi without importing."""
+    package_dir = _find_raccoon_package_dir()
     if package_dir is None:
         return None
     init_pyi = package_dir / "__init__.pyi"
@@ -351,17 +351,17 @@ class TypeIndex:
                 raw = json.loads(self._path.read_text(encoding="utf-8"))
                 if raw.get("version") != INDEX_VERSION:
                     logger.debug("Type index version mismatch, regenerating")
-                elif raw.get("libstp_version") != _get_installed_libstp_version():
+                elif raw.get("raccoon_version") != _get_installed_raccoon_version():
                     logger.info(
-                        f"libstp version changed "
-                        f"({raw.get('libstp_version')} → {_get_installed_libstp_version()}), "
+                        f"raccoon version changed "
+                        f"({raw.get('raccoon_version')} → {_get_installed_raccoon_version()}), "
                         f"regenerating type index"
                     )
                 else:
                     self._data = raw
                     logger.debug(
                         f"Loaded type index: {len(raw.get('classes', {}))} classes, "
-                        f"libstp v{raw.get('libstp_version', '?')}"
+                        f"raccoon v{raw.get('raccoon_version', '?')}"
                     )
                     return
             except (OSError, json.JSONDecodeError) as e:
@@ -397,7 +397,7 @@ class TypeIndex:
         return proxy
 
     def resolve_by_name(self, simple_name: str) -> Optional[ClassProxy]:
-        """Resolve a simple class name via the namespace map (libstp re-exports)."""
+        """Resolve a simple class name via the namespace map (raccoon re-exports)."""
         self._ensure_loaded()
         if self._data is None:
             return None
@@ -408,11 +408,11 @@ class TypeIndex:
         return None
 
     def get_version(self) -> Optional[str]:
-        """Return the libstp version the index was built from."""
+        """Return the raccoon version the index was built from."""
         self._ensure_loaded()
         if self._data is None:
             return None
-        return self._data.get("libstp_version")
+        return self._data.get("raccoon_version")
 
 
 # Module-level singleton, lazily loaded

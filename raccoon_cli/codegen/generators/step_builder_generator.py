@@ -1,7 +1,7 @@
-"""Step builder generator — thin wrapper around libstp.codegen.
+"""Step builder generator — thin wrapper around raccoon.codegen.
 
-The actual code generation logic lives in the libstp library at
-``libstp.codegen.step_builder_gen``.  This module re-exports the
+The actual code generation logic lives in the raccoon library at
+``raccoon.codegen.step_builder_gen``.  This module re-exports the
 public API so the raccoon toolchain can use it without duplicating code.
 
 Usage from raccoon::
@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List
 
-from libstp.codegen.step_builder_gen import (
+from raccoon.codegen.step_builder_gen import (
     ParamInfo,
     StepClassInfo,
     scan_file,

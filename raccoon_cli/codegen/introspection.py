@@ -11,7 +11,7 @@ logger = logging.getLogger("raccoon")
 def resolve_class(qualname: str) -> type:
     """Resolve a class name to a ClassProxy via the type index.
 
-    Supports fully qualified names (``libstp.hal.Motor``) and simple
+    Supports fully qualified names (``raccoon.hal.Motor``) and simple
     names (``Motor``) which are looked up in the namespace map.
     """
     from .type_index import get_type_index
@@ -31,7 +31,7 @@ def resolve_class(qualname: str) -> type:
         logger.debug(f"Resolved {qualname} from type index")
         return proxy  # type: ignore[return-value]
 
-    # For "libstp.ClassName" lookups, check the namespace map
+    # For "raccoon.ClassName" lookups, check the namespace map
     _, cls_name = qualname.rsplit(".", 1)
     proxy = index.resolve_by_name(cls_name)
     if proxy is not None:

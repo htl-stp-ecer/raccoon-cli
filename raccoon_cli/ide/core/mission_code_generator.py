@@ -163,8 +163,8 @@ class MissionCodeGenerator:
         imports = []
 
         # Always needed imports
-        imports.append("from libstp.mission.api import Mission")
-        imports.append("from libstp.step.sequential import Sequential, seq")
+        imports.append("from raccoon.mission.api import Mission")
+        imports.append("from raccoon.step.sequential import Sequential, seq")
 
         added_imports = set(imports)
         for func_name in sorted(self.used_functions):
@@ -199,7 +199,7 @@ class MissionCodeGenerator:
     @classmethod
     def _discover_dynamic_step_import_map(cls) -> Dict[str, str]:
         mapping: Dict[str, str] = {}
-        for root_path, step_dir in cls._libstp_step_directories():
+        for root_path, step_dir in cls._raccoon_step_directories():
             analyzer = DSLStepAnalyzer(root_path)
             for file_path in step_dir.rglob("*.py"):
                 analyzer._analyze_file(file_path)
@@ -209,11 +209,11 @@ class MissionCodeGenerator:
         return mapping
 
     @staticmethod
-    def _libstp_step_directories() -> List[Tuple[Path, Path]]:
+    def _raccoon_step_directories() -> List[Tuple[Path, Path]]:
         entries: Set[Tuple[Path, Path]] = set()
         workspace = Path.cwd()
 
-        direct_step_dir = workspace / "libstp" / "step"
+        direct_step_dir = workspace / "raccoon" / "step"
         if direct_step_dir.exists():
             entries.add((workspace.resolve(), direct_step_dir.resolve()))
 
@@ -221,13 +221,13 @@ class MissionCodeGenerator:
             for child in workspace.iterdir():
                 if not child.is_dir():
                     continue
-                step_dir = child / "libstp" / "step"
+                step_dir = child / "raccoon" / "step"
                 if step_dir.exists():
                     entries.add((child.resolve(), step_dir.resolve()))
         except PermissionError:
             pass
 
-        spec = importlib.util.find_spec("libstp")
+        spec = importlib.util.find_spec("raccoon")
         if spec and spec.submodule_search_locations:
             for location in spec.submodule_search_locations:
                 location_path = Path(location)

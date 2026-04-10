@@ -32,7 +32,7 @@ async def get_step_index_status(
         svc: StepDiscoveryService = Depends(get_step_discovery_service),
 ) -> Dict[str, Any]:
     """Return library step discovery status."""
-    return svc.get_libstp_cache_status()
+    return svc.get_raccoon_cache_status()
 
 
 @router.post("/index/refresh")
@@ -40,10 +40,10 @@ async def refresh_step_index(
         force_clear: bool = Query(False, description="Clear in-memory cache before re-scanning"),
         svc: StepDiscoveryService = Depends(get_step_discovery_service),
 ) -> Dict[str, Any]:
-    """Re-scan the local libstp installation for steps."""
+    """Re-scan the local raccoon installation for steps."""
     if force_clear:
-        svc.clear_libstp_cache()
-    return await asyncio.to_thread(svc.refresh_libstp_cache_locally)
+        svc.clear_raccoon_cache()
+    return await asyncio.to_thread(svc.refresh_raccoon_cache_locally)
 
 
 @router.post("/index/clear")
@@ -51,5 +51,5 @@ async def clear_step_index(
         svc: StepDiscoveryService = Depends(get_step_discovery_service),
 ) -> Dict[str, Any]:
     """Clear the in-memory step cache."""
-    svc.clear_libstp_cache()
-    return svc.get_libstp_cache_status()
+    svc.clear_raccoon_cache()
+    return svc.get_raccoon_cache_status()

@@ -29,9 +29,9 @@ _AUTOTUNE_SCRIPT = """\
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from libstp import auto_tune
-from libstp.mission.api import Mission
-from libstp.step.sequential import Sequential, seq
+from raccoon import auto_tune
+from raccoon.mission.api import Mission
+from raccoon.step.sequential import Sequential, seq
 from src.hardware.robot import Robot
 
 
@@ -61,7 +61,7 @@ def _get_motor_defs(config: dict) -> Dict[str, tuple[int, bool]]:
 
 
 def _read_encoder_local(port: int, inverted: bool) -> int:
-    from libstp.hal import Motor as HalMotor  # type: ignore
+    from raccoon.hal import Motor as HalMotor  # type: ignore
 
     return HalMotor(port=port, inverted=inverted).get_position()
 

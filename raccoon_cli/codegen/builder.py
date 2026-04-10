@@ -40,26 +40,26 @@ class ImportSet:
     def render(self) -> str:
         """Render the imports as Python import statements.
 
-        All libstp.* submodule imports are consolidated into a single
-        'from libstp import ...' statement for cleaner generated code.
+        All raccoon.* submodule imports are consolidated into a single
+        'from raccoon import ...' statement for cleaner generated code.
         """
-        # Consolidate libstp.* imports into a single 'from libstp import ...'
-        libstp_names: Set[str] = set()
+        # Consolidate raccoon.* imports into a single 'from raccoon import ...'
+        raccoon_names: Set[str] = set()
         by_mod: Dict[str, Set[str]] = {}
 
         for mod, name in self._entries:
-            if mod.startswith("libstp.") or mod == "libstp":
-                # Consolidate all libstp submodule imports
-                libstp_names.add(name)
+            if mod.startswith("raccoon.") or mod == "raccoon":
+                # Consolidate all raccoon submodule imports
+                raccoon_names.add(name)
             else:
                 by_mod.setdefault(mod, set()).add(name)
 
         lines = []
 
-        # Add consolidated libstp import first
-        if libstp_names:
-            names = ", ".join(sorted(libstp_names))
-            lines.append(f"from libstp import {names}")
+        # Add consolidated raccoon import first
+        if raccoon_names:
+            names = ", ".join(sorted(raccoon_names))
+            lines.append(f"from raccoon import {names}")
 
         # Add other imports
         for mod in sorted(by_mod.keys()):

@@ -17,7 +17,7 @@ def test_keeps_explicit_annotations(tmp_path: Path):
     steps = _analyze_source(
         tmp_path,
         """
-from libstp import dsl
+from raccoon import dsl
 
 @dsl
 def annotated_threshold(threshold: float = 0.7):
@@ -32,7 +32,7 @@ def test_infers_scalar_types_from_literal_defaults(tmp_path: Path):
     steps = _analyze_source(
         tmp_path,
         """
-from libstp import dsl
+from raccoon import dsl
 
 @dsl
 def inferred_defaults(
@@ -59,7 +59,7 @@ def test_keeps_any_for_non_literal_or_ambiguous_defaults(tmp_path: Path):
     steps = _analyze_source(
         tmp_path,
         """
-from libstp import dsl
+from raccoon import dsl
 
 DEFAULT_THRESHOLD = 0.7
 
@@ -86,11 +86,11 @@ def unresolved_defaults(
 
 
 def test_discovers_library_steps_from_stub_only_modules(tmp_path: Path):
-    stub_file = tmp_path / "libstp" / "step" / "motion" / "drive_dsl.pyi"
+    stub_file = tmp_path / "raccoon" / "step" / "motion" / "drive_dsl.pyi"
     stub_file.parent.mkdir(parents=True)
     stub_file.write_text(
         """
-from libstp import dsl
+from raccoon import dsl
 
 @dsl
 def local_drive(speed: float = 0.5): ...
