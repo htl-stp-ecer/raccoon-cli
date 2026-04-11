@@ -112,6 +112,19 @@ class SyncOptions:
 # rsync backend (Linux / macOS / Windows via cwRsync)
 # ---------------------------------------------------------------------------
 
+def _to_cygdrive(win_path: str) -> str:
+    """Convert a Windows path to the cygdrive form cwRsync/Cygwin expects.
+
+    ``C:\\Users\\tobias\\proj`` → ``/cygdrive/c/Users/tobias/proj``.
+    """
+    abs_path = os.path.abspath(win_path)
+    drive, rest = os.path.splitdrive(abs_path)
+    posix_rest = rest.replace("\\", "/")
+    if not drive:
+        return posix_rest
+    return f"/cygdrive/{drive[0].lower()}{posix_rest}"
+
+
 def _rsync_local_path(local_path: Path) -> str:
     """Return a path rsync will treat as local.
 
@@ -121,13 +134,26 @@ def _rsync_local_path(local_path: Path) -> str:
     """
     if sys.platform != "win32":
         return str(local_path)
+    return _to_cygdrive(str(local_path))
 
-    abs_path = os.path.abspath(str(local_path))
-    drive, rest = os.path.splitdrive(abs_path)
-    posix_rest = rest.replace("\\", "/")
-    if not drive:
-        return posix_rest
-    return f"/cygdrive/{drive[0].lower()}{posix_rest}"
+
+def _rsync_subprocess_env() -> dict[str, str]:
+    """Return the environment to run rsync under.
+
+    On Windows, cwRsync's bundled ``ssh`` is a Cygwin binary: it looks for
+    ``~/.ssh/id_*`` relative to the Cygwin ``HOME``, which defaults to
+    ``/home/<user>`` and typically does not exist. Without this, the SSH
+    transport dies silently before rsync's protocol starts, surfacing as
+    ``exit 12 / connection unexpectedly closed (0 bytes received)``.
+
+    Point ``HOME`` at the cygdrive form of ``%USERPROFILE%`` so that
+    ``~/.ssh/id_ed25519`` and friends resolve to the real Windows keys.
+    """
+    env = os.environ.copy()
+    if sys.platform == "win32":
+        win_home = os.environ.get("USERPROFILE") or str(Path.home())
+        env["HOME"] = _to_cygdrive(win_home)
+    return env
 
 
 class RsyncSync:
@@ -147,6 +173,7 @@ class RsyncSync:
         options = options or SyncOptions()
 
         cmd = self._build_command(local_path, remote_path, options)
+        env = _rsync_subprocess_env()
         logger.debug(f"rsync command: {' '.join(cmd)}")
 
         try:
@@ -157,6 +184,7 @@ class RsyncSync:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    env=env,
                 )
                 stdout_lines = []
                 for line in proc.stdout:
@@ -172,16 +200,21 @@ class RsyncSync:
                     capture_output=True,
                     text=True,
                     timeout=300,
+                    env=env,
                 )
                 stdout = proc_result.stdout
                 stderr = proc_result.stderr
                 proc = proc_result
 
             if proc.returncode != 0:
-                return SyncResult(
-                    success=False,
-                    errors=[f"rsync failed (exit {proc.returncode}): {stderr.strip()}"],
-                )
+                msg = f"rsync failed (exit {proc.returncode}): {stderr.strip()}"
+                if proc.returncode == 12 and sys.platform == "win32":
+                    msg += (
+                        "\n  hint: cwRsync's bundled ssh couldn't authenticate. "
+                        "Make sure your SSH key lives at %USERPROFILE%\\.ssh\\ "
+                        "and is accepted by the Pi."
+                    )
+                return SyncResult(success=False, errors=[msg])
 
             return self._parse_stats(stdout, options.direction)
 
