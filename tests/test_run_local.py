@@ -12,11 +12,12 @@ from raccoon_cli.commands.run import _run_local
 class FakePopen:
     """Minimal Popen stub whose wait() behaviour is configurable."""
 
-    def __init__(self, *, returncode=0, wait_side_effect=None):
+    def __init__(self, *, returncode=0, wait_side_effect=None, output_lines=()):
         self.returncode = returncode
         self._wait_side_effect = list(wait_side_effect or [])
         self.terminate_called = False
         self.kill_called = False
+        self.stdout = iter(output_lines)
 
     def wait(self, timeout=None):
         if self._wait_side_effect:

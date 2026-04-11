@@ -9,9 +9,11 @@ import signal
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import click
+from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -41,6 +43,32 @@ def _extract_skip_missions(args: tuple) -> tuple[tuple, set[int]]:
     return tuple(remaining), skip
 
 
+_WARN_ERROR_RE = re.compile(r"\b(WARNING|WARN|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
+_ERROR_RE = re.compile(r"\b(ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
+
+
+def _is_warn_or_error(line: str) -> bool:
+    return bool(_WARN_ERROR_RE.search(line))
+
+
+def _print_output_summary(console: Console, collected: list[str]) -> None:
+    """Print collected warning/error lines from program output as a summary panel."""
+    if not collected:
+        return
+    text = Text()
+    for line in collected:
+        style = "bold red" if _ERROR_RE.search(line) else "bold yellow"
+        text.append(line + "\n", style=style)
+    console.print(
+        Panel(
+            text,
+            title=f"[bold yellow]Program Warnings & Errors ({len(collected)})[/bold yellow]",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
+    )
+
+
 def _run_local(
     ctx: click.Context, project_root: Path, config: dict, args: tuple,
     dev: bool = False, no_calibrate: bool = False, no_codegen: bool = False,
@@ -67,6 +95,7 @@ def _run_local(
     logger.info(f"Executing: {' '.join(cmd_parts)}")
 
     env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
     if dev:
         env["LIBSTP_DEV_MODE"] = "1"
     if no_calibrate:
@@ -76,9 +105,28 @@ def _run_local(
     if skip_missions:
         env["LIBSTP_SKIP_MISSIONS"] = ",".join(str(i) for i in sorted(skip_missions))
 
+    collected: list[str] = []
+
     # On Windows, Ctrl+C doesn't reliably propagate to child processes.
     # Use Popen so we can catch SIGINT ourselves and terminate the child.
-    proc = subprocess.Popen(cmd_parts, cwd=project_root, env=env)
+    # Pipe stdout+stderr so we can collect warnings/errors for the summary.
+    proc = subprocess.Popen(
+        cmd_parts, cwd=project_root, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        bufsize=1, text=True,
+    )
+
+    def _stream_output() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            console.print(line, markup=False, highlight=False)
+            if _is_warn_or_error(line):
+                collected.append(line)
+
+    reader = threading.Thread(target=_stream_output, daemon=True)
+    reader.start()
+
     try:
         returncode = proc.wait()
     except KeyboardInterrupt:
@@ -89,6 +137,10 @@ def _run_local(
         except subprocess.TimeoutExpired:
             proc.kill()
             returncode = proc.wait()
+
+    reader.join()
+
+    _print_output_summary(console, collected)
 
     exit_style = "bold green" if returncode == 0 else "bold red"
     console.print(
@@ -178,10 +230,18 @@ async def _run_remote(
 
         original_handler = signal.signal(signal.SIGINT, signal_handler)
 
+        collected: list[str] = []
+
+        def _collect_line(line: str) -> None:
+            if _is_warn_or_error(line):
+                collected.append(line)
+
         try:
-            final_status = handler.stream_to_console(console)
+            final_status = handler.stream_to_console(console, on_line=_collect_line)
         finally:
             signal.signal(signal.SIGINT, original_handler)
+
+        _print_output_summary(console, collected)
 
         # Sync changes back from Pi (preserve locally-edited files)
         console.print()
