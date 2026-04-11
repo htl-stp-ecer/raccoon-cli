@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import signal
 import os
 import subprocess
@@ -21,10 +22,29 @@ from raccoon_cli.project import ProjectError, load_project_config, require_proje
 
 logger = logging.getLogger("raccoon")
 
+_NO_MISSION_RE = re.compile(r"^--no-m(\d+)$")
+
+
+def _extract_skip_missions(args: tuple) -> tuple[tuple, set[int]]:
+    """Pull --no-mN flags out of args; return (remaining_args, skip_indices).
+
+    For example, ``("--no-m0", "--no-m2", "foo")`` → ``(("foo",), {0, 2})``.
+    """
+    remaining = []
+    skip: set[int] = set()
+    for arg in args:
+        m = _NO_MISSION_RE.match(arg)
+        if m:
+            skip.add(int(m.group(1)))
+        else:
+            remaining.append(arg)
+    return tuple(remaining), skip
+
 
 def _run_local(
     ctx: click.Context, project_root: Path, config: dict, args: tuple,
     dev: bool = False, no_calibrate: bool = False, no_codegen: bool = False,
+    no_checkpoints: bool = False, skip_missions: set[int] | None = None,
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
@@ -51,6 +71,10 @@ def _run_local(
         env["LIBSTP_DEV_MODE"] = "1"
     if no_calibrate:
         env["LIBSTP_NO_CALIBRATE"] = "1"
+    if no_checkpoints:
+        env["LIBSTP_NO_CHECKPOINTS"] = "1"
+    if skip_missions:
+        env["LIBSTP_SKIP_MISSIONS"] = ",".join(str(i) for i in sorted(skip_missions))
 
     # On Windows, Ctrl+C doesn't reliably propagate to child processes.
     # Use Popen so we can catch SIGINT ourselves and terminate the child.
@@ -81,6 +105,7 @@ def _run_local(
 async def _run_remote(
     ctx: click.Context, project_root: Path, config: dict, args: tuple,
     dev: bool = False, no_calibrate: bool = False,
+    no_checkpoints: bool = False, skip_missions: set[int] | None = None,
 ) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
@@ -124,6 +149,10 @@ async def _run_remote(
                 env["LIBSTP_DEV_MODE"] = "1"
             if no_calibrate:
                 env["LIBSTP_NO_CALIBRATE"] = "1"
+            if no_checkpoints:
+                env["LIBSTP_NO_CHECKPOINTS"] = "1"
+            if skip_missions:
+                env["LIBSTP_SKIP_MISSIONS"] = ",".join(str(i) for i in sorted(skip_missions))
             result = await client.run_project(project_uuid, args=list(args), env=env)
         except Exception as e:
             console.print(f"[red]Failed to start run on Pi: {e}[/red]")
@@ -176,21 +205,29 @@ async def _run_remote(
             raise SystemExit(exit_code)
 
 
-@click.command(name="run")
-@click.argument("args", nargs=-1)
+@click.command(name="run", context_settings=dict(allow_extra_args=True, ignore_unknown_options=True))
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
 @click.option("--dev", is_flag=True, help="Dev mode: use button instead of wait-for-light")
 @click.option("--local", "-l", is_flag=True, help="Force local execution (skip remote)")
 @click.option("--no-sync", is_flag=True, help="Skip syncing before remote run")
 @click.option("--no-calibrate", is_flag=True, help="Skip calibration steps, use stored values")
 @click.option("--no-codegen", is_flag=True, help="Skip code generation (used by server when codegen was done client-side)")
+@click.option("--no-checkpoints", is_flag=True, help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)")
 @click.pass_context
-def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool, no_codegen: bool) -> None:
+def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool, no_codegen: bool, no_checkpoints: bool) -> None:
     """Run codegen and then execute src.main.
 
     If connected to a Pi, syncs the project and runs remotely.
     Use --local to force local execution.
+
+    Use --no-mN (e.g. --no-m0 --no-m2) to skip missions at those order indices.
     """
     console: Console = ctx.obj["console"]
+
+    # Parse --no-mN flags out of the raw args before forwarding the rest
+    args, skip_missions = _extract_skip_missions(args)
+    if skip_missions:
+        console.print(f"[dim]Skipping mission(s) at order: {sorted(skip_missions)}[/dim]")
 
     try:
         project_root = require_project()
@@ -235,7 +272,7 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
 
             if manager.is_connected:
                 # Run remotely
-                asyncio.run(_run_remote(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate))
+                asyncio.run(_run_remote(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate, no_checkpoints=no_checkpoints, skip_missions=skip_missions))
                 return
 
             console.print("[red]Remote execution requested, but no Pi connection is available.[/red]")
@@ -243,7 +280,7 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
             raise SystemExit(1)
 
         # Run locally
-        _run_local(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate, no_codegen=no_codegen)
+        _run_local(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate, no_codegen=no_codegen, no_checkpoints=no_checkpoints, skip_missions=skip_missions)
 
     except ProjectError as exc:
         logger.error(str(exc))
