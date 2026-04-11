@@ -16,6 +16,7 @@ from raccoon_cli.client.sftp_sync import (
     SyncResult,
     load_raccoonignore,
     _should_exclude,
+    _rsync_local_path,
 )
 
 
@@ -92,6 +93,21 @@ class TestRsyncCommandConstruction:
         cmd = sync._build_command(Path("/tmp/proj"), "/remote", options)
 
         assert cmd[-1] == "admin@10.0.0.1:/remote/"
+
+    @patch("raccoon_cli.client.sftp_sync.sys")
+    def test_windows_local_path_converted_to_cygdrive(self, mock_sys):
+        """On Windows, C:\\foo must become /cygdrive/c/foo so rsync treats it as local."""
+        mock_sys.platform = "win32"
+        # os.path.abspath/splitdrive behave like POSIX here, so pass an already-absolute
+        # Windows-style path and rely on splitdrive picking up the drive letter.
+        with patch("raccoon_cli.client.sftp_sync.os.path.abspath", return_value="C:\\Users\\tobias\\proj"), \
+             patch("raccoon_cli.client.sftp_sync.os.path.splitdrive", return_value=("C:", "\\Users\\tobias\\proj")):
+            result = _rsync_local_path(Path("C:\\Users\\tobias\\proj"))
+        assert result == "/cygdrive/c/Users/tobias/proj"
+
+    def test_posix_local_path_unchanged(self):
+        """On non-Windows platforms the local path must be returned as-is."""
+        assert _rsync_local_path(Path("/home/user/project")) == "/home/user/project"
 
 
 # ── Exclude patterns ─────────────────────────────────────────────────────
@@ -458,9 +474,16 @@ class TestCreateSync:
         assert sync.ssh_port == 2222
 
     @patch("raccoon_cli.client.sftp_sync.sys")
-    @patch("raccoon_cli.client.sftp_sync.shutil.which", return_value="/usr/bin/rsync")
-    def test_returns_sftp_on_windows(self, mock_which, mock_sys):
-        """Windows should always use SFTP even if rsync is somehow on PATH."""
+    @patch("raccoon_cli.client.sftp_sync.shutil.which", return_value="C:\\tools\\rsync.exe")
+    def test_returns_rsync_on_windows_when_available(self, mock_which, mock_sys):
+        """cwRsync (Chocolatey) on Windows should use the rsync backend."""
+        mock_sys.platform = "win32"
+        sync = create_sync(host="192.168.4.1", user="pi")
+        assert isinstance(sync, RsyncSync)
+
+    @patch("raccoon_cli.client.sftp_sync.sys")
+    @patch("raccoon_cli.client.sftp_sync.shutil.which", return_value=None)
+    def test_returns_sftp_on_windows_without_rsync(self, mock_which, mock_sys):
         mock_sys.platform = "win32"
         sync = create_sync(host="192.168.4.1", user="pi")
         assert isinstance(sync, SftpSync)

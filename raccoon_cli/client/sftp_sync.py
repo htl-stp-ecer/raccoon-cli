@@ -1,8 +1,8 @@
-"""File synchronization: rsync on Linux/macOS, SFTP on Windows.
+"""File synchronization: rsync when available, SFTP fallback.
 
 This module provides unidirectional synchronization between local project folders
-and remote Pi folders.  On Linux/macOS rsync is used for efficient delta-transfer.
-On Windows (where rsync is never available) SFTP copies every file with a progress bar.
+and remote Pi folders. rsync is used for efficient delta-transfer when present
+(including Windows via cwRsync). Otherwise SFTP copies every file with a progress bar.
 
 Use ``create_sync()`` to get the right backend automatically.
 """
@@ -109,8 +109,26 @@ class SyncOptions:
 
 
 # ---------------------------------------------------------------------------
-# rsync backend (Linux / macOS)
+# rsync backend (Linux / macOS / Windows via cwRsync)
 # ---------------------------------------------------------------------------
+
+def _rsync_local_path(local_path: Path) -> str:
+    """Return a path rsync will treat as local.
+
+    On Windows, rsync ships as a Cygwin/MSYS port and reads ``C:\\foo`` as a
+    remote host, producing ``source and destination cannot both be remote``.
+    Convert to ``/cygdrive/c/foo`` so rsync sees it as a local path.
+    """
+    if sys.platform != "win32":
+        return str(local_path)
+
+    abs_path = os.path.abspath(str(local_path))
+    drive, rest = os.path.splitdrive(abs_path)
+    posix_rest = rest.replace("\\", "/")
+    if not drive:
+        return posix_rest
+    return f"/cygdrive/{drive[0].lower()}{posix_rest}"
+
 
 class RsyncSync:
     """File synchronization using rsync over SSH."""
@@ -198,7 +216,7 @@ class RsyncSync:
             cmd.extend(["--exclude", pattern])
 
         remote = f"{self.user}@{self.host}:{remote_path}/"
-        local = f"{local_path}/"
+        local = f"{_rsync_local_path(local_path)}/"
 
         if options.direction == SyncDirection.PUSH:
             cmd.extend([local, remote])
