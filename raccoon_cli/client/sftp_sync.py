@@ -341,19 +341,7 @@ class SftpSync:
                 if remote_dir not in created_dirs:
                     _ensure_remote_dir(sftp, remote_dir, created_dirs)
 
-                # Skip unchanged files (compare size and mtime)
                 local_stat = os.stat(local_file)
-                try:
-                    remote_stat = sftp.stat(remote_file)
-                    if (remote_stat.st_size == local_stat.st_size
-                            and remote_stat.st_mtime >= int(local_stat.st_mtime)):
-                        if options.verbose:
-                            print(f"  skip (unchanged): {rel_posix}")
-                        progress.advance(task)
-                        continue
-                except FileNotFoundError:
-                    pass
-
                 if options.verbose:
                     print(f"  upload: {rel_posix} ({local_stat.st_size} bytes)")
                 sftp.put(local_file, remote_file)
@@ -520,9 +508,14 @@ def create_sync(host: str, user: str = "pi", ssh_port: int = 22):
 
     Uses rsync on Linux/macOS, SFTP on Windows.
     """
-    if sys.platform != "win32" and shutil.which("rsync"):
+    if shutil.which("rsync"):
         logger.info("Using rsync backend for file sync")
         return RsyncSync(host=host, user=user, ssh_port=ssh_port)
     else:
         logger.info("Using SFTP backend for file sync")
+        if sys.platform == "win32":
+            logger.warning(
+                "rsync not found — using slower SFTP for sync. "
+                "Install rsync for faster uploads: https://community.chocolatey.org/packages/rsync"
+            )
         return SftpSync(host=host, user=user, ssh_port=ssh_port)
