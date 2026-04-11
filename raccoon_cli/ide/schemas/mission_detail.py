@@ -115,6 +115,9 @@ class ParsedMission(BaseModel):
     steps: List[ParsedStep]
     comments: List[ParsedComment] = []
     groups: List[ParsedGroup] = []
+    #: Seconds available for setup.  Only meaningful when ``is_setup=True``.
+    #: Emitted as a ``setup_time = <n>`` class attribute in generated code.
+    setup_time: Optional[int] = None
 
 
 # For Pydantic v2 compatibility

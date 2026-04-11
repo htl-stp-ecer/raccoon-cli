@@ -38,7 +38,13 @@ class MissionCodeGenerator:
         lines.append("")  # Empty line after imports
 
         # Add class definition
-        lines.append(f"class {parsed_mission.name}(Mission):")
+        base_class = "SetupMission" if parsed_mission.is_setup else "Mission"
+        lines.append(f"class {parsed_mission.name}({base_class}):")
+
+        # Emit setup_time class attribute for setup missions
+        if parsed_mission.is_setup and parsed_mission.setup_time:
+            lines.append(f"{self.indent}setup_time = {parsed_mission.setup_time}")
+            lines.append("")
 
         # Add sequence method
         lines.append(f"{self.indent}def sequence(self) -> Sequential:")
@@ -163,7 +169,7 @@ class MissionCodeGenerator:
         imports = []
 
         # Always needed imports
-        imports.append("from raccoon.mission.api import Mission")
+        imports.append("from raccoon.mission.api import Mission, SetupMission")
         imports.append("from raccoon.step.sequential import Sequential, seq")
 
         added_imports = set(imports)

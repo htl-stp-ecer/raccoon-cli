@@ -215,6 +215,7 @@ def _ask_motors(drivetrain: str, existing_defs: Dict) -> Dict[str, Tuple[int, bo
 # Step 4 — Button sensor (required by defs generator)
 # ---------------------------------------------------------------------------
 
+_MOTOR_PORT_CHOICES  = [str(i) for i in range(4)]   # 0-3; Wombat has 4 motor ports
 _BUTTON_PORT_CHOICES = [str(i) for i in range(11)]  # 0-10; Wombat has 10 digital ports
 
 

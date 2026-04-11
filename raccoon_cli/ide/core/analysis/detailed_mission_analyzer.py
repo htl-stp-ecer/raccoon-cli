@@ -23,6 +23,7 @@ class DetailedMissionExtractor(cst.CSTVisitor):
     def __init__(self) -> None:
         self.missions: Dict[str, ParsedMission] = {}
         self.current_mission_name: Optional[str] = None
+        self._current_is_setup: bool = False
 
     def visit_ImportFrom(self, node: cst.ImportFrom) -> None:
         """Skip import processing - imports will be auto-resolved."""
@@ -36,17 +37,21 @@ class DetailedMissionExtractor(cst.CSTVisitor):
             # Check if this class extends Mission or SetupMission
             _MISSION_BASE_CLASSES = {"Mission", "SetupMission"}
             is_mission_class = False
+            is_setup = False
             if node.bases:
                 for base in node.bases:
                     if isinstance(base.value, cst.Name) and base.value.value in _MISSION_BASE_CLASSES:
                         is_mission_class = True
+                        if base.value.value == "SetupMission":
+                            is_setup = True
                         break
 
             if is_mission_class:
                 self.current_mission_name = class_name
+                self._current_is_setup = is_setup
                 self.missions[class_name] = ParsedMission(
                     name=class_name,
-                    is_setup=False,
+                    is_setup=is_setup,
                     is_shutdown=False,
                     order=0,
                     steps=[]
@@ -55,6 +60,27 @@ class DetailedMissionExtractor(cst.CSTVisitor):
     def leave_ClassDef(self, node: cst.ClassDef) -> None:
         """Leave class definition."""
         self.current_mission_name = None
+        self._current_is_setup = False
+
+    def visit_SimpleStatementLine(self, node: cst.SimpleStatementLine) -> None:
+        """Parse class-level attribute assignments (e.g. ``setup_time = 120``)."""
+        if not self.current_mission_name:
+            return
+        for stmt in node.body:
+            if not isinstance(stmt, cst.Assign):
+                continue
+            for target in stmt.targets:
+                if (
+                    isinstance(target.target, cst.Name)
+                    and target.target.value == "setup_time"
+                    and isinstance(stmt.value, cst.Integer)
+                ):
+                    value = int(stmt.value.value)
+                    mission = self.missions.get(self.current_mission_name)
+                    if mission is not None:
+                        self.missions[self.current_mission_name] = mission.model_copy(
+                            update={"setup_time": value}
+                        )
 
     def visit_FunctionDef(self, node: cst.FunctionDef) -> None:
         """Visit function definitions within Mission classes."""
