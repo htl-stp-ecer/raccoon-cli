@@ -1,8 +1,9 @@
-"""File synchronization: rsync when available, SFTP fallback.
+"""File synchronization: rsync on Linux/macOS, SFTP on Windows.
 
 This module provides unidirectional synchronization between local project folders
-and remote Pi folders. rsync is used for efficient delta-transfer when present
-(including Windows via cwRsync). Otherwise SFTP copies every file with a progress bar.
+and remote Pi folders. On Linux/macOS rsync is used for efficient delta-transfer.
+On Windows SFTP copies every file with a progress bar — cwRsync proved too fragile
+(Cygwin path and ACL quirks) to support reliably.
 
 Use ``create_sync()`` to get the right backend automatically.
 """
@@ -109,52 +110,8 @@ class SyncOptions:
 
 
 # ---------------------------------------------------------------------------
-# rsync backend (Linux / macOS / Windows via cwRsync)
+# rsync backend (Linux / macOS)
 # ---------------------------------------------------------------------------
-
-def _to_cygdrive(win_path: str) -> str:
-    """Convert a Windows path to the cygdrive form cwRsync/Cygwin expects.
-
-    ``C:\\Users\\tobias\\proj`` → ``/cygdrive/c/Users/tobias/proj``.
-    """
-    abs_path = os.path.abspath(win_path)
-    drive, rest = os.path.splitdrive(abs_path)
-    posix_rest = rest.replace("\\", "/")
-    if not drive:
-        return posix_rest
-    return f"/cygdrive/{drive[0].lower()}{posix_rest}"
-
-
-def _rsync_local_path(local_path: Path) -> str:
-    """Return a path rsync will treat as local.
-
-    On Windows, rsync ships as a Cygwin/MSYS port and reads ``C:\\foo`` as a
-    remote host, producing ``source and destination cannot both be remote``.
-    Convert to ``/cygdrive/c/foo`` so rsync sees it as a local path.
-    """
-    if sys.platform != "win32":
-        return str(local_path)
-    return _to_cygdrive(str(local_path))
-
-
-def _rsync_subprocess_env() -> dict[str, str]:
-    """Return the environment to run rsync under.
-
-    On Windows, cwRsync's bundled ``ssh`` is a Cygwin binary: it looks for
-    ``~/.ssh/id_*`` relative to the Cygwin ``HOME``, which defaults to
-    ``/home/<user>`` and typically does not exist. Without this, the SSH
-    transport dies silently before rsync's protocol starts, surfacing as
-    ``exit 12 / connection unexpectedly closed (0 bytes received)``.
-
-    Point ``HOME`` at the cygdrive form of ``%USERPROFILE%`` so that
-    ``~/.ssh/id_ed25519`` and friends resolve to the real Windows keys.
-    """
-    env = os.environ.copy()
-    if sys.platform == "win32":
-        win_home = os.environ.get("USERPROFILE") or str(Path.home())
-        env["HOME"] = _to_cygdrive(win_home)
-    return env
-
 
 class RsyncSync:
     """File synchronization using rsync over SSH."""
@@ -173,7 +130,6 @@ class RsyncSync:
         options = options or SyncOptions()
 
         cmd = self._build_command(local_path, remote_path, options)
-        env = _rsync_subprocess_env()
         logger.debug(f"rsync command: {' '.join(cmd)}")
 
         try:
@@ -184,7 +140,6 @@ class RsyncSync:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    env=env,
                 )
                 stdout_lines = []
                 for line in proc.stdout:
@@ -200,21 +155,16 @@ class RsyncSync:
                     capture_output=True,
                     text=True,
                     timeout=300,
-                    env=env,
                 )
                 stdout = proc_result.stdout
                 stderr = proc_result.stderr
                 proc = proc_result
 
             if proc.returncode != 0:
-                msg = f"rsync failed (exit {proc.returncode}): {stderr.strip()}"
-                if proc.returncode == 12 and sys.platform == "win32":
-                    msg += (
-                        "\n  hint: cwRsync's bundled ssh couldn't authenticate. "
-                        "Make sure your SSH key lives at %USERPROFILE%\\.ssh\\ "
-                        "and is accepted by the Pi."
-                    )
-                return SyncResult(success=False, errors=[msg])
+                return SyncResult(
+                    success=False,
+                    errors=[f"rsync failed (exit {proc.returncode}): {stderr.strip()}"],
+                )
 
             return self._parse_stats(stdout, options.direction)
 
@@ -249,7 +199,7 @@ class RsyncSync:
             cmd.extend(["--exclude", pattern])
 
         remote = f"{self.user}@{self.host}:{remote_path}/"
-        local = f"{_rsync_local_path(local_path)}/"
+        local = f"{local_path}/"
 
         if options.direction == SyncDirection.PUSH:
             cmd.extend([local, remote])
@@ -557,16 +507,12 @@ def _list_remote_recursive(sftp, remote_root: str) -> list[str]:
 def create_sync(host: str, user: str = "pi", ssh_port: int = 22):
     """Return the best available sync backend.
 
-    Uses rsync on Linux/macOS, SFTP on Windows.
+    Uses rsync on Linux/macOS, SFTP on Windows. rsync is skipped on Windows
+    even if cwRsync is on PATH — the Cygwin bundle's path and ssh-key handling
+    are too unreliable to depend on.
     """
-    if shutil.which("rsync"):
+    if sys.platform != "win32" and shutil.which("rsync"):
         logger.info("Using rsync backend for file sync")
         return RsyncSync(host=host, user=user, ssh_port=ssh_port)
-    else:
-        logger.info("Using SFTP backend for file sync")
-        if sys.platform == "win32":
-            logger.warning(
-                "rsync not found — using slower SFTP for sync. "
-                "Install rsync for faster uploads: https://community.chocolatey.org/packages/rsync"
-            )
-        return SftpSync(host=host, user=user, ssh_port=ssh_port)
+    logger.info("Using SFTP backend for file sync")
+    return SftpSync(host=host, user=user, ssh_port=ssh_port)
