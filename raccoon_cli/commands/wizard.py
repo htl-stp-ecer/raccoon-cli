@@ -10,13 +10,14 @@ from typing import Dict, Optional, Tuple
 
 import click
 import questionary
-import yaml
+from io import StringIO
 from questionary import Style as QStyle
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from raccoon_cli.project import ProjectError, load_project_config, require_project, save_project_keys
+from raccoon_cli.yaml_utils import _make_yaml
 
 logger = logging.getLogger("raccoon")
 
@@ -415,8 +416,6 @@ def _build_motor_def(port: int, inverted: bool, ticks_to_rad: float, vel_lpf_alp
         "port": port,
         "inverted": inverted,
         "calibration": {
-            "ff":  {"kS": 0.08, "kV": 0.12, "kA": 0.1},
-            "pid": {"kp": 2.4,  "ki": 0.3,  "kd": 0.08},
             "ticks_to_rad":  round(ticks_to_rad, 7),
             "vel_lpf_alpha": round(vel_lpf_alpha, 3),
         },
@@ -444,38 +443,42 @@ def _build_kinematics(drivetrain: str, motors: Dict[str, Tuple[int, bool]], m: D
     cfg: Dict = {
         "type":         drivetrain,
         "wheel_radius": round(wheel_radius, 5),
-        "track_width":  round(track_width, 4),
     }
     if drivetrain == "mecanum":
+        cfg["track_width"]       = round(track_width, 4)
         cfg["wheelbase"]         = round(wheelbase, 4)
         cfg["front_left_motor"]  = "front_left_motor"
         cfg["front_right_motor"] = "front_right_motor"
         cfg["back_left_motor"]   = "rear_left_motor"
         cfg["back_right_motor"]  = "rear_right_motor"
     else:
+        cfg["wheelbase"]   = round(track_width, 4)
         cfg["left_motor"]  = "left_motor"
         cfg["right_motor"] = "right_motor"
     return cfg
 
 
-def _build_robot(drivetrain: str, motors: Dict[str, Tuple[int, bool]], m: Dict[str, float]) -> Dict:
-    return {
-        "drive":    {"kinematics": _build_kinematics(drivetrain, motors, m)},
-        "odometry": {"type": "FusedOdometry", "invert_x": False, "invert_y": False,
-                     "invert_z": True, "invert_w": False},
-    }
+def _patch_robot_kinematics(existing_robot: Dict, drivetrain: str, motors: Dict[str, Tuple[int, bool]], m: Dict[str, float]) -> Dict:
+    """Return a deep copy of *existing_robot* with only drive.kinematics updated.
+
+    All other fields (shutdown_in, vel_config, odometry, motion_pid, physical,
+    etc.) are preserved exactly as-is.
+    """
+    import copy
+    robot = copy.deepcopy(existing_robot)
+    robot.setdefault("drive", {})["kinematics"] = _build_kinematics(drivetrain, motors, m)
+    return robot
 
 
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
-def _to_builtin(obj):
-    if isinstance(obj, dict):
-        return {k: _to_builtin(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_to_builtin(v) for v in obj]
-    return obj
+def _yaml_str(data) -> str:
+    """Dump *data* to a YAML string using ruamel (handles CommentedMap etc.)."""
+    stream = StringIO()
+    _make_yaml().dump(data, stream)
+    return stream.getvalue().strip()
 
 
 def _render_summary(console: Console, config: Dict) -> None:
@@ -483,8 +486,8 @@ def _render_summary(console: Console, config: Dict) -> None:
     table.add_column("Section", style="bold cyan", no_wrap=True)
     table.add_column("Details")
     table.add_row("Project",     f"name: {config.get('name', '—')}\nuuid: {config.get('uuid', '—')}")
-    table.add_row("Drive",       yaml.safe_dump(config.get("robot", {}), sort_keys=False).strip())
-    table.add_row("Definitions", yaml.safe_dump(_to_builtin(config.get("definitions", {})), sort_keys=False).strip())
+    table.add_row("Drive",       _yaml_str(config.get("robot", {})))
+    table.add_row("Definitions", _yaml_str(config.get("definitions", {})))
     console.print(Panel(table, border_style="green"))
 
 
@@ -563,8 +566,13 @@ def wizard_command(ctx: click.Context, dry_run: bool) -> None:
     config: Dict = dict(existing)
     config["name"] = project_name
     config.setdefault("uuid", existing.get("uuid", ""))
-    config["robot"] = _build_robot(drivetrain, motor_defs, measurements)
 
+    # Only update drive.kinematics — preserve shutdown_in, vel_config,
+    # odometry, motion_pid, physical, etc.
+    config["robot"] = _patch_robot_kinematics(ex_robot, drivetrain, motor_defs, measurements)
+
+    # Only update wizard-managed definition keys (motors, imu, button) —
+    # all other sensors/servos/etc. are preserved.
     merged_defs: Dict = dict(ex_defs)
     merged_defs.update(_build_definitions(
         motor_defs, button_port,

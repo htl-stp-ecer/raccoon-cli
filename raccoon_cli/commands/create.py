@@ -45,31 +45,6 @@ def _get_next_mission_number(missions: list) -> int:
 
 
 
-def _open_pycharm_with_instructions(console: Console, project_root: Path) -> None:
-    """Open PyCharm and show SSH interpreter setup instructions."""
-    from raccoon_cli.ide.launcher import PyCharmLauncher
-
-    # Open PyCharm
-    launcher = PyCharmLauncher()
-    if launcher.is_available():
-        console.print("[cyan]Opening PyCharm...[/cyan]")
-        if launcher.launch(project_root):
-            console.print("[green]PyCharm launched![/green]")
-        else:
-            console.print("[yellow]Failed to launch PyCharm automatically.[/yellow]")
-            console.print(f"Open the project manually: {project_root}")
-    else:
-        console.print("[yellow]PyCharm not found in PATH.[/yellow]")
-        console.print(f"Open the project manually: {project_root}")
-
-    # Show SSH interpreter setup instructions
-    console.print()
-    console.print("[bold]To set up the SSH Python interpreter:[/bold]")
-    console.print("  1. Run [cyan]raccoon connect <PI_ADDRESS>[/cyan] to connect to your Pi")
-    console.print("  2. In PyCharm, follow the SSH interpreter setup guide:")
-    console.print("     [link=https://www.jetbrains.com/help/pycharm/configuring-remote-interpreters-via-ssh.html]https://www.jetbrains.com/help/pycharm/configuring-remote-interpreters-via-ssh.html[/link]")
-    console.print()
-    console.print("[dim]Use your Pi's IP address, username 'pi', and interpreter path '/usr/bin/python3'[/dim]")
 
 
 
@@ -85,9 +60,8 @@ def create_command() -> None:
 @click.argument("name")
 @click.option("--path", type=click.Path(), default=".", help="Directory to create project in")
 @click.option("--no-wizard", is_flag=True, help="Skip the setup wizard (not recommended)")
-@click.option("--no-open-ide", is_flag=True, help="Do not launch PyCharm after creating the project")
 @click.pass_context
-def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: bool, no_open_ide: bool) -> None:
+def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: bool) -> None:
     """Create a new raccoon project with the given NAME."""
     console: Console = ctx.obj["console"]
 
@@ -156,12 +130,6 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
     else:
         console.print(f"\n[yellow]Wizard skipped. Run 'cd {target_dir} && raccoon wizard' to configure your project.[/yellow]")
 
-    if no_open_ide:
-        console.print("[dim]Skipping IDE launch.[/dim]")
-        return
-
-    # Open PyCharm and show setup instructions
-    _open_pycharm_with_instructions(console, target_dir)
 
 
 @create_command.command(name="mission")

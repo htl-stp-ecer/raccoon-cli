@@ -295,6 +295,12 @@ class TestBuildMotorDef:
         assert d["calibration"]["ticks_to_rad"] == pytest.approx(0.004)
         assert d["calibration"]["vel_lpf_alpha"] == pytest.approx(0.8)
 
+    def test_no_invalid_calibration_fields(self):
+        from raccoon_cli.commands.wizard import _build_motor_def
+        d = _build_motor_def(port=0, inverted=False, ticks_to_rad=0.004, vel_lpf_alpha=0.8)
+        assert "ff" not in d["calibration"]
+        assert "pid" not in d["calibration"]
+
 
 class TestBuildDefinitions:
     def test_all_keys_present(self):
@@ -317,7 +323,9 @@ class TestBuildKinematics:
         assert kin["type"] == "differential"
         assert "left_motor" in kin
         assert "right_motor" in kin
-        assert "wheelbase" not in kin
+        assert "wheelbase" in kin
+        assert "track_width" not in kin
+        assert kin["wheelbase"] == pytest.approx(0.20, rel=1e-3)
         assert kin["wheel_radius"] == pytest.approx(0.0375, rel=1e-3)
 
     def test_mecanum_keys(self):
@@ -330,6 +338,54 @@ class TestBuildKinematics:
         kin = _build_kinematics("mecanum", motors, m)
         assert kin["type"] == "mecanum"
         assert "wheelbase" in kin
+
+
+class TestPatchRobotKinematics:
+    def test_preserves_existing_fields(self):
+        from raccoon_cli.commands.wizard import _patch_robot_kinematics
+        existing = {
+            "shutdown_in": 120,
+            "drive": {"kinematics": {"type": "differential"}, "vel_config": {"vx": {}}},
+            "motion_pid": {"distance": {"kp": 3.86}},
+            "physical": {"width_cm": 23.5},
+            "odometry": {"type": "FusedOdometry"},
+        }
+        motors = {"left_motor": (0, False), "right_motor": (1, True)}
+        m = {"wheel_diameter_mm": 75.0, "track_width_cm": 20.0, "wheelbase_cm": 15.0}
+        result = _patch_robot_kinematics(existing, "differential", motors, m)
+
+        assert result["shutdown_in"] == 120
+        assert result["drive"]["vel_config"] == {"vx": {}}
+        assert result["motion_pid"]["distance"]["kp"] == pytest.approx(3.86)
+        assert result["physical"]["width_cm"] == pytest.approx(23.5)
+        assert result["odometry"]["type"] == "FusedOdometry"
+
+    def test_updates_only_kinematics(self):
+        from raccoon_cli.commands.wizard import _patch_robot_kinematics
+        existing = {"shutdown_in": 120, "drive": {"kinematics": {"type": "differential"}}}
+        motors = {"left_motor": (0, False), "right_motor": (1, True)}
+        m = {"wheel_diameter_mm": 80.0, "track_width_cm": 22.0, "wheelbase_cm": 15.0}
+        result = _patch_robot_kinematics(existing, "differential", motors, m)
+
+        assert result["drive"]["kinematics"]["wheel_radius"] == pytest.approx(0.04, rel=1e-3)
+        assert result["shutdown_in"] == 120
+
+    def test_does_not_mutate_existing(self):
+        from raccoon_cli.commands.wizard import _patch_robot_kinematics
+        existing = {"shutdown_in": 120, "drive": {"kinematics": {"type": "differential"}}}
+        motors = {"left_motor": (0, False), "right_motor": (1, True)}
+        m = {"wheel_diameter_mm": 75.0, "track_width_cm": 20.0, "wheelbase_cm": 15.0}
+        _patch_robot_kinematics(existing, "differential", motors, m)
+        # original must be unchanged
+        assert existing["drive"]["kinematics"]["type"] == "differential"
+        assert "wheel_radius" not in existing["drive"]["kinematics"]
+
+    def test_works_with_empty_existing(self):
+        from raccoon_cli.commands.wizard import _patch_robot_kinematics
+        motors = {"left_motor": (0, False), "right_motor": (1, True)}
+        m = {"wheel_diameter_mm": 75.0, "track_width_cm": 20.0, "wheelbase_cm": 15.0}
+        result = _patch_robot_kinematics({}, "differential", motors, m)
+        assert "kinematics" in result["drive"]
 
 
 # ---------------------------------------------------------------------------
@@ -365,22 +421,37 @@ class TestWizardCommand:
                 )
         return result, save_mock
 
+    # Wizard step order:
+    # 1. drivetrain       (select)
+    # 2. motor ports×N    (select each)
+    # 3. button port      (select)
+    # 4. ticks cal        (select)
+    # --- text ---
+    # 5. project_name     (text)
+    # 6. wheel_diam       (text)
+    # 7. track_width      (text)
+    # 8. wheelbase        (text)
+    # 9. vel_alpha        (text)
+    # --- confirm ---
+    # 10. inverted×N      (confirm)
+    # 11. save?           (confirm — only without --dry-run)
+
     def _make_questionary_mock(self, drivetrain="differential", confirm_save=True):
         """Build a questionary mock that answers the full wizard flow."""
         q = MagicMock()
 
-        # Select calls: drivetrain, port×N, ticks_cal, button_port
-        # differential → 2 motors (2 port selects), then ticks skip, then button
+        # Select calls in wizard order:
+        # drivetrain → left_motor port → right_motor port → button port → ticks cal
         select_answers = iter([
             drivetrain,    # drivetrain
             "0",           # left_motor port
             "1",           # right_motor port
-            "skip",        # ticks calibration
             "10",          # button port
+            "skip",        # ticks calibration
         ])
         q.select.side_effect = lambda *a, **kw: _mock_ask(next(select_answers, "0"))
 
-        # Confirm calls: inverted×2, confirm_save
+        # Confirm calls: inverted×2 (in _ask_motors), then confirm_save (at end)
         confirm_answers = iter([False, True, confirm_save])
         q.confirm.side_effect = lambda *a, **kw: _mock_ask(next(confirm_answers, False))
 
@@ -398,10 +469,10 @@ class TestWizardCommand:
 
     def test_mecanum_dry_run(self, tmp_path):
         select_answers = iter([
-            "mecanum",  # drivetrain
-            "0", "1", "2", "3",  # 4 motor ports
-            "skip",  # ticks
-            "10",    # button
+            "mecanum",           # drivetrain
+            "0", "1", "2", "3", # 4 motor ports
+            "10",                # button port
+            "skip",              # ticks
         ])
         q = MagicMock()
         q.select.side_effect = lambda *a, **kw: _mock_ask(next(select_answers, "0"))
@@ -415,12 +486,50 @@ class TestWizardCommand:
         result, save_mock = self._run_wizard(tmp_path, q)
         assert result.exit_code == 0, result.output
 
+    def test_save_preserves_robot_non_kinematics_fields(self, tmp_path):
+        """Wizard must not wipe shutdown_in, motion_pid, vel_config, physical, odometry."""
+        from raccoon_cli.commands.wizard import wizard_command
+        q = self._make_questionary_mock(confirm_save=True)
+
+        from click.testing import CliRunner
+        from rich.console import Console
+
+        runner = CliRunner()
+        existing_config = {
+            "name": "TestBot",
+            "uuid": "test-uuid-1234",
+            "robot": {
+                "shutdown_in": 120,
+                "drive": {"kinematics": {"type": "differential"}, "vel_config": {"vx": {"pid": {}}}},
+                "motion_pid": {"distance": {"kp": 3.86}},
+                "physical": {"width_cm": 23.5},
+                "odometry": {"type": "FusedOdometry"},
+            },
+        }
+
+        with patch("raccoon_cli.commands.wizard.questionary", q), \
+             patch("raccoon_cli.commands.wizard.require_project", return_value=tmp_path), \
+             patch("raccoon_cli.commands.wizard.load_project_config", return_value=existing_config), \
+             patch("raccoon_cli.commands.wizard.save_project_keys") as save_mock, \
+             patch("raccoon_cli.commands.wizard._connect_step", return_value=False):
+
+            runner.invoke(
+                wizard_command,
+                args=[],
+                obj={"console": Console(quiet=True)},
+                catch_exceptions=False,
+            )
+
+        saved = save_mock.call_args[0][1]
+        robot = saved["robot"]
+        assert robot["shutdown_in"] == 120
+        assert robot["motion_pid"]["distance"]["kp"] == pytest.approx(3.86)
+        assert robot["physical"]["width_cm"] == pytest.approx(23.5)
+        assert robot["odometry"]["type"] == "FusedOdometry"
+        assert robot["drive"]["vel_config"]["vx"]["pid"] == {}
+
     def test_save_writes_config(self, tmp_path):
-        from raccoon_cli.commands.wizard import wizard_command, save_project_keys
-        from raccoon_cli.commands.wizard import (
-            _ask_project_name, _ask_drivetrain, _ask_motors,
-            _ask_button, _ask_measurements, _ask_ticks,
-        )
+        from raccoon_cli.commands.wizard import wizard_command
         q = self._make_questionary_mock(confirm_save=True)
 
         from click.testing import CliRunner
