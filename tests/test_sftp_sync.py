@@ -16,9 +16,6 @@ from raccoon_cli.client.sftp_sync import (
     SyncResult,
     load_raccoonignore,
     _should_exclude,
-    _rsync_local_path,
-    _rsync_subprocess_env,
-    _to_cygdrive,
 )
 
 
@@ -95,43 +92,6 @@ class TestRsyncCommandConstruction:
         cmd = sync._build_command(Path("/tmp/proj"), "/remote", options)
 
         assert cmd[-1] == "admin@10.0.0.1:/remote/"
-
-    @patch("raccoon_cli.client.sftp_sync.sys")
-    def test_windows_local_path_converted_to_cygdrive(self, mock_sys):
-        """On Windows, C:\\foo must become /cygdrive/c/foo so rsync treats it as local."""
-        mock_sys.platform = "win32"
-        # os.path.abspath/splitdrive behave like POSIX here, so pass an already-absolute
-        # Windows-style path and rely on splitdrive picking up the drive letter.
-        with patch("raccoon_cli.client.sftp_sync.os.path.abspath", return_value="C:\\Users\\tobias\\proj"), \
-             patch("raccoon_cli.client.sftp_sync.os.path.splitdrive", return_value=("C:", "\\Users\\tobias\\proj")):
-            result = _rsync_local_path(Path("C:\\Users\\tobias\\proj"))
-        assert result == "/cygdrive/c/Users/tobias/proj"
-
-    def test_posix_local_path_unchanged(self):
-        """On non-Windows platforms the local path must be returned as-is."""
-        assert _rsync_local_path(Path("/home/user/project")) == "/home/user/project"
-
-    def test_to_cygdrive_conversion(self):
-        """_to_cygdrive must translate a drive letter to /cygdrive/<letter>."""
-        with patch("raccoon_cli.client.sftp_sync.os.path.abspath", return_value="D:\\Robotik\\Pombot"), \
-             patch("raccoon_cli.client.sftp_sync.os.path.splitdrive", return_value=("D:", "\\Robotik\\Pombot")):
-            assert _to_cygdrive("D:\\Robotik\\Pombot") == "/cygdrive/d/Robotik/Pombot"
-
-    @patch("raccoon_cli.client.sftp_sync.sys")
-    def test_windows_rsync_env_sets_home_to_cygdrive(self, mock_sys):
-        """On Windows the rsync subprocess must see HOME=/cygdrive/<drive>/Users/<user>."""
-        mock_sys.platform = "win32"
-        with patch.dict("os.environ", {"USERPROFILE": "C:\\Users\\tobias"}, clear=False), \
-             patch("raccoon_cli.client.sftp_sync.os.path.abspath", return_value="C:\\Users\\tobias"), \
-             patch("raccoon_cli.client.sftp_sync.os.path.splitdrive", return_value=("C:", "\\Users\\tobias")):
-            env = _rsync_subprocess_env()
-        assert env["HOME"] == "/cygdrive/c/Users/tobias"
-
-    def test_posix_rsync_env_does_not_override_home(self):
-        """On Linux/macOS HOME must not be rewritten — cygdrive is meaningless there."""
-        original_home = os.environ.get("HOME")
-        env = _rsync_subprocess_env()
-        assert env.get("HOME") == original_home
 
 
 # ── Exclude patterns ─────────────────────────────────────────────────────
@@ -499,11 +459,11 @@ class TestCreateSync:
 
     @patch("raccoon_cli.client.sftp_sync.sys")
     @patch("raccoon_cli.client.sftp_sync.shutil.which", return_value="C:\\tools\\rsync.exe")
-    def test_returns_rsync_on_windows_when_available(self, mock_which, mock_sys):
-        """cwRsync (Chocolatey) on Windows should use the rsync backend."""
+    def test_returns_sftp_on_windows_even_if_rsync_present(self, mock_which, mock_sys):
+        """cwRsync on PATH must be ignored on Windows — too fragile."""
         mock_sys.platform = "win32"
         sync = create_sync(host="192.168.4.1", user="pi")
-        assert isinstance(sync, RsyncSync)
+        assert isinstance(sync, SftpSync)
 
     @patch("raccoon_cli.client.sftp_sync.sys")
     @patch("raccoon_cli.client.sftp_sync.shutil.which", return_value=None)
