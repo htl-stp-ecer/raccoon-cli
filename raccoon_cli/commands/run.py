@@ -45,26 +45,29 @@ def _extract_skip_missions(args: tuple) -> tuple[tuple, set[int]]:
 
 _WARN_ERROR_RE = re.compile(r"\b(WARNING|WARN|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
 _ERROR_RE = re.compile(r"\b(ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _is_warn_or_error(line: str) -> bool:
-    return bool(_WARN_ERROR_RE.search(line))
+    return bool(_WARN_ERROR_RE.search(_ANSI_RE.sub("", line)))
 
 
 def _print_output_summary(console: Console, collected: list[str]) -> None:
     """Print collected warning/error lines from program output as a summary panel."""
     if not collected:
         return
-    text = Text()
+    text = Text(overflow="ellipsis", no_wrap=True)
     for line in collected:
-        style = "bold red" if _ERROR_RE.search(line) else "bold yellow"
-        text.append(line + "\n", style=style)
+        clean = _ANSI_RE.sub("", line)
+        style = "bold red" if _ERROR_RE.search(clean) else "bold yellow"
+        text.append(clean + "\n", style=style)
     console.print(
         Panel(
             text,
             title=f"[bold yellow]Program Warnings & Errors ({len(collected)})[/bold yellow]",
             border_style="yellow",
             box=box.ROUNDED,
+            expand=True,
         )
     )
 
@@ -120,7 +123,7 @@ def _run_local(
         assert proc.stdout is not None
         for line in proc.stdout:
             line = line.rstrip("\n")
-            console.print(line, markup=False, highlight=False)
+            print(line)
             if _is_warn_or_error(line):
                 collected.append(line)
 

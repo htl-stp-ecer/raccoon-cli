@@ -96,7 +96,7 @@ class OutputHandler:
                     pass
 
                 # Regular output line
-                console.print(message)
+                print(message)
                 if on_line:
                     on_line(message)
 

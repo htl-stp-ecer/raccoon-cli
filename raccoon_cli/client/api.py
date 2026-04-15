@@ -468,6 +468,64 @@ class RaccoonApiClient:
         response.raise_for_status()
         return response.json()
 
+    # Log browsing methods
+
+    async def list_log_runs(
+        self, project_id: str, include_rotated: bool = False, count: Optional[int] = None,
+    ) -> dict:
+        """List detected log runs for a project on the Pi."""
+        client = self._get_client()
+        params: dict = {}
+        if include_rotated:
+            params["all"] = "true"
+        if count is not None:
+            params["n"] = str(count)
+        response = await client.get(
+            f"{self.base_url}/api/v1/logs/{project_id}/runs",
+            params=params,
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_log_run(
+        self,
+        project_id: str,
+        run_index: int,
+        level: Optional[str] = None,
+        source: Optional[str] = None,
+        grep: Optional[str] = None,
+        include_rotated: bool = False,
+    ) -> dict:
+        """Get log entries for a specific run on the Pi."""
+        client = self._get_client()
+        params: dict = {}
+        if include_rotated:
+            params["all"] = "true"
+        if level:
+            params["level"] = level
+        if source:
+            params["source"] = source
+        if grep:
+            params["grep"] = grep
+        response = await client.get(
+            f"{self.base_url}/api/v1/logs/{project_id}/runs/{run_index}",
+            params=params,
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def clear_logs(self, project_id: str) -> dict:
+        """Delete all log files for a project on the Pi."""
+        client = self._get_client()
+        response = await client.delete(
+            f"{self.base_url}/api/v1/logs/{project_id}",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
 
 def create_api_client(address: str, port: int = 8421, api_token: Optional[str] = None) -> RaccoonApiClient:
     """Create an API client for the given Pi address."""

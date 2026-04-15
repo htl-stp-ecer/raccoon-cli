@@ -15,6 +15,7 @@ from .web import web_command
 from .update import update_command
 from .checkpoint import checkpoint_group
 from .reorder_cmd import reorder_command
+from .logs import logs_group
 
 __all__ = [
     "calibrate_command",
@@ -33,4 +34,5 @@ __all__ = [
     "update_command",
     "checkpoint_group",
     "reorder_command",
+    "logs_group",
 ]
