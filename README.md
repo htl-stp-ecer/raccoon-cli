@@ -66,6 +66,16 @@ After that, the server starts automatically on boot and `raccoon connect` can re
 
 ## Commands
 
+### Fun German alias entrypoint (`washbär`)
+
+The package also installs a playful German alias entrypoint:
+
+```bash
+washbär lauf --entwicklung
+```
+
+It mirrors the normal `raccoon` CLI with German top-level command aliases (for example `lauf`, `verbinden`, `abgleich`) and selected German flag aliases where practical (for example `--entwicklung`, `--lokal` on `lauf`).
+
 ### Project management
 
 | Command | Description |

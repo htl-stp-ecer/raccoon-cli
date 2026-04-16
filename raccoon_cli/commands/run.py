@@ -270,12 +270,12 @@ async def _run_remote(
 
 @click.command(name="run", context_settings=dict(allow_extra_args=True, ignore_unknown_options=True))
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-@click.option("--dev", "--entwicklung", is_flag=True, help="Dev mode / Entwicklungsmodus")
-@click.option("--local", "--lokal", "-l", is_flag=True, help="Force local execution (skip remote)")
-@click.option("--no-sync", "--kein-sync", is_flag=True, help="Skip syncing before remote run")
-@click.option("--no-calibrate", "--nicht-kalibrieren", is_flag=True, help="Skip calibration steps, use stored values")
-@click.option("--no-codegen", "--kein-codegen", is_flag=True, help="Skip code generation (used by server when codegen was done client-side)")
-@click.option("--no-checkpoints", "--keine-pruefpunkte", is_flag=True, help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)")
+@click.option("--dev", "--entwicklung", is_flag=True, help="Dev mode: use button instead of wait-for-light / Entwicklungsmodus: Taste statt Lichtsensor")
+@click.option("--local", "--lokal", "-l", is_flag=True, help="Force local execution (skip remote) / Lokal ausführen (remote überspringen)")
+@click.option("--no-sync", "--kein-sync", is_flag=True, help="Skip syncing before remote run / Kein Sync vor Remote-Start")
+@click.option("--no-calibrate", "--nicht-kalibrieren", is_flag=True, help="Skip calibration steps, use stored values / Kalibrierung überspringen, gespeicherte Werte nutzen")
+@click.option("--no-codegen", "--kein-codegen", is_flag=True, help="Skip code generation (used by server when codegen was done client-side) / Code-Generierung überspringen")
+@click.option("--no-checkpoints", "--keine-pruefpunkte", is_flag=True, help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately) / Nicht auf Zeit-Checkpoints warten")
 @click.pass_context
 def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool, no_codegen: bool, no_checkpoints: bool) -> None:
     """Run codegen and then execute src.main.

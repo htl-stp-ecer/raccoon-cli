@@ -11,7 +11,25 @@ def test_washbaer_help_lists_german_run_alias() -> None:
     result = runner.invoke(washbaer_main, ["--help"])
 
     assert result.exit_code == 0
-    assert "lauf" in result.output
+    expected_aliases = (
+        "kalibrieren",
+        "codebau",
+        "lauf",
+        "zauber",
+        "erstellen",
+        "liste",
+        "entfernen",
+        "verbinden",
+        "trennen",
+        "abgleich",
+        "netz",
+        "aktualisieren",
+        "pruefpunkt",
+        "neuordnen",
+        "protokolle",
+    )
+    for alias in expected_aliases:
+        assert alias in result.output
 
 
 def test_washbaer_lauf_accepts_entwicklung_flag() -> None:
