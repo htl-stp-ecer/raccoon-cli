@@ -375,7 +375,7 @@ def lauf_command(
     kein_codegen: bool,
     keine_pruefpunkte: bool,
 ) -> None:
-    """Führt Codegen aus und startet danach src.main."""
+    """German wrapper for ``run`` that forwards translated flags to ``run_command``."""
     normalized_args = []
     for arg in args:
         match = _GERMAN_NO_MISSION_RE.match(arg)
