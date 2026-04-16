@@ -384,13 +384,13 @@ def lauf_command(
         else:
             normalized_args.append(arg)
 
-    run_command.callback.__wrapped__(
-        ctx,
-        tuple(normalized_args),
-        entwicklung,
-        lokal,
-        kein_sync,
-        nicht_kalibrieren,
-        kein_codegen,
-        keine_pruefpunkte,
+    ctx.invoke(
+        run_command,
+        args=tuple(normalized_args),
+        dev=entwicklung,
+        local=lokal,
+        no_sync=kein_sync,
+        no_calibrate=nicht_kalibrieren,
+        no_codegen=kein_codegen,
+        no_checkpoints=keine_pruefpunkte,
     )
