@@ -74,7 +74,8 @@ The package also installs a playful German alias entrypoint:
 washbär lauf --entwicklung
 ```
 
-It mirrors the normal `raccoon` CLI with German top-level command aliases (for example `lauf`, `verbinden`, `abgleich`) and selected German flag aliases where practical (for example `--entwicklung`, `--lokal` on `lauf`).
+It mirrors the normal `raccoon` CLI with German top-level command aliases (for example `lauf`, `verbinden`, `abgleich`) and selected German flag aliases where practical (for example `--entwicklung`, `--lokal` on `lauf`).  
+German aliases are intentionally scoped to `washbär`; the regular `raccoon` entrypoint stays English-first.
 
 ### Project management
 

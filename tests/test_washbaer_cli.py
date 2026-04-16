@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from raccoon_cli.cli import washbaer_main
+from raccoon_cli.cli import main, washbaer_main
 
 
 def test_washbaer_help_lists_german_run_alias() -> None:
@@ -47,3 +47,21 @@ def test_washbaer_lauf_accepts_entwicklung_flag() -> None:
     assert mock_run_local.call_count == 1
     _, kwargs = mock_run_local.call_args
     assert kwargs["dev"] is True
+
+
+def test_raccoon_run_does_not_expose_german_flags() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["run", "--help"])
+
+    assert result.exit_code == 0
+    assert "--entwicklung" not in result.output
+    assert "--lokal" not in result.output
+
+
+def test_washbaer_lauf_exposes_german_flags() -> None:
+    runner = CliRunner()
+    result = runner.invoke(washbaer_main, ["lauf", "--help"])
+
+    assert result.exit_code == 0
+    assert "--entwicklung" in result.output
+    assert "--lokal" in result.output

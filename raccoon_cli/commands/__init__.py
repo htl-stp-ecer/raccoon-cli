@@ -2,7 +2,7 @@
 
 from .calibrate import calibrate_command
 from .codegen import codegen_command
-from .run import run_command
+from .run import run_command, lauf_command
 from .wizard import wizard_command
 from .create import create_command
 from .list_cmd import list_command
@@ -21,6 +21,7 @@ __all__ = [
     "calibrate_command",
     "codegen_command",
     "run_command",
+    "lauf_command",
     "wizard_command",
     "create_command",
     "list_command",

@@ -9,6 +9,7 @@ from raccoon_cli.commands import (
     calibrate_command,
     codegen_command,
     run_command,
+    lauf_command,
     wizard_command,
     create_command,
     list_command,
@@ -33,7 +34,7 @@ CONTEXT_SETTINGS = {
 GERMAN_COMMAND_ALIASES = {
     "kalibrieren": calibrate_command,
     "codebau": codegen_command,
-    "lauf": run_command,
+    "lauf": lauf_command,
     "zauber": wizard_command,
     "erstellen": create_command,
     "liste": list_command,

@@ -24,7 +24,8 @@ from raccoon_cli.project import ProjectError, load_project_config, require_proje
 
 logger = logging.getLogger("raccoon")
 
-_NO_MISSION_RE = re.compile(r"^--(?:no|kein)-m(\d+)$")
+_NO_MISSION_RE = re.compile(r"^--no-m(\d+)$")
+_GERMAN_NO_MISSION_RE = re.compile(r"^--kein-m(\d+)$")
 
 
 def _extract_skip_missions(args: tuple) -> tuple[tuple, set[int]]:
@@ -270,12 +271,12 @@ async def _run_remote(
 
 @click.command(name="run", context_settings=dict(allow_extra_args=True, ignore_unknown_options=True))
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-@click.option("--dev", "--entwicklung", is_flag=True, help="Dev mode: use button instead of wait-for-light / Entwicklungsmodus: Taste statt Lichtsensor")
-@click.option("--local", "--lokal", "-l", is_flag=True, help="Force local execution (skip remote) / Lokal ausführen (remote überspringen)")
-@click.option("--no-sync", "--kein-sync", is_flag=True, help="Skip syncing before remote run / Kein Sync vor Remote-Start")
-@click.option("--no-calibrate", "--nicht-kalibrieren", is_flag=True, help="Skip calibration steps, use stored values / Kalibrierung überspringen, gespeicherte Werte nutzen")
-@click.option("--no-codegen", "--kein-codegen", is_flag=True, help="Skip code generation (used by server when codegen was done client-side) / Code-Generierung überspringen")
-@click.option("--no-checkpoints", "--keine-pruefpunkte", is_flag=True, help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately) / Nicht auf Zeit-Checkpoints warten")
+@click.option("--dev", is_flag=True, help="Dev mode: use button instead of wait-for-light")
+@click.option("--local", "-l", is_flag=True, help="Force local execution (skip remote)")
+@click.option("--no-sync", is_flag=True, help="Skip syncing before remote run")
+@click.option("--no-calibrate", is_flag=True, help="Skip calibration steps, use stored values")
+@click.option("--no-codegen", is_flag=True, help="Skip code generation (used by server when codegen was done client-side)")
+@click.option("--no-checkpoints", is_flag=True, help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)")
 @click.pass_context
 def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool, no_codegen: bool, no_checkpoints: bool) -> None:
     """Run codegen and then execute src.main.
@@ -283,7 +284,7 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
     If connected to a Pi, syncs the project and runs remotely.
     Use --local to force local execution.
 
-    Use --no-mN / --kein-mN (e.g. --no-m0 --kein-m2) to skip missions at those order indices.
+    Use --no-mN (e.g. --no-m0 --no-m2) to skip missions at those order indices.
     """
     console: Console = ctx.obj["console"]
 
@@ -353,3 +354,43 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
     except Exception:
         logger.exception("Unexpected error while running project")
         raise SystemExit(1) from None
+
+
+@click.command(name="lauf", context_settings=dict(allow_extra_args=True, ignore_unknown_options=True))
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+@click.option("--entwicklung", "--dev", is_flag=True, help="Entwicklungsmodus: Taste statt Lichtsensor")
+@click.option("--lokal", "--local", "-l", is_flag=True, help="Lokal ausführen (remote überspringen)")
+@click.option("--kein-sync", "--no-sync", is_flag=True, help="Kein Sync vor Remote-Start")
+@click.option("--nicht-kalibrieren", "--no-calibrate", is_flag=True, help="Kalibrierung überspringen, gespeicherte Werte nutzen")
+@click.option("--kein-codegen", "--no-codegen", is_flag=True, help="Code-Generierung überspringen")
+@click.option("--keine-pruefpunkte", "--no-checkpoints", is_flag=True, help="Nicht auf Zeit-Checkpoints warten")
+@click.pass_context
+def lauf_command(
+    ctx: click.Context,
+    args: tuple,
+    entwicklung: bool,
+    lokal: bool,
+    kein_sync: bool,
+    nicht_kalibrieren: bool,
+    kein_codegen: bool,
+    keine_pruefpunkte: bool,
+) -> None:
+    """Führt Codegen aus und startet danach src.main."""
+    normalized_args = []
+    for arg in args:
+        match = _GERMAN_NO_MISSION_RE.match(arg)
+        if match:
+            normalized_args.append(f"--no-m{match.group(1)}")
+        else:
+            normalized_args.append(arg)
+
+    run_command.callback.__wrapped__(
+        ctx,
+        tuple(normalized_args),
+        entwicklung,
+        lokal,
+        kein_sync,
+        nicht_kalibrieren,
+        kein_codegen,
+        keine_pruefpunkte,
+    )
