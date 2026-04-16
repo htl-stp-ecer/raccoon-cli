@@ -54,6 +54,7 @@ dependencies = [
 
 [project.scripts]
 raccoon = "raccoon_cli.cli:main"
+washbär = "raccoon_cli.cli:washbaer_main"
 raccoon-server = "raccoon_cli.server.cli:main"
 
 [tool.setuptools.dynamic]
