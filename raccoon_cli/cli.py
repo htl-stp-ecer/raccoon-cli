@@ -41,8 +41,10 @@ GERMAN_COMMAND_ALIASES = {
     "entfernen": remove_command,
     "verbinden": connect_command,
     "trennen": disconnect_command,
+    # "status" is commonly used in German CLI usage too.
     "status": status_command,
     "abgleich": sync_command,
+    # Acronym command is intentionally unchanged.
     "lcm": lcm_group,
     "netz": web_command,
     "aktualisieren": update_command,

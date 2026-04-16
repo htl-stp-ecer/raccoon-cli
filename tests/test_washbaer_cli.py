@@ -65,3 +65,12 @@ def test_washbaer_lauf_exposes_german_flags() -> None:
     assert result.exit_code == 0
     assert "--entwicklung" in result.output
     assert "--lokal" in result.output
+
+
+def test_raccoon_with_washbaer_argv0_stays_english() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["run", "--help"], prog_name="washbär")
+
+    assert result.exit_code == 0
+    assert "--entwicklung" not in result.output
+    assert "--lokal" not in result.output
