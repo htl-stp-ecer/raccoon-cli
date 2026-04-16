@@ -65,6 +65,8 @@ def test_washbaer_lauf_exposes_german_flags() -> None:
     assert result.exit_code == 0
     assert "--entwicklung" in result.output
     assert "--lokal" in result.output
+    assert "--dev" not in result.output
+    assert "--local" not in result.output
 
 
 def test_raccoon_with_washbaer_argv0_stays_english() -> None:

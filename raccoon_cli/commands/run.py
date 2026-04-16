@@ -358,12 +358,12 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
 
 @click.command(name="lauf", context_settings=dict(allow_extra_args=True, ignore_unknown_options=True))
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-@click.option("--entwicklung", "--dev", is_flag=True, help="Entwicklungsmodus: Taste statt Lichtsensor")
-@click.option("--lokal", "--local", "-l", is_flag=True, help="Lokal ausführen (remote überspringen)")
-@click.option("--kein-sync", "--no-sync", is_flag=True, help="Kein Sync vor Remote-Start")
-@click.option("--nicht-kalibrieren", "--no-calibrate", is_flag=True, help="Kalibrierung überspringen, gespeicherte Werte nutzen")
-@click.option("--kein-codegen", "--no-codegen", is_flag=True, help="Code-Generierung überspringen")
-@click.option("--keine-pruefpunkte", "--no-checkpoints", is_flag=True, help="Nicht auf Zeit-Checkpoints warten")
+@click.option("--entwicklung", is_flag=True, help="Entwicklungsmodus: Taste statt Lichtsensor")
+@click.option("--lokal", "-l", is_flag=True, help="Lokal ausführen (remote überspringen)")
+@click.option("--kein-sync", is_flag=True, help="Kein Sync vor Remote-Start")
+@click.option("--nicht-kalibrieren", is_flag=True, help="Kalibrierung überspringen, gespeicherte Werte nutzen")
+@click.option("--kein-codegen", is_flag=True, help="Code-Generierung überspringen")
+@click.option("--keine-pruefpunkte", is_flag=True, help="Nicht auf Zeit-Checkpoints warten")
 @click.pass_context
 def lauf_command(
     ctx: click.Context,

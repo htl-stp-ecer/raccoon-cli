@@ -119,7 +119,7 @@ main.add_command(logs_group)
 @click.group(name="washbär", context_settings=CONTEXT_SETTINGS, no_args_is_help=True)
 @click.pass_context
 def washbaer_main(ctx: click.Context) -> None:
-    """Washbär - etwas freche CLI für Raccoon-Projekte."""
+    """Washbär - etwas freches CLI für Raccoon-Projekte."""
     _setup_context(ctx)
 
 
