@@ -116,15 +116,15 @@ main.add_command(reorder_command)
 main.add_command(logs_group)
 
 
-@click.group(name="washbär", context_settings=CONTEXT_SETTINGS, no_args_is_help=True)
+@click.group(name="waschbär", context_settings=CONTEXT_SETTINGS, no_args_is_help=True)
 @click.pass_context
-def washbaer_main(ctx: click.Context) -> None:
-    """Washbär - etwas freches CLI für Raccoon-Projekte."""
+def waschbaer_main(ctx: click.Context) -> None:
+    """Waschbär - etwas freches CLI für Raccoon-Projekte."""
     _setup_context(ctx)
 
 
 for _name, _command in GERMAN_COMMAND_ALIASES.items():
-    washbaer_main.add_command(_command, name=_name)
+    waschbaer_main.add_command(_command, name=_name)
 
 
 if __name__ == "__main__":

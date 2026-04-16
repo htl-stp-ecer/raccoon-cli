@@ -3,12 +3,12 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from raccoon_cli.cli import main, washbaer_main
+from raccoon_cli.cli import main, waschbaer_main
 
 
-def test_washbaer_help_lists_german_run_alias() -> None:
+def test_waschbaer_help_lists_german_run_alias() -> None:
     runner = CliRunner()
-    result = runner.invoke(washbaer_main, ["--help"])
+    result = runner.invoke(waschbaer_main, ["--help"])
 
     assert result.exit_code == 0
     expected_aliases = (
@@ -32,7 +32,7 @@ def test_washbaer_help_lists_german_run_alias() -> None:
         assert alias in result.output
 
 
-def test_washbaer_lauf_accepts_entwicklung_flag() -> None:
+def test_waschbaer_lauf_accepts_entwicklung_flag() -> None:
     runner = CliRunner()
     fake_project_root = Path("/tmp/fake-raccoon-project")
     fake_ctx = MagicMock()
@@ -41,7 +41,7 @@ def test_washbaer_lauf_accepts_entwicklung_flag() -> None:
     with patch("raccoon_cli.commands.run.require_project", return_value=fake_project_root), \
          patch("raccoon_cli.commands.run.load_project_config", return_value={"name": "Demo", "uuid": "demo-uuid"}), \
          patch("raccoon_cli.commands.run._run_local") as mock_run_local:
-        result = runner.invoke(washbaer_main, ["lauf", "--entwicklung", "--lokal"], obj=fake_ctx.obj)
+        result = runner.invoke(waschbaer_main, ["lauf", "--entwicklung", "--lokal"], obj=fake_ctx.obj)
 
     assert result.exit_code == 0
     assert mock_run_local.call_count == 1
@@ -58,9 +58,9 @@ def test_raccoon_run_does_not_expose_german_flags() -> None:
     assert "--lokal" not in result.output
 
 
-def test_washbaer_lauf_exposes_german_flags() -> None:
+def test_waschbaer_lauf_exposes_german_flags() -> None:
     runner = CliRunner()
-    result = runner.invoke(washbaer_main, ["lauf", "--help"])
+    result = runner.invoke(waschbaer_main, ["lauf", "--help"])
 
     assert result.exit_code == 0
     assert "--entwicklung" in result.output
@@ -69,9 +69,9 @@ def test_washbaer_lauf_exposes_german_flags() -> None:
     assert "--local" not in result.output
 
 
-def test_raccoon_with_washbaer_argv0_stays_english() -> None:
+def test_raccoon_with_waschbaer_argv0_stays_english() -> None:
     runner = CliRunner()
-    result = runner.invoke(main, ["run", "--help"], prog_name="washbär")
+    result = runner.invoke(main, ["run", "--help"], prog_name="waschbär")
 
     assert result.exit_code == 0
     assert "--entwicklung" not in result.output
