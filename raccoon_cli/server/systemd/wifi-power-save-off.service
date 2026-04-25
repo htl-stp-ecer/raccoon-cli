@@ -1,0 +1,11 @@
+[Unit]
+Description=Disable Wi-Fi power saving on wlan0
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/iwconfig wlan0 power off
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

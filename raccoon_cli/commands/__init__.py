@@ -17,6 +17,7 @@ from .checkpoint import checkpoint_group
 from .reorder_cmd import reorder_command
 from .logs import logs_group
 from .migrate import migrate_command
+from .fix_network import fix_network_command
 
 __all__ = [
     "calibrate_command",
@@ -37,4 +38,5 @@ __all__ = [
     "reorder_command",
     "logs_group",
     "migrate_command",
+    "fix_network_command",
 ]

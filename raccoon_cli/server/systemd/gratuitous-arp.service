@@ -1,0 +1,12 @@
+[Unit]
+Description=Send gratuitous ARP after network is up
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'IP=$(hostname -I | awk "{print \$1}"); [ -n "$IP" ] && /usr/sbin/arping -A -c 3 -I wlan0 "$IP" || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

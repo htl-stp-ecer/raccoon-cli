@@ -14,6 +14,24 @@ console = Console()
 SYSTEMD_SERVICE_NAME = "raccoon.service"
 SYSTEMD_SERVICE_PATH = Path("/etc/systemd/system") / SYSTEMD_SERVICE_NAME
 
+_NETWORK_SERVICES = ["wifi-power-save-off.service", "gratuitous-arp.service"]
+_SYSTEMD_DIR = Path("/etc/systemd/system")
+_PACKAGE_SYSTEMD = Path(__file__).parent / "systemd"
+
+
+def _install_network_services() -> list[str]:
+    """Install Wi-Fi fix services. Returns list of installed service names."""
+    installed = []
+    for name in _NETWORK_SERVICES:
+        src = _PACKAGE_SYSTEMD / name
+        if not src.exists():
+            continue
+        dst = _SYSTEMD_DIR / name
+        shutil.copy(src, dst)
+        subprocess.run(["systemctl", "enable", "--now", name], check=False)
+        installed.append(name)
+    return installed
+
 
 @click.group()
 def main():
@@ -100,6 +118,11 @@ WantedBy=multi-user.target
     subprocess.run(["systemctl", "enable", "raccoon"], check=True)
     subprocess.run(["systemctl", "start", "raccoon"], check=True)
 
+    # Install network fix services
+    installed = _install_network_services()
+    if installed:
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+
     console.print("[green]Raccoon server installed and started![/green]")
     console.print()
     console.print("Service status:")
@@ -180,6 +203,23 @@ def config():
     console.print()
     for key, value in cfg.to_dict().items():
         console.print(f"  {key}: [cyan]{value}[/cyan]")
+
+
+@main.command("fix-network")
+def fix_network():
+    """Install Wi-Fi power-save and gratuitous-ARP services."""
+    if os.geteuid() != 0:
+        console.print("[red]Error: This command must be run as root (sudo)[/red]")
+        sys.exit(1)
+
+    installed = _install_network_services()
+    if not installed:
+        console.print("[yellow]No network service files found in package.[/yellow]")
+        sys.exit(1)
+
+    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    for name in installed:
+        console.print(f"[green]Installed and started {name}[/green]")
 
 
 if __name__ == "__main__":
