@@ -372,6 +372,22 @@ def check_all_versions(
 _NON_VERSION_TAGS = {"dev", "installed"}
 
 
+def _parse_version(v: str):
+    try:
+        from packaging.version import Version
+        return Version(v)
+    except Exception:
+        return tuple(int(x) for x in v.split(".") if x.isdigit())
+
+
+def version_is_newer(installed: str, target: str) -> bool:
+    """Return True if installed is strictly newer than target."""
+    try:
+        return _parse_version(installed) > _parse_version(target)
+    except Exception:
+        return False
+
+
 def _version_style(installed: Optional[str], latest: Optional[str]) -> tuple[str, str]:
     """Return (display_text, style) for a version cell."""
     if installed is None:
@@ -382,54 +398,50 @@ def _version_style(installed: Optional[str], latest: Optional[str]) -> tuple[str
         return installed, "dim"
     if installed == latest:
         return installed, "green"
-    return installed, "yellow"
+    if version_is_newer(installed, latest):
+        return installed, "blue"   # ahead of bundle — shown in blue
+    return installed, "yellow"     # behind bundle
 
 
-def render_version_table(console: Console, statuses: list[PackageStatus]) -> bool:
+def render_version_table(console: Console, statuses: list[PackageStatus]) -> tuple[bool, bool]:
     """Render a Rich table showing package version status.
 
-    Returns True if any package is outdated.
+    Returns (any_outdated, any_ahead).
     """
     table = Table(title="Package Versions")
     table.add_column("Package", style="cyan")
-    table.add_column("Latest", style="dim")
+    table.add_column("Bundle", style="dim")
     table.add_column("Laptop", justify="center")
     table.add_column("Pi", justify="center")
 
     any_outdated = False
+    any_ahead = False
 
     for s in statuses:
         latest_display = s.latest_version or "?"
 
-        # Laptop column
-        if "laptop" in s.info.targets:
-            laptop_text, laptop_style = _version_style(s.laptop_version, s.latest_version)
-            laptop_cell = f"[{laptop_style}]{laptop_text}[/{laptop_style}]"
-            if (
-                s.laptop_version
-                and s.laptop_version not in _NON_VERSION_TAGS
-                and s.latest_version
-                and s.laptop_version != s.latest_version
-            ):
-                any_outdated = True
-        else:
-            laptop_cell = "[dim]n/a[/dim]"
+        def _cell(version: Optional[str]) -> str:
+            text, style = _version_style(version, s.latest_version)
+            return f"[{style}]{text}[/{style}]"
 
-        # Pi column
-        if "pi" in s.info.targets:
-            pi_text, pi_style = _version_style(s.pi_version, s.latest_version)
-            pi_cell = f"[{pi_style}]{pi_text}[/{pi_style}]"
-            if (
-                s.pi_version
-                and s.pi_version not in _NON_VERSION_TAGS
-                and s.latest_version
-                and s.pi_version != s.latest_version
-            ):
+        def _check(version: Optional[str]) -> None:
+            nonlocal any_outdated, any_ahead
+            if not version or version in _NON_VERSION_TAGS or not s.latest_version:
+                return
+            if version_is_newer(version, s.latest_version):
+                any_ahead = True
+            elif version != s.latest_version:
                 any_outdated = True
-        else:
-            pi_cell = "[dim]n/a[/dim]"
+
+        laptop_cell = _cell(s.laptop_version) if "laptop" in s.info.targets else "[dim]n/a[/dim]"
+        pi_cell = _cell(s.pi_version) if "pi" in s.info.targets else "[dim]n/a[/dim]"
+
+        if "laptop" in s.info.targets:
+            _check(s.laptop_version)
+        if "pi" in s.info.targets:
+            _check(s.pi_version)
 
         table.add_row(s.info.name, latest_display, laptop_cell, pi_cell)
 
     console.print(table)
-    return any_outdated
+    return any_outdated, any_ahead

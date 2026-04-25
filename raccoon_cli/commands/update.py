@@ -28,6 +28,7 @@ from raccoon_cli.version_checker import (
     download_release_assets,
     render_version_table,
     fetch_bundle_manifest,
+    version_is_newer,
 )
 
 logger = logging.getLogger("raccoon")
@@ -93,24 +94,29 @@ def update_command(
     console.print("[dim]Checking versions...[/dim]")
     console.print()
     statuses = check_all_versions(ssh_client=ssh_client, server_url=server_url, api_token=api_token, manifest=manifest)
-    any_outdated = render_version_table(console, statuses)
+    any_outdated, any_ahead = render_version_table(console, statuses)
 
     if check_only:
+        console.print()
         if any_outdated:
-            console.print()
             console.print("Run [cyan]raccoon update[/cyan] to install updates.")
+        elif any_ahead:
+            console.print("[blue]Some packages are ahead of the bundle.[/blue] Use [cyan]--dev[/cyan] or [cyan]--force[/cyan] to downgrade.")
         else:
-            console.print()
             console.print("[green]Everything is up to date.[/green]")
         return
 
-    # Determine what to update
+    # Determine what to update (exclude packages that are ahead of bundle)
     laptop_updates = _get_laptop_updates(statuses, force) if not pi_only else []
     pi_updates = _get_pi_updates(statuses, force) if not laptop_only else []
 
     if not laptop_updates and not pi_updates:
         console.print()
-        console.print("[green]Everything is up to date.[/green]")
+        if any_ahead:
+            console.print("[blue]Some packages are ahead of the bundle[/blue] (shown in blue) — skipped.")
+            console.print("Use [cyan]raccoon update --force[/cyan] to downgrade to bundle versions.")
+        else:
+            console.print("[green]Everything is up to date.[/green]")
         return
 
     # Show what will be updated
@@ -121,6 +127,13 @@ def update_command(
     if pi_updates:
         names = ", ".join(s.info.name for s in pi_updates)
         console.print(f"[cyan]Pi updates:[/cyan] {names}")
+
+    # Warn about skipped ahead-packages
+    laptop_ahead = _get_laptop_ahead(statuses) if not pi_only else []
+    pi_ahead = _get_pi_ahead(statuses) if not laptop_only else []
+    if laptop_ahead or pi_ahead:
+        ahead_names = ", ".join({s.info.name for s in laptop_ahead + pi_ahead})
+        console.print(f"[blue]Ahead of bundle (skipped):[/blue] {ahead_names}")
 
     console.print()
     if not Confirm.ask("Proceed with updates?", default=True):
@@ -209,34 +222,58 @@ def _get_ssh_client(console: Console):
 def _get_laptop_updates(
     statuses: list[PackageStatus], force: bool
 ) -> list[PackageStatus]:
-    """Filter statuses to those needing laptop updates."""
+    """Filter statuses to those needing laptop updates (behind bundle only)."""
     updates = []
     for s in statuses:
         if "laptop" not in s.info.targets:
             continue
         if s.latest_version is None:
             continue
-        # Skip dev installs unless forced
         if s.laptop_version == "dev" and not force:
             continue
+        if s.laptop_version and not force and version_is_newer(s.laptop_version, s.latest_version):
+            continue  # ahead of bundle — skip unless forced
         if force or (s.laptop_version != s.latest_version):
             updates.append(s)
     return updates
 
 
+def _get_laptop_ahead(statuses: list[PackageStatus]) -> list[PackageStatus]:
+    return [
+        s for s in statuses
+        if "laptop" in s.info.targets
+        and s.laptop_version
+        and s.latest_version
+        and s.laptop_version not in {"dev"}
+        and version_is_newer(s.laptop_version, s.latest_version)
+    ]
+
+
 def _get_pi_updates(
     statuses: list[PackageStatus], force: bool
 ) -> list[PackageStatus]:
-    """Filter statuses to those needing Pi updates."""
+    """Filter statuses to those needing Pi updates (behind bundle only)."""
     updates = []
     for s in statuses:
         if "pi" not in s.info.targets:
             continue
         if s.latest_version is None:
             continue
+        if s.pi_version and not force and version_is_newer(s.pi_version, s.latest_version):
+            continue  # ahead of bundle — skip unless forced
         if force or (s.pi_version != s.latest_version):
             updates.append(s)
     return updates
+
+
+def _get_pi_ahead(statuses: list[PackageStatus]) -> list[PackageStatus]:
+    return [
+        s for s in statuses
+        if "pi" in s.info.targets
+        and s.pi_version
+        and s.latest_version
+        and version_is_newer(s.pi_version, s.latest_version)
+    ]
 
 
 def _update_laptop(
