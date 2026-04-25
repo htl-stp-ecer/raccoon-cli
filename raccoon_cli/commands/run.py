@@ -21,6 +21,7 @@ from rich.text import Text
 from raccoon_cli.checkpoint import create_checkpoint
 from raccoon_cli.codegen import create_pipeline
 from raccoon_cli.project import ProjectError, load_project_config, require_project
+from raccoon_cli.commands.migrate import _get_format_version, _load_migrations
 
 logger = logging.getLogger("raccoon")
 
@@ -162,6 +163,26 @@ def _run_local(
         raise SystemExit(returncode)
 
 
+async def _ping_until_ready(host: str, console: Console, attempts: int = 6, interval: float = 0.4) -> bool:
+    """Ping host until it responds, warming up ARP cache before connecting."""
+    import platform
+    flag = "-n" if platform.system() == "Windows" else "-c"
+    success = 0
+    for _ in range(attempts):
+        proc = await asyncio.create_subprocess_exec(
+            "ping", flag, "1", "-W", "1", host,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        if proc.returncode == 0:
+            success += 1
+            if success >= 2:
+                return True
+        await asyncio.sleep(interval)
+    return False
+
+
 async def _run_remote(
     ctx: click.Context, project_root: Path, config: dict, args: tuple,
     dev: bool = False, no_calibrate: bool = False,
@@ -198,6 +219,10 @@ async def _run_remote(
     state = manager.state
     project_uuid = config.get("uuid")
     project_name = config.get("name", project_root.name)
+
+    console.print(f"[dim]Checking connectivity to {state.pi_address}...[/dim]")
+    if not await _ping_until_ready(state.pi_address, console):
+        console.print(f"[yellow]Warning: {state.pi_address} not responding to ping — trying anyway[/yellow]")
 
     console.print(f"[cyan]Running '{project_name}' on {state.pi_hostname}...[/cyan]")
 
@@ -273,6 +298,45 @@ async def _run_remote(
             raise SystemExit(exit_code)
 
 
+def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
+    try:
+        current = _get_format_version(project_root)
+
+        # Check lib's minimum requirement first — this is a hard blocker.
+        try:
+            import raccoon as _raccoon_lib
+            lib_min = getattr(_raccoon_lib, "MIN_FORMAT_VERSION", None)
+            if lib_min is not None and current < lib_min:
+                console.print(
+                    f"[bold red]✗  raccoon-lib requires format_version≥{lib_min} "
+                    f"but this project is at format_version={current}.[/bold red]\n"
+                    f"   Run [cyan]raccoon migrate[/cyan] before running."
+                )
+                raise SystemExit(1)
+        except SystemExit:
+            raise
+        except Exception:
+            pass
+
+        # Soft warning: CLI has unapplied migrations.
+        migrations = _load_migrations()
+        if not migrations:
+            return
+        latest = migrations[-1].NUMBER
+        if current < latest:
+            pending_count = sum(1 for m in migrations if current < m.NUMBER)
+            console.print(
+                f"[bold yellow]⚠  Project format is out of date "
+                f"(format_version={current}, latest={latest}, "
+                f"{pending_count} migration(s) pending).[/bold yellow]\n"
+                f"   Run [cyan]raccoon migrate[/cyan] to update."
+            )
+    except SystemExit:
+        raise
+    except Exception:
+        pass
+
+
 @click.command(name="run", context_settings=dict(allow_extra_args=True, ignore_unknown_options=True))
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
 @click.option("--dev", is_flag=True, help="Dev mode: use button instead of wait-for-light")
@@ -305,6 +369,8 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
         config = load_project_config(project_root)
         if not isinstance(config, dict):
             raise ProjectError("raccoon.project.yml must be a mapping")
+
+        _warn_if_migrations_pending(console, project_root)
 
         # Check if we should run remotely
         if not local:
