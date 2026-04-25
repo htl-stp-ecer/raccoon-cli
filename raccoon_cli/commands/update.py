@@ -27,7 +27,6 @@ from raccoon_cli.version_checker import (
     check_all_versions,
     download_release_assets,
     render_version_table,
-    write_remote_tracked_version,
 )
 
 logger = logging.getLogger("raccoon")
@@ -61,13 +60,19 @@ def update_command(
 
     # Get SSH client for Pi if needed
     ssh_client = None
+    server_url = None
+    api_token = None
     if not laptop_only:
         ssh_client = _get_ssh_client(console)
+        manager = get_connection_manager()
+        if manager.state.pi_address:
+            server_url = f"http://{manager.state.pi_address}:{manager.state.pi_port}"
+            api_token = manager.state.api_token
 
-    # Check versions
+    # Check versions — prefer HTTP server endpoint, SSH as fallback
     console.print("[dim]Checking versions...[/dim]")
     console.print()
-    statuses = check_all_versions(ssh_client=ssh_client)
+    statuses = check_all_versions(ssh_client=ssh_client, server_url=server_url, api_token=api_token)
     any_outdated = render_version_table(console, statuses)
 
     if check_only:
@@ -334,10 +339,6 @@ def _update_pi(
                 repo_short = repo.split("/")[-1]
                 console.print(f"\n[cyan]Updating {repo_short} from {repo}...[/cyan]")
                 _update_pi_tarball(console, tmpdir, repo, repo_short, pi_host, pi_user)
-                latest = repo_updates[0].latest_version
-                if latest:
-                    for s in repo_updates:
-                        write_remote_tracked_version(ssh_client, s.info.name, latest)
 
 
 def _pi_pip_install(

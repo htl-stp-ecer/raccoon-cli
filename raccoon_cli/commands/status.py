@@ -156,14 +156,19 @@ def _try_auto_connect(console, manager, project_root):
 def _show_package_versions(console: Console, manager) -> None:
     """Show package version information."""
     ssh_client = None
+    server_url = None
+    api_token = None
     if manager.is_connected:
         try:
             ssh_client = manager.get_ssh_client()
         except Exception:
             pass
+        if manager.state.pi_address:
+            server_url = f"http://{manager.state.pi_address}:{manager.state.pi_port}"
+            api_token = manager.state.api_token
 
     console.print()
-    statuses = check_all_versions(ssh_client=ssh_client)
+    statuses = check_all_versions(ssh_client=ssh_client, server_url=server_url, api_token=api_token)
     any_outdated = render_version_table(console, statuses)
 
     if any_outdated:

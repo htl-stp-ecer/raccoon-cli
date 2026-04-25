@@ -12,13 +12,10 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-import yaml
 from rich.console import Console
 from rich.table import Table
 
 logger = logging.getLogger("raccoon")
-
-INSTALLED_VERSIONS_PATH = ".raccoon/installed_versions.yml"
 
 GITHUB_API = "https://api.github.com"
 
@@ -31,9 +28,9 @@ class PackageInfo:
     repo: str
     pip_name: Optional[str]
     targets: list[str]
-    # SSH command that exits 0 if the package is installed on Pi.
-    # Used as fallback when pip_name is None and tracked versions are missing.
-    detect_cmd: Optional[str] = None
+    # SSH command whose stdout is the installed version string.
+    # Used when pip_name is None and the server endpoint is unavailable.
+    version_cmd: Optional[str] = None
     # True if the package is installable from PyPI by ``pip_name``. If False,
     # updates fall back to downloading the wheel from the GitHub release.
     on_pypi: bool = True
@@ -70,14 +67,21 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         repo="htl-stp-ecer/botui",
         pip_name=None,
         targets=["pi"],
-        detect_cmd="systemctl cat botui.service >/dev/null 2>&1 || test -d /opt/botui",
+        version_cmd="cat /home/pi/stp-velox/version 2>/dev/null",
     ),
     PackageInfo(
         name="stm32-data-reader",
         repo="htl-stp-ecer/stm32-data-reader",
         pip_name=None,
         targets=["pi"],
-        detect_cmd="systemctl cat stm32_data_reader.service >/dev/null 2>&1",
+        version_cmd="/home/pi/stm32_data_reader/stm32_data_reader --version 2>/dev/null",
+    ),
+    PackageInfo(
+        name="raccoon-cam",
+        repo="htl-stp-ecer/raccoon-cam",
+        pip_name=None,
+        targets=["pi"],
+        version_cmd="/usr/local/bin/raccoon-cam --version 2>/dev/null",
     ),
 ]
 
@@ -245,82 +249,83 @@ def get_remote_pip_version(ssh_client, pip_name: str) -> Optional[str]:
     return None
 
 
-def get_remote_tracked_versions(ssh_client) -> dict[str, str]:
-    """Read all tracked versions from ~/.raccoon/installed_versions.yml on Pi."""
+def get_pi_versions_http(server_url: str, api_token: Optional[str] = None) -> Optional[dict[str, Optional[str]]]:
+    """Fetch all Pi component versions from the raccoon-server /version endpoint.
+
+    Returns a dict mapping package name to version string (or None if not installed),
+    or None if the server is unreachable.
+    """
+    headers: dict[str, str] = {}
+    if api_token:
+        headers["X-API-Token"] = api_token
     try:
-        _, stdout, _ = ssh_client.exec_command(
-            f"cat ~/{INSTALLED_VERSIONS_PATH}", timeout=10
+        resp = httpx.get(
+            f"{server_url.rstrip('/')}/version",
+            headers=headers,
+            timeout=10,
         )
-        content = stdout.read().decode()
-        if content.strip():
-            data = yaml.safe_load(content)
-            if isinstance(data, dict):
-                return {k: str(v) for k, v in data.items()}
-    except Exception:
+        if resp.status_code == 200:
+            return resp.json()
+    except httpx.HTTPError:
         pass
-    return {}
+    return None
 
 
-def write_remote_tracked_version(
-    ssh_client, name: str, version: str
-) -> None:
-    """Write/update a tracked version in ~/.raccoon/installed_versions.yml on Pi."""
-    existing = get_remote_tracked_versions(ssh_client)
-    existing[name] = version
-    yml_content = yaml.safe_dump(existing, default_flow_style=False)
-    ssh_client.exec_command(
-        f"mkdir -p ~/.raccoon && cat > ~/{INSTALLED_VERSIONS_PATH} << 'EOFVERSIONS'\n{yml_content}EOFVERSIONS"
-    )
+def _get_remote_version_ssh(ssh_client, pkg: PackageInfo) -> Optional[str]:
+    """Get installed version of a non-pip Pi package via SSH.
 
-
-def _detect_remote_package(ssh_client, pkg: PackageInfo) -> bool:
-    """Check if a non-pip package is installed on Pi using its detect_cmd."""
-    if not pkg.detect_cmd:
-        return False
+    Runs pkg.version_cmd and returns its stdout, or None on failure.
+    """
+    if not pkg.version_cmd:
+        return None
     try:
-        _, stdout, _ = ssh_client.exec_command(pkg.detect_cmd, timeout=10)
-        return stdout.channel.recv_exit_status() == 0
+        _, stdout, _ = ssh_client.exec_command(pkg.version_cmd, timeout=10)
+        output = stdout.read().decode().strip()
+        return output if output else None
     except Exception:
-        return False
+        return None
 
 
-def check_all_versions(ssh_client=None) -> list[PackageStatus]:
+def check_all_versions(
+    ssh_client=None,
+    server_url: Optional[str] = None,
+    api_token: Optional[str] = None,
+) -> list[PackageStatus]:
     """Aggregate version info for all packages in the registry.
 
     Fetches latest versions from GitHub and installed versions from local pip
-    and (if ssh_client provided) the Pi.
+    and (if connected) the Pi. Pi versions are fetched via the server HTTP
+    endpoint when available, falling back to SSH.
     """
-    # Deduplicate repo lookups (raccoon + raccoon-transport share a repo)
     latest_cache: dict[str, Optional[str]] = {}
-    tracked_versions: dict[str, str] = {}
 
-    if ssh_client:
-        tracked_versions = get_remote_tracked_versions(ssh_client)
+    # Try HTTP first for Pi versions — single call, no trust-me files
+    pi_versions_http: Optional[dict[str, Optional[str]]] = None
+    if server_url:
+        pi_versions_http = get_pi_versions_http(server_url, api_token)
 
     statuses: list[PackageStatus] = []
     for pkg in PACKAGE_REGISTRY:
         status = PackageStatus(info=pkg)
 
-        # Latest version
+        # Latest version from GitHub
         if pkg.repo not in latest_cache:
             latest_cache[pkg.repo] = get_latest_version(pkg.repo)
         status.latest_version = latest_cache[pkg.repo]
 
-        # Laptop version (pip packages only)
+        # Laptop version (local pip)
         if "laptop" in pkg.targets and pkg.pip_name:
             status.laptop_version = get_local_pip_version(pkg.pip_name)
 
-        # Pi version
-        if "pi" in pkg.targets and ssh_client:
-            if pkg.pip_name:
-                status.pi_version = get_remote_pip_version(ssh_client, pkg.pip_name)
-            else:
-                # Non-pip: check tracked versions, then detect presence
-                tracked = tracked_versions.get(pkg.name)
-                if tracked:
-                    status.pi_version = tracked
-                elif _detect_remote_package(ssh_client, pkg):
-                    status.pi_version = "installed"
+        # Pi version — HTTP preferred, SSH fallback
+        if "pi" in pkg.targets:
+            if pi_versions_http is not None:
+                status.pi_version = pi_versions_http.get(pkg.name)
+            elif ssh_client:
+                if pkg.pip_name:
+                    status.pi_version = get_remote_pip_version(ssh_client, pkg.pip_name)
+                else:
+                    status.pi_version = _get_remote_version_ssh(ssh_client, pkg)
 
         statuses.append(status)
 
