@@ -180,18 +180,24 @@ def fetch_bundle_manifest(bundle: str = "latest") -> Optional[dict]:
     """Fetch a bundle manifest from raccoon-image.
 
     ``bundle`` can be:
-    - ``"latest"``  — the current stable bundle (bundles/latest.json)
-    - ``"dev"``     — latest component tips, auto-updated by CI (bundles/dev.json)
+    - ``"latest"``      — pointer to current stable bundle (follows ref)
+    - ``"dev"``         — latest component tips, auto-updated by CI
     - ``"2026.4.25.1"`` — a specific hand-curated bundle file
+
+    If the fetched file contains only a ``ref`` key, the ref is followed
+    once to load the actual bundle.
     """
     url = f"{_RACCOON_IMAGE_RAW}/{bundle}.json"
     try:
         resp = httpx.get(url, headers={"User-Agent": "raccoon-cli"}, timeout=15, follow_redirects=True)
-        if resp.status_code == 200:
-            manifest = resp.json()
-            manifest.setdefault("bundle", bundle)
-            return manifest
-        logger.warning("Bundle manifest %s returned HTTP %s", url, resp.status_code)
+        if resp.status_code != 200:
+            logger.warning("Bundle manifest %s returned HTTP %s", url, resp.status_code)
+            return None
+        data = resp.json()
+        if "ref" in data and "components" not in data:
+            return fetch_bundle_manifest(data["ref"])
+        data.setdefault("bundle", bundle)
+        return data
     except httpx.HTTPError as e:
         logger.warning("Failed to fetch bundle manifest %s: %s", url, e)
     return None
