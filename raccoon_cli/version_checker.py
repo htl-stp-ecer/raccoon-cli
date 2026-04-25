@@ -173,29 +173,27 @@ def download_release_assets(
     return downloaded
 
 
-def fetch_bundle_manifest(tag: str = "latest") -> Optional[dict]:
-    """Fetch the raccoon-image bundle manifest for the given tag."""
-    data = _fetch_release(RACCOON_IMAGE_REPO, tag)
-    if not data:
-        return None
-    for asset in data.get("assets", []):
-        if asset.get("name") == "manifest.json":
-            url = asset.get("browser_download_url", "")
-            if not url:
-                continue
-            try:
-                resp = httpx.get(
-                    url,
-                    headers={"User-Agent": "raccoon-cli"},
-                    timeout=15,
-                    follow_redirects=True,
-                )
-                if resp.status_code == 200:
-                    manifest = resp.json()
-                    manifest["_tag"] = data.get("tag_name", "")
-                    return manifest
-            except httpx.HTTPError as e:
-                logger.warning("Failed to download manifest.json: %s", e)
+_RACCOON_IMAGE_RAW = "https://raw.githubusercontent.com/htl-stp-ecer/raccoon-image/main/bundles"
+
+
+def fetch_bundle_manifest(bundle: str = "latest") -> Optional[dict]:
+    """Fetch a bundle manifest from raccoon-image.
+
+    ``bundle`` can be:
+    - ``"latest"``  — the current stable bundle (bundles/latest.json)
+    - ``"dev"``     — latest component tips, auto-updated by CI (bundles/dev.json)
+    - ``"2026.4.25.1"`` — a specific hand-curated bundle file
+    """
+    url = f"{_RACCOON_IMAGE_RAW}/{bundle}.json"
+    try:
+        resp = httpx.get(url, headers={"User-Agent": "raccoon-cli"}, timeout=15, follow_redirects=True)
+        if resp.status_code == 200:
+            manifest = resp.json()
+            manifest.setdefault("bundle", bundle)
+            return manifest
+        logger.warning("Bundle manifest %s returned HTTP %s", url, resp.status_code)
+    except httpx.HTTPError as e:
+        logger.warning("Failed to fetch bundle manifest %s: %s", url, e)
     return None
 
 

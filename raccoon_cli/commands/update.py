@@ -38,7 +38,8 @@ logger = logging.getLogger("raccoon")
 @click.option("--laptop-only", is_flag=True, help="Only update laptop packages")
 @click.option("--pi-only", is_flag=True, help="Only update Pi packages")
 @click.option("--force", is_flag=True, help="Force reinstall even if versions match")
-@click.option("--bundle", "bundle_tag", default=None, metavar="TAG", help="Pin to a specific raccoon-image bundle (default: latest)")
+@click.option("--bundle", "bundle_tag", default=None, metavar="NAME", help="Pin to a specific bundle (e.g. 2026.4.25.1)")
+@click.option("--dev", "use_dev", is_flag=True, help="Use the dev manifest (latest component tips, auto-updated by CI)")
 @click.pass_context
 def update_command(
     ctx: click.Context,
@@ -47,17 +48,17 @@ def update_command(
     pi_only: bool,
     force: bool,
     bundle_tag: Optional[str],
+    use_dev: bool,
 ) -> None:
     """Check for and install updates across all packages.
 
-    Checks GitHub releases for the latest versions and compares them
-    against locally installed packages and Pi packages.
+    Uses the raccoon-image bundle manifest to determine target versions.
 
     Examples:
-        raccoon update              # Update everything
+        raccoon update              # Stable bundle (bundles/latest.json)
+        raccoon update --dev        # Latest component tips (bundles/dev.json)
+        raccoon update --bundle 2026.4.25.1  # Specific bundle
         raccoon update --check      # Dry run, just show status
-        raccoon update --laptop-only  # Only update laptop packages
-        raccoon update --pi-only      # Only update Pi packages
     """
     console: Console = ctx.obj.get("console", Console())
 
@@ -72,11 +73,18 @@ def update_command(
             server_url = f"http://{manager.state.pi_address}:{manager.state.pi_port}"
             api_token = manager.state.api_token
 
-    # Fetch bundle manifest
-    console.print("[dim]Fetching raccoon-image bundle...[/dim]")
-    manifest = fetch_bundle_manifest(bundle_tag or "latest")
+    # Resolve which manifest to use
+    if bundle_tag:
+        resolved = bundle_tag
+    elif use_dev:
+        resolved = "dev"
+    else:
+        resolved = "latest"
+
+    console.print(f"[dim]Fetching raccoon-image bundle ({resolved})...[/dim]")
+    manifest = fetch_bundle_manifest(resolved)
     if manifest:
-        console.print(f"[dim]Bundle: {manifest.get('_tag', 'unknown')}[/dim]")
+        console.print(f"[dim]Bundle: {manifest.get('bundle', resolved)}[/dim]")
     else:
         console.print("[yellow]Could not fetch raccoon-image manifest — falling back to individual repo versions.[/yellow]")
     console.print()
