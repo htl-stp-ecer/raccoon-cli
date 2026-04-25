@@ -212,8 +212,16 @@ def _get_ssh_client(console: Console):
         if success:
             return manager.get_ssh_client()
     except Exception as e:
-        console.print(f"[yellow]Could not connect to Pi: {e}[/yellow]")
-        return None
+        console.print(f"[yellow]raccoon-server unreachable: {e}[/yellow]")
+
+    # Fallback: raccoon-server is down but SSH may still work (e.g. broken server install).
+    console.print(f"[dim]Trying direct SSH to {pi_address} (bypassing raccoon-server)...[/dim]")
+    try:
+        if manager.connect_ssh_only(pi_address, pi_user, pi_port):
+            console.print("[yellow]Connected via SSH only — raccoon-server is down.[/yellow]")
+            return manager.get_ssh_client()
+    except Exception as e:
+        console.print(f"[yellow]Direct SSH also failed: {e}[/yellow]")
 
     console.print("[dim]Could not connect to Pi — skipping Pi version checks.[/dim]")
     return None

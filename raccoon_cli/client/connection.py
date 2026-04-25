@@ -268,6 +268,32 @@ class ConnectionManager:
 
         return asyncio.run(self.connect(address, port, user))
 
+    def connect_ssh_only(self, address: str, user: str = "pi", port: int = 8421) -> bool:
+        """Connect via SSH only, skipping the raccoon-server HTTP health check.
+
+        Use this as a fallback when the raccoon-server is down but SSH still works
+        (e.g. for raccoon update when the server is broken).
+
+        Returns True if SSH connection succeeded.
+        """
+        check_paramiko_version()
+        import paramiko
+
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname=address, username=user, timeout=10)
+            self._ssh_client = client
+            self._state = ConnectionState(
+                connected=True,
+                pi_address=address,
+                pi_port=port,
+                pi_user=user,
+            )
+            return True
+        except Exception:
+            return False
+
     def disconnect(self) -> None:
         """Disconnect from the current Pi."""
         if self._ssh_client:
