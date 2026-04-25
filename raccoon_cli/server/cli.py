@@ -205,22 +205,5 @@ def config():
         console.print(f"  {key}: [cyan]{value}[/cyan]")
 
 
-@main.command("fix-network")
-def fix_network():
-    """Install Wi-Fi power-save and gratuitous-ARP services."""
-    if os.geteuid() != 0:
-        console.print("[red]Error: This command must be run as root (sudo)[/red]")
-        sys.exit(1)
-
-    installed = _install_network_services()
-    if not installed:
-        console.print("[yellow]No network service files found in package.[/yellow]")
-        sys.exit(1)
-
-    subprocess.run(["systemctl", "daemon-reload"], check=True)
-    for name in installed:
-        console.print(f"[green]Installed and started {name}[/green]")
-
-
 if __name__ == "__main__":
     main()
