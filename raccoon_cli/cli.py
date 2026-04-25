@@ -23,6 +23,7 @@ from raccoon_cli.commands import (
     checkpoint_group,
     reorder_command,
     logs_group,
+    migrate_command,
 )
 from raccoon_cli.logging_utils import configure_logging, render_banner, render_summary
 
@@ -91,6 +92,7 @@ main.add_command(update_command)
 main.add_command(checkpoint_group)
 main.add_command(reorder_command)
 main.add_command(logs_group)
+main.add_command(migrate_command)
 
 
 if __name__ == "__main__":

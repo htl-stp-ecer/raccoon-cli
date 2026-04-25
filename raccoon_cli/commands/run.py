@@ -93,8 +93,13 @@ def _run_local(
         output_dir = project_root / "src" / "hardware"
         pipeline.run_all(config, output_dir, format_code=True)
 
-    logger.info("Running src.main...")
-    cmd_parts = [sys.executable, "-m", "src.main", *args]
+    if (project_root / "pyproject.toml").exists():
+        import shutil
+        uv = shutil.which("uv") or "uv"
+        cmd_parts = [uv, "run", "start", *args]
+        logger.info("pyproject.toml found — using uv run start")
+    else:
+        cmd_parts = [sys.executable, "-m", "src.main", *args]
     logger.info(f"Executing: {' '.join(cmd_parts)}")
 
     env = os.environ.copy()
