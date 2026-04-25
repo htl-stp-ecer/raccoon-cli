@@ -18,6 +18,7 @@ from rich.table import Table
 logger = logging.getLogger("raccoon")
 
 GITHUB_API = "https://api.github.com"
+RACCOON_IMAGE_REPO = "htl-stp-ecer/raccoon-image"
 
 
 @dataclass
@@ -172,6 +173,32 @@ def download_release_assets(
     return downloaded
 
 
+def fetch_bundle_manifest(tag: str = "latest") -> Optional[dict]:
+    """Fetch the raccoon-image bundle manifest for the given tag."""
+    data = _fetch_release(RACCOON_IMAGE_REPO, tag)
+    if not data:
+        return None
+    for asset in data.get("assets", []):
+        if asset.get("name") == "manifest.json":
+            url = asset.get("browser_download_url", "")
+            if not url:
+                continue
+            try:
+                resp = httpx.get(
+                    url,
+                    headers={"User-Agent": "raccoon-cli"},
+                    timeout=15,
+                    follow_redirects=True,
+                )
+                if resp.status_code == 200:
+                    manifest = resp.json()
+                    manifest["_tag"] = data.get("tag_name", "")
+                    return manifest
+            except httpx.HTTPError as e:
+                logger.warning("Failed to download manifest.json: %s", e)
+    return None
+
+
 def _is_editable_install(pip_name: str) -> bool:
     """Check if a pip package is an editable (dev) install via direct_url.json."""
     try:
@@ -290,6 +317,7 @@ def check_all_versions(
     ssh_client=None,
     server_url: Optional[str] = None,
     api_token: Optional[str] = None,
+    manifest: Optional[dict] = None,
 ) -> list[PackageStatus]:
     """Aggregate version info for all packages in the registry.
 
@@ -308,10 +336,15 @@ def check_all_versions(
     for pkg in PACKAGE_REGISTRY:
         status = PackageStatus(info=pkg)
 
-        # Latest version from GitHub
-        if pkg.repo not in latest_cache:
-            latest_cache[pkg.repo] = get_latest_version(pkg.repo)
-        status.latest_version = latest_cache[pkg.repo]
+        # Latest version — prefer bundle manifest, fall back to individual GitHub release
+        manifest_versions = (manifest or {}).get("components", {})
+        if pkg.name in manifest_versions:
+            tag = manifest_versions[pkg.name]
+            status.latest_version = tag.lstrip("v") if tag else None
+        else:
+            if pkg.repo not in latest_cache:
+                latest_cache[pkg.repo] = get_latest_version(pkg.repo)
+            status.latest_version = latest_cache[pkg.repo]
 
         # Laptop version (local pip)
         if "laptop" in pkg.targets and pkg.pip_name:
