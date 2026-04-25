@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import sys
 import uuid
 from datetime import datetime
 from enum import Enum
@@ -189,8 +190,8 @@ async def _start_command(
             executor.execute(
                 command_id=command_id,
                 project_path=project["path"],
-                command="raccoon",
-                args=args,
+                command=sys.executable,
+                args=["-m", "raccoon_cli.cli", *args],
                 env=env,
             )
         )
