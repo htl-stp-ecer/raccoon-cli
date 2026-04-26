@@ -53,6 +53,15 @@ def _is_warn_or_error(line: str) -> bool:
     return bool(_WARN_ERROR_RE.search(_ANSI_RE.sub("", line)))
 
 
+def _has_error_lines(collected: list[str]) -> bool:
+    """Return True if any collected line is an actual error-level line."""
+    for line in collected:
+        clean = _ANSI_RE.sub("", line)
+        if _ERROR_RE.search(clean):
+            return True
+    return False
+
+
 def _print_output_summary(console: Console, collected: list[str]) -> None:
     """Print collected warning/error lines from program output as a summary panel."""
     if not collected:
@@ -158,6 +167,13 @@ def _run_local(
             border_style="green" if returncode == 0 else "red",
         )
     )
+
+    if returncode != 0 and not _has_error_lines(collected):
+        console.print(
+            "[yellow]Non-zero exit code returned, but output contained only warnings; "
+            "treating run as successful.[/yellow]"
+        )
+        returncode = 0
 
     if returncode != 0:
         raise SystemExit(returncode)
@@ -284,13 +300,23 @@ async def _run_remote(
         # Display final status
         exit_code = final_status.get("exit_code", -1)
         status = final_status.get("status", "unknown")
+        success = exit_code == 0
 
-        exit_style = "bold green" if exit_code == 0 else "bold red"
+        if exit_code != 0 and not _has_error_lines(collected):
+            console.print(
+                "[yellow]Non-zero remote exit code returned, but output contained only warnings; "
+                "treating run as successful.[/yellow]"
+            )
+            exit_code = 0
+            status = "completed"
+            success = True
+
+        exit_style = "bold green" if success else "bold red"
         console.print()
         console.print(
             Panel.fit(
                 Text(f"Remote execution {status} with code {exit_code}", style=exit_style),
-                border_style="green" if exit_code == 0 else "red",
+                border_style="green" if success else "red",
             )
         )
 
