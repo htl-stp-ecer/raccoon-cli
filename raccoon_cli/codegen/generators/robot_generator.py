@@ -598,6 +598,26 @@ class RobotGenerator(BaseGenerator):
             return
 
         definitions = self._full_config.get("definitions", {})
+        if isinstance(definitions, dict):
+            # Backward compatibility: flatten grouped definitions loaded via
+            # keys like "_motors", "_sensors", "_servos".
+            flattened = dict(definitions)
+            grouped_keys = [
+                key for key, value in definitions.items()
+                if isinstance(key, str) and key.startswith("_") and isinstance(value, dict)
+            ]
+            for group_key in grouped_keys:
+                group_data = definitions[group_key]
+                del flattened[group_key]
+                for name, hw_cfg in group_data.items():
+                    if name in flattened:
+                        raise ValueError(
+                            f"definitions.{group_key}: duplicate definition '{name}' "
+                            "already exists at top level"
+                        )
+                    flattened[name] = hw_cfg
+            definitions = flattened
+
         if not definitions:
             raise ValueError(
                 "No hardware definitions found in config, but kinematics references hardware: "

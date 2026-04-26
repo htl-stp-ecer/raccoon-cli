@@ -64,7 +64,29 @@ class DefsGenerator(BaseGenerator):
         if definitions is None:
             logger.warning("No 'definitions' key found in config")
             return {}
-        return definitions
+        if not isinstance(definitions, dict):
+            return definitions
+
+        # Backward compatibility: older projects may keep grouped hardware
+        # under helper keys such as "_motors" using !include (not !include-merge).
+        # Flatten those sections so downstream validation/codegen sees normal
+        # top-level hardware entries with "type" fields.
+        flattened = dict(definitions)
+        grouped_keys = [
+            key for key, value in definitions.items()
+            if isinstance(key, str) and key.startswith("_") and isinstance(value, dict)
+        ]
+        for group_key in grouped_keys:
+            group_data = definitions[group_key]
+            del flattened[group_key]
+            for name, hw_cfg in group_data.items():
+                if name in flattened:
+                    raise ValueError(
+                        f"definitions.{group_key}: duplicate definition '{name}' "
+                        "already exists at top level"
+                    )
+                flattened[name] = hw_cfg
+        return flattened
 
     def validate_config(self, data: Dict[str, Any]) -> None:
         """
@@ -175,6 +197,39 @@ class DefsGenerator(BaseGenerator):
                 hw_class, hw_params = self.resolver.resolve_from_config(resolved_cfg, type_key="type")
                 logger.info(f"Resolved type '{type_name}' to {hw_class.__name__} for {field_name}")
             except ValueError as e:
+                # Compatibility fallback: type index can lag behind runtime classes
+                # during client/server version skew. Emit a constructor directly so
+                # codegen remains usable for standard hardware definitions.
+                if isinstance(type_name, str) and type_name:
+                    logger.info(
+                        "Falling back to unresolved constructor for "
+                        f"definitions.{field_name} ({type_name}): {e}"
+                    )
+                    hw_params = {k: v for k, v in resolved_cfg.items() if k != "type"}
+                    self.imports._entries.add(("raccoon.hal", type_name))
+                    fallback_params = dict(hw_params)
+                    if type_name == "Motor":
+                        calibration = fallback_params.get("calibration")
+                        if isinstance(calibration, dict):
+                            self.imports._entries.add(
+                                ("raccoon.foundation", "MotorCalibration")
+                            )
+                            cal_args = ", ".join(
+                                f"{k}={build_literal_expr(v)}"
+                                for k, v in calibration.items()
+                            )
+                            fallback_params["calibration"] = f"MotorCalibration({cal_args})"
+
+                    args_parts: list[str] = []
+                    for k, v in fallback_params.items():
+                        if isinstance(v, str) and v.startswith("MotorCalibration("):
+                            args_parts.append(f"{k}={v}")
+                        else:
+                            args_parts.append(f"{k}={build_literal_expr(v)}")
+                    args = ", ".join(args_parts)
+                    hw_expr = f"{type_name}({args})" if args else f"{type_name}()"
+                    attributes.append((field_name, hw_expr))
+                    continue
                 raise ValueError(f"definitions.{field_name}: {e}")
 
             # Track analog sensors
@@ -287,7 +342,7 @@ class DefsGenerator(BaseGenerator):
             logger.debug("Resolved AnalogSensor from type index (offline)")
             return
 
-        logger.warning(
+        logger.info(
             "Could not resolve AnalogSensor class. "
             "analog_sensors list will not be generated."
         )
@@ -329,7 +384,7 @@ class DefsGenerator(BaseGenerator):
 
         # Fall back to raccoon import so generation still succeeds.
         self._imu_import_line = "from raccoon import IMU as Imu"
-        logger.warning(
+        logger.info(
             "Could not import raccoon.imu.Imu or raccoon.hal.IMU during generation. "
             "Defaulting to 'from raccoon import IMU as Imu'; ensure the target "
             "environment provides a compatible IMU class."
