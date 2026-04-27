@@ -83,9 +83,15 @@ def _print_output_summary(console: Console, collected: list[str]) -> None:
 
 
 def _run_local(
-    ctx: click.Context, project_root: Path, config: dict, args: tuple,
-    dev: bool = False, no_calibrate: bool = False, no_codegen: bool = False,
-    no_checkpoints: bool = False, skip_missions: set[int] | None = None,
+    ctx: click.Context,
+    project_root: Path,
+    config: dict,
+    args: tuple,
+    dev: bool = False,
+    no_calibrate: bool = False,
+    no_codegen: bool = False,
+    no_checkpoints: bool = False,
+    skip_missions: set[int] | None = None,
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
@@ -105,6 +111,7 @@ def _run_local(
 
     if (project_root / "pyproject.toml").exists():
         import shutil
+
         uv = shutil.which("uv") or "uv"
         cmd_parts = [uv, "run", "start", *args]
         logger.info("pyproject.toml found — using uv run start")
@@ -129,9 +136,13 @@ def _run_local(
     # Use Popen so we can catch SIGINT ourselves and terminate the child.
     # Pipe stdout+stderr so we can collect warnings/errors for the summary.
     proc = subprocess.Popen(
-        cmd_parts, cwd=project_root, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        bufsize=1, text=True,
+        cmd_parts,
+        cwd=project_root,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+        text=True,
     )
 
     def _stream_output() -> None:
@@ -179,14 +190,22 @@ def _run_local(
         raise SystemExit(returncode)
 
 
-async def _ping_until_ready(host: str, console: Console, attempts: int = 6, interval: float = 0.4) -> bool:
+async def _ping_until_ready(
+    host: str, console: Console, attempts: int = 6, interval: float = 0.4
+) -> bool:
     """Ping host until it responds, warming up ARP cache before connecting."""
     import platform
+
     flag = "-n" if platform.system() == "Windows" else "-c"
     success = 0
     for _ in range(attempts):
         proc = await asyncio.create_subprocess_exec(
-            "ping", flag, "1", "-W", "1", host,
+            "ping",
+            flag,
+            "1",
+            "-W",
+            "1",
+            host,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -200,9 +219,16 @@ async def _ping_until_ready(host: str, console: Console, attempts: int = 6, inte
 
 
 async def _run_remote(
-    ctx: click.Context, project_root: Path, config: dict, args: tuple,
-    dev: bool = False, no_calibrate: bool = False,
-    no_checkpoints: bool = False, skip_missions: set[int] | None = None,
+    ctx: click.Context,
+    project_root: Path,
+    config: dict,
+    args: tuple,
+    dev: bool = False,
+    no_calibrate: bool = False,
+    no_codegen: bool = False,
+    no_sync: bool = False,
+    no_checkpoints: bool = False,
+    skip_missions: set[int] | None = None,
 ) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
@@ -219,17 +245,22 @@ async def _run_remote(
     from raccoon_cli.commands.sync_cmd import sync_project_interactive
 
     # Run codegen locally before syncing so generated files are included
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-    pipeline = create_pipeline()
-    output_dir = project_root / "src" / "hardware"
-    pipeline.run_all(config, output_dir, format_code=True)
+    if not no_codegen:
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        pipeline = create_pipeline()
+        output_dir = project_root / "src" / "hardware"
+        pipeline.run_all(config, output_dir, format_code=True)
 
     # Sync project to Pi before running
-    if not sync_project_interactive(project_root, console):
-        console.print("[red]Sync failed, cannot run remotely[/red]")
-        raise SystemExit(1)
-    console.print()
+    if no_sync:
+        console.print("[yellow]Skipping pre-run sync (--no-sync).[/yellow]")
+        console.print()
+    else:
+        if not sync_project_interactive(project_root, console):
+            console.print("[red]Sync failed, cannot run remotely[/red]")
+            raise SystemExit(1)
+        console.print()
 
     manager = get_connection_manager()
     state = manager.state
@@ -238,12 +269,16 @@ async def _run_remote(
 
     console.print(f"[dim]Checking connectivity to {state.pi_address}...[/dim]")
     if not await _ping_until_ready(state.pi_address, console):
-        console.print(f"[yellow]Warning: {state.pi_address} not responding to ping — trying anyway[/yellow]")
+        console.print(
+            f"[yellow]Warning: {state.pi_address} not responding to ping — trying anyway[/yellow]"
+        )
 
     console.print(f"[cyan]Running '{project_name}' on {state.pi_hostname}...[/cyan]")
 
     # Start the run command on Pi
-    async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
+    async with create_api_client(
+        state.pi_address, state.pi_port, api_token=state.api_token
+    ) as client:
         try:
             env = {}
             if dev:
@@ -253,7 +288,9 @@ async def _run_remote(
             if no_checkpoints:
                 env["LIBSTP_NO_CHECKPOINTS"] = "1"
             if skip_missions:
-                env["LIBSTP_SKIP_MISSIONS"] = ",".join(str(i) for i in sorted(skip_missions))
+                env["LIBSTP_SKIP_MISSIONS"] = ",".join(
+                    str(i) for i in sorted(skip_missions)
+                )
             result = await client.run_project(project_uuid, args=list(args), env=env)
         except Exception as e:
             console.print(f"[red]Failed to start run on Pi: {e}[/red]")
@@ -295,7 +332,9 @@ async def _run_remote(
         # Sync changes back from Pi (preserve locally-edited files)
         console.print()
         console.print("[dim]Syncing changes from Pi...[/dim]")
-        sync_project_interactive(project_root, console, direction=SyncDirection.PULL, update=True)
+        sync_project_interactive(
+            project_root, console, direction=SyncDirection.PULL, update=True
+        )
 
         # Display final status
         exit_code = final_status.get("exit_code", -1)
@@ -315,7 +354,9 @@ async def _run_remote(
         console.print()
         console.print(
             Panel.fit(
-                Text(f"Remote execution {status} with code {exit_code}", style=exit_style),
+                Text(
+                    f"Remote execution {status} with code {exit_code}", style=exit_style
+                ),
                 border_style="green" if success else "red",
             )
         )
@@ -331,6 +372,7 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
         # Check lib's minimum requirement first — this is a hard blocker.
         try:
             import raccoon as _raccoon_lib
+
             lib_min = getattr(_raccoon_lib, "MIN_FORMAT_VERSION", None)
             if lib_min is not None and current < lib_min:
                 console.print(
@@ -363,16 +405,40 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
         pass
 
 
-@click.command(name="run", context_settings=dict(allow_extra_args=True, ignore_unknown_options=True))
+@click.command(
+    name="run",
+    context_settings=dict(allow_extra_args=True, ignore_unknown_options=True),
+)
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-@click.option("--dev", is_flag=True, help="Dev mode: use button instead of wait-for-light")
+@click.option(
+    "--dev", is_flag=True, help="Dev mode: use button instead of wait-for-light"
+)
 @click.option("--local", "-l", is_flag=True, help="Force local execution (skip remote)")
 @click.option("--no-sync", is_flag=True, help="Skip syncing before remote run")
-@click.option("--no-calibrate", is_flag=True, help="Skip calibration steps, use stored values")
-@click.option("--no-codegen", is_flag=True, help="Skip code generation (used by server when codegen was done client-side)")
-@click.option("--no-checkpoints", is_flag=True, help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)")
+@click.option(
+    "--no-calibrate", is_flag=True, help="Skip calibration steps, use stored values"
+)
+@click.option(
+    "--no-codegen",
+    is_flag=True,
+    help="Skip code generation (used by server when codegen was done client-side)",
+)
+@click.option(
+    "--no-checkpoints",
+    is_flag=True,
+    help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)",
+)
 @click.pass_context
-def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool, no_codegen: bool, no_checkpoints: bool) -> None:
+def run_command(
+    ctx: click.Context,
+    args: tuple,
+    dev: bool,
+    local: bool,
+    no_sync: bool,
+    no_calibrate: bool,
+    no_codegen: bool,
+    no_checkpoints: bool,
+) -> None:
     """Run codegen and then execute src.main.
 
     If connected to a Pi, syncs the project and runs remotely.
@@ -385,7 +451,9 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
     # Parse --no-mN flags out of the raw args before forwarding the rest
     args, skip_missions = _extract_skip_missions(args)
     if skip_missions:
-        console.print(f"[dim]Skipping mission(s) at order: {sorted(skip_missions)}[/dim]")
+        console.print(
+            f"[dim]Skipping mission(s) at order: {sorted(skip_missions)}[/dim]"
+        )
 
     try:
         project_root = require_project()
@@ -414,15 +482,23 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
                     # Try project config first
                     project_config = manager.load_from_project(project_root)
                     if project_config and project_config.pi_address:
-                        logger.info(f"Connecting to Pi from project config: {project_config.pi_address}")
-                        manager.connect_sync(project_config.pi_address, project_config.pi_port, project_config.pi_user)
+                        logger.info(
+                            f"Connecting to Pi from project config: {project_config.pi_address}"
+                        )
+                        manager.connect_sync(
+                            project_config.pi_address,
+                            project_config.pi_port,
+                            project_config.pi_user,
+                        )
                     else:
                         # Try global config
                         known_pis = manager.load_known_pis()
                         if known_pis:
                             pi = known_pis[0]
                             logger.info(f"Connecting to known Pi: {pi.get('address')}")
-                            manager.connect_sync(pi.get("address"), pi.get("port", 8421))
+                            manager.connect_sync(
+                                pi.get("address"), pi.get("port", 8421)
+                            )
                 except ParamikoVersionError as e:
                     print_paramiko_version_error(e, console)
                     raise SystemExit(1)
@@ -432,15 +508,42 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
 
             if manager.is_connected:
                 # Run remotely
-                asyncio.run(_run_remote(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate, no_checkpoints=no_checkpoints, skip_missions=skip_missions))
+                asyncio.run(
+                    _run_remote(
+                        ctx,
+                        project_root,
+                        config,
+                        args,
+                        dev=dev,
+                        no_calibrate=no_calibrate,
+                        no_codegen=no_codegen,
+                        no_sync=no_sync,
+                        no_checkpoints=no_checkpoints,
+                        skip_missions=skip_missions,
+                    )
+                )
                 return
 
-            console.print("[red]Remote execution requested, but no Pi connection is available.[/red]")
-            console.print("Run [cyan]raccoon connect <PI_ADDRESS>[/cyan] or use [cyan]--local[/cyan].")
+            console.print(
+                "[red]Remote execution requested, but no Pi connection is available.[/red]"
+            )
+            console.print(
+                "Run [cyan]raccoon connect <PI_ADDRESS>[/cyan] or use [cyan]--local[/cyan]."
+            )
             raise SystemExit(1)
 
         # Run locally
-        _run_local(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate, no_codegen=no_codegen, no_checkpoints=no_checkpoints, skip_missions=skip_missions)
+        _run_local(
+            ctx,
+            project_root,
+            config,
+            args,
+            dev=dev,
+            no_calibrate=no_calibrate,
+            no_codegen=no_codegen,
+            no_checkpoints=no_checkpoints,
+            skip_missions=skip_missions,
+        )
 
     except ProjectError as exc:
         logger.error(str(exc))

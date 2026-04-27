@@ -16,10 +16,16 @@ logger = logging.getLogger("raccoon")
 # SensorGroup field references (emitted as bare attribute names, not strings).
 _SENSOR_GROUP_REF_KEYS = frozenset({"left", "right"})
 # SensorGroup optional numeric parameters.
-_SENSOR_GROUP_PARAM_KEYS = frozenset({
-    "threshold", "speed",
-    "follow_speed", "follow_kp", "follow_ki", "follow_kd",
-})
+_SENSOR_GROUP_PARAM_KEYS = frozenset(
+    {
+        "threshold",
+        "speed",
+        "follow_speed",
+        "follow_kp",
+        "follow_ki",
+        "follow_kd",
+    }
+)
 # Extra keys on wait_for_light_sensor that are stripped from the hardware
 # constructor and emitted as separate Defs class attributes instead.
 _WFL_EXTRA_KEYS = frozenset({"mode", "drop_fraction"})
@@ -73,7 +79,8 @@ class DefsGenerator(BaseGenerator):
         # top-level hardware entries with "type" fields.
         flattened = dict(definitions)
         grouped_keys = [
-            key for key, value in definitions.items()
+            key
+            for key, value in definitions.items()
             if isinstance(key, str) and key.startswith("_") and isinstance(value, dict)
         ]
         for group_key in grouped_keys:
@@ -164,7 +171,9 @@ class DefsGenerator(BaseGenerator):
 
         # Build class attributes
         attributes = [("imu", imu_expr)]
-        wfl_extra_attrs: List[Tuple[str, str]] = []  # deferred: emitted after analog_sensors
+        wfl_extra_attrs: List[
+            Tuple[str, str]
+        ] = []  # deferred: emitted after analog_sensors
 
         for field_name, hw_cfg in data.items():
             if field_name == "imu":
@@ -194,8 +203,12 @@ class DefsGenerator(BaseGenerator):
 
             resolved_cfg = {k: v for k, v in hw_cfg.items() if k not in strip_keys}
             try:
-                hw_class, hw_params = self.resolver.resolve_from_config(resolved_cfg, type_key="type")
-                logger.info(f"Resolved type '{type_name}' to {hw_class.__name__} for {field_name}")
+                hw_class, hw_params = self.resolver.resolve_from_config(
+                    resolved_cfg, type_key="type"
+                )
+                logger.info(
+                    f"Resolved type '{type_name}' to {hw_class.__name__} for {field_name}"
+                )
             except ValueError as e:
                 # Compatibility fallback: type index can lag behind runtime classes
                 # during client/server version skew. Emit a constructor directly so
@@ -218,7 +231,9 @@ class DefsGenerator(BaseGenerator):
                                 f"{k}={build_literal_expr(v)}"
                                 for k, v in calibration.items()
                             )
-                            fallback_params["calibration"] = f"MotorCalibration({cal_args})"
+                            fallback_params["calibration"] = (
+                                f"MotorCalibration({cal_args})"
+                            )
 
                     args_parts: list[str] = []
                     for k, v in fallback_params.items():
@@ -228,6 +243,15 @@ class DefsGenerator(BaseGenerator):
                             args_parts.append(f"{k}={build_literal_expr(v)}")
                     args = ", ".join(args_parts)
                     hw_expr = f"{type_name}({args})" if args else f"{type_name}()"
+
+                    # Preserve ServoPreset wrapping even when we had to fall back
+                    # to an unresolved constructor path.
+                    if preset_info is not None:
+                        positions, offset = preset_info
+                        hw_expr = self._build_servo_preset_expr(
+                            hw_expr, positions, offset
+                        )
+
                     attributes.append((field_name, hw_expr))
                     continue
                 raise ValueError(f"definitions.{field_name}: {e}")
@@ -246,7 +270,9 @@ class DefsGenerator(BaseGenerator):
             if preset_info is not None:
                 positions, offset = preset_info
                 hw_expr = self._build_servo_preset_expr(hw_expr, positions, offset)
-                logger.info(f"Wrapping '{field_name}' as ServoPreset with {len(positions)} positions (offset={offset})")
+                logger.info(
+                    f"Wrapping '{field_name}' as ServoPreset with {len(positions)} positions (offset={offset})"
+                )
 
             attributes.append((field_name, hw_expr))
 
@@ -257,7 +283,10 @@ class DefsGenerator(BaseGenerator):
                 wfl_extra_attrs.append(("wait_for_light_mode", f'"{wfl_mode}"'))
                 if wfl_drop is not None:
                     wfl_extra_attrs.append(
-                        ("wait_for_light_drop_fraction", build_literal_expr(float(wfl_drop)))
+                        (
+                            "wait_for_light_drop_fraction",
+                            build_literal_expr(float(wfl_drop)),
+                        )
                     )
                 logger.info(
                     f"WFL config: mode={wfl_mode}"
@@ -275,15 +304,15 @@ class DefsGenerator(BaseGenerator):
         return ClassBuilder.build_simple_class(self.class_name, attributes)
 
     @staticmethod
-    def _extract_servo_preset(hw_cfg: Dict[str, Any]) -> Optional[Tuple[Dict[str, float], float]]:
+    def _extract_servo_preset(
+        hw_cfg: Dict[str, Any],
+    ) -> Optional[Tuple[Dict[str, float], float]]:
         """
         Check if a hardware definition includes servo preset positions.
 
         Returns:
             (positions_dict, offset) if positions are defined, None otherwise.
         """
-        if hw_cfg.get("type") != "Servo":
-            return None
         positions = hw_cfg.get("positions")
         if not positions:
             return None
@@ -414,9 +443,7 @@ class DefsGenerator(BaseGenerator):
 
     def _build_sensor_group_expr(self, hw_cfg: Dict[str, Any]) -> str:
         """Build a SensorGroup(...) constructor expression."""
-        self.imports._entries.add(
-            ("raccoon.step.motion.sensor_group", "SensorGroup")
-        )
+        self.imports._entries.add(("raccoon.step.motion.sensor_group", "SensorGroup"))
 
         pieces: List[str] = []
         # left/right are bare field references (class attribute names)
