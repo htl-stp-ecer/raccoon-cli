@@ -22,6 +22,7 @@ from raccoon_cli.checkpoint import create_checkpoint
 from raccoon_cli.codegen import create_pipeline
 from raccoon_cli.project import ProjectError, load_project_config, require_project
 from raccoon_cli.commands.migrate import _get_format_version, _load_migrations
+from raccoon_cli.validation import run_validation_or_exit
 
 logger = logging.getLogger("raccoon")
 
@@ -428,6 +429,11 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
     is_flag=True,
     help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)",
 )
+@click.option(
+    "--no-validate",
+    is_flag=True,
+    help="Skip pre-run validation checks.",
+)
 @click.pass_context
 def run_command(
     ctx: click.Context,
@@ -438,6 +444,7 @@ def run_command(
     no_calibrate: bool,
     no_codegen: bool,
     no_checkpoints: bool,
+    no_validate: bool,
 ) -> None:
     """Run codegen and then execute src.main.
 
@@ -463,6 +470,14 @@ def run_command(
         config = load_project_config(project_root)
         if not isinstance(config, dict):
             raise ProjectError("raccoon.project.yml must be a mapping")
+
+        if not no_validate:
+            run_validation_or_exit(
+                console,
+                project_root,
+                config=config,
+                codegen_probe=not no_codegen,
+            )
 
         _warn_if_migrations_pending(console, project_root)
 

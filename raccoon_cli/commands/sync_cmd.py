@@ -24,6 +24,7 @@ from raccoon_cli.fingerprint import FingerprintResult, compute_fingerprint, defa
 from raccoon_cli.project import find_project_root, load_project_config
 from raccoon_cli.sync_state import SyncState as LocalSyncState
 from raccoon_cli.sync_state import read_sync_state, write_sync_state
+from raccoon_cli.validation import run_validation_or_exit
 
 
 def _synced_by_label() -> str:
@@ -392,8 +393,9 @@ def _verify_and_commit_sync(
 @click.option("--pull", is_flag=True, help="Pull-only: download files from Pi to local")
 @click.option("--delete/--no-delete", default=True, help="Delete extraneous files on destination (default: on)")
 @click.option("--verbose", "-v", is_flag=True, help="Print detailed per-file sync actions")
+@click.option("--no-validate", is_flag=True, help="Skip pre-sync validation checks for push syncs.")
 @click.pass_context
-def sync_command(ctx: click.Context, push: bool, pull: bool, delete: bool, verbose: bool) -> None:
+def sync_command(ctx: click.Context, push: bool, pull: bool, delete: bool, verbose: bool, no_validate: bool) -> None:
     """Sync the current project with the connected Pi using rsync.
 
     By default, pushes local files to the Pi (local -> Pi).
@@ -419,6 +421,15 @@ def sync_command(ctx: click.Context, push: bool, pull: bool, delete: bool, verbo
         direction = SyncDirection.PULL
     else:
         direction = SyncDirection.PUSH
+
+    if direction == SyncDirection.PUSH and not no_validate:
+        config = load_project_config(project_root)
+        run_validation_or_exit(
+            console,
+            project_root,
+            config=config,
+            codegen_probe=True,
+        )
 
     success = do_sync(project_root, console, direction, delete, verbose=verbose)
 

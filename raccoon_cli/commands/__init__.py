@@ -17,6 +17,7 @@ from .checkpoint import checkpoint_group
 from .reorder_cmd import reorder_command
 from .logs import logs_group
 from .migrate import migrate_command
+from .validate import validate_command
 
 __all__ = [
     "calibrate_command",
@@ -37,4 +38,5 @@ __all__ = [
     "reorder_command",
     "logs_group",
     "migrate_command",
+    "validate_command",
 ]
