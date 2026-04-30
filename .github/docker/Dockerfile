@@ -4,26 +4,27 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# System packages: Python 3.12, build tools, git, curl — no python3-pip (bootstrapped below)
+# System packages: Python 3.12, pip, build tools, git, Node.js 20
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
         build-essential \
         python3 \
+        python3-pip \
         python3-dev \
-    # Node.js 20 via NodeSource
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Bootstrap pip directly — avoids apt-managed wheel/setuptools that have no RECORD file
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3
-
-# Pre-install raccoon ecosystem + CI tooling so the test job works without setup steps
-RUN pip3 install --no-cache-dir \
+# Reinstall wheel + setuptools via pip (--ignore-installed shadows the apt versions,
+# giving them a RECORD file so future pip operations can upgrade them freely)
+RUN pip3 install --no-cache-dir --ignore-installed --break-system-packages \
         wheel \
-        setuptools \
+        setuptools
+
+# Pre-install raccoon ecosystem + CI tooling
+RUN pip3 install --no-cache-dir --break-system-packages \
         raccoon-stubs \
         raccoon-transport \
         pytest \
