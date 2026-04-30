@@ -168,7 +168,7 @@ def _resolve_log_dir(ctx: click.Context, log_dir: Optional[str]) -> Path:
     found = find_log_dir()
     if not found:
         console.print(
-            "[red]No logs/ directory found.[/red]\n"
+            "[red]No .raccoon/logs/ directory found.[/red]\n"
             "[dim]Pass --dir explicitly.[/dim]"
         )
         raise SystemExit(1)
@@ -212,7 +212,7 @@ def _filter_entries(
 
 
 @click.group(name="logs", invoke_without_command=True)
-@click.option("--dir", "log_dir", default=None, help="Path to a local logs/ directory (implies --local).")
+@click.option("--dir", "log_dir", default=None, help="Path to a local .raccoon/logs/ directory (implies --local).")
 @click.option("-n", "--last", "count", type=int, default=None, help="Show last N runs.")
 @click.option("-a", "--all", "show_all", is_flag=True, help="Include rotated log files.")
 @click.option("--local", is_flag=True, help="Read local logs instead of fetching from Pi.")
