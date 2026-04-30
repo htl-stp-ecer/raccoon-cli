@@ -383,7 +383,12 @@ class RobotGenerator(BaseGenerator):
 
         # Table map (ftmap vector format)
         table_map_data = physical.get("table_map")
-        if table_map_data and isinstance(table_map_data, dict):
+        if table_map_data:
+            if isinstance(table_map_data, str):
+                raise ValueError(
+                    f"table_map '{table_map_data}' was not resolved to a dict — "
+                    "ensure the .ftmap path is relative to the repository root"
+                )
             table_map_expr = self._build_table_map_expr(table_map_data)
             builder.add_class_attribute("table_map", table_map_expr)
 
