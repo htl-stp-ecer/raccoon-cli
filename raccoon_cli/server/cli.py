@@ -33,6 +33,31 @@ def _install_network_services() -> list[str]:
     return installed
 
 
+def _ensure_uv(user: str) -> None:
+    """Install uv for the given user if not already present."""
+    uv_bin = Path(f"/home/{user}/.local/bin/uv")
+    if uv_bin.exists() or shutil.which("uv"):
+        console.print("[dim]uv already installed — skipping.[/dim]")
+        return
+
+    console.print("[dim]Installing uv...[/dim]")
+    result = subprocess.run(
+        ["sudo", "-u", user, "pip3", "install", "--user", "uv"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        result = subprocess.run(
+            ["sudo", "-u", user, "pip3", "install", "--user", "--break-system-packages", "uv"],
+            capture_output=True,
+            text=True,
+        )
+    if result.returncode == 0:
+        console.print("[green]uv installed.[/green]")
+    else:
+        console.print(f"[yellow]uv install failed (non-fatal):[/yellow] {result.stderr.strip()}")
+
+
 def _ensure_completion_state(user: str) -> None:
     """Ensure cli_state.yml exists with completion_offered set (migration)."""
     state_file = Path(f"/home/{user}/.raccoon/cli_state.yml")
@@ -95,6 +120,7 @@ WantedBy=multi-user.target
     if installed:
         subprocess.run(["systemctl", "daemon-reload"], check=True)
 
+    _ensure_uv(user)
     _ensure_completion_state(user)
 
 
