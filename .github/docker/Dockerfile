@@ -17,14 +17,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Remove the PEP 668 guard so pip works freely inside this container
+RUN find /usr/lib/python3* -name EXTERNALLY-MANAGED -delete
+
 # Reinstall wheel + setuptools via pip (--ignore-installed shadows the apt versions,
 # giving them a RECORD file so future pip operations can upgrade them freely)
-RUN pip3 install --no-cache-dir --ignore-installed --break-system-packages \
+RUN pip3 install --no-cache-dir --ignore-installed \
         wheel \
         setuptools
 
 # Pre-install raccoon ecosystem + CI tooling
-RUN pip3 install --no-cache-dir --break-system-packages \
+RUN pip3 install --no-cache-dir \
         raccoon-stubs \
         raccoon-transport \
         pytest \
