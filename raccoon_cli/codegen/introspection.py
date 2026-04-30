@@ -2,43 +2,30 @@
 
 from __future__ import annotations
 
+import ast
+import importlib
+import importlib.util
+import inspect
 import logging
+import typing
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("raccoon")
 
 
 def resolve_class(qualname: str) -> type:
-    """Resolve a class name to a ClassProxy via the type index.
-
-    Supports fully qualified names (``raccoon.hal.Motor``) and simple
-    names (``Motor``) which are looked up in the namespace map.
-    """
-    from .type_index import get_type_index
-
-    index = get_type_index()
-
+    """Resolve a fully-qualified class name to a class object via real import."""
     if "." not in qualname:
-        proxy = index.resolve_by_name(qualname)
-        if proxy is not None:
-            logger.debug(f"Resolved {qualname} via namespace map → {proxy}")
-            return proxy  # type: ignore[return-value]
-        raise ImportError(f"Cannot resolve simple name '{qualname}'")
+        raise ImportError(f"Cannot resolve simple name '{qualname}' without namespace")
 
-    # Exact qualname match
-    proxy = index.resolve(qualname)
-    if proxy is not None:
-        logger.debug(f"Resolved {qualname} from type index")
-        return proxy  # type: ignore[return-value]
-
-    # For "raccoon.ClassName" lookups, check the namespace map
-    _, cls_name = qualname.rsplit(".", 1)
-    proxy = index.resolve_by_name(cls_name)
-    if proxy is not None:
-        logger.debug(f"Resolved {qualname} via namespace map → {proxy}")
-        return proxy  # type: ignore[return-value]
-
-    raise ImportError(f"Cannot resolve '{qualname}' from type index")
+    module_name, class_name = qualname.rsplit(".", 1)
+    try:
+        mod = importlib.import_module(module_name)
+        cls = getattr(mod, class_name)
+        return cls
+    except (ImportError, AttributeError) as e:
+        raise ImportError(f"Cannot resolve '{qualname}': {e}")
 
 
 def qualname_of(cls: type) -> str:
@@ -46,54 +33,151 @@ def qualname_of(cls: type) -> str:
     return f"{cls.__module__}.{cls.__name__}"
 
 
+def _find_pyi_for_module(module_name: str) -> Optional[Path]:
+    """Find the installed .pyi stub file for a module (e.g. raccoon.hal → hal.pyi)."""
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ModuleNotFoundError, ValueError):
+        return None
+
+    if spec is None or spec.origin is None:
+        return None
+
+    origin = Path(spec.origin)
+    # Strip .cpython-313-x86_64-linux-gnu to get the bare module stem
+    stem = origin.stem.split(".")[0]
+    pyi = origin.parent / f"{stem}.pyi"
+    return pyi if pyi.exists() else None
+
+
+def _parse_pyi_tree(cls: type) -> Optional[ast.ClassDef]:
+    """Parse the .pyi stub for cls and return its ClassDef node, if found."""
+    pyi = _find_pyi_for_module(cls.__module__)
+    if pyi is None:
+        return None
+
+    try:
+        tree = ast.parse(pyi.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as e:
+        logger.debug(f"Failed to parse {pyi}: {e}")
+        return None
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef) and node.name == cls.__name__:
+            return node
+
+    return None
+
+
+def _parse_init_from_pyi(cls: type) -> Optional[Dict[str, inspect.Parameter]]:
+    """Parse __init__ parameters from the class's installed .pyi stub file."""
+    class_node = _parse_pyi_tree(cls)
+    if class_node is None:
+        return None
+
+    # Pick the __init__ with the most parameters (handles @overload)
+    best_args: list[ast.arg] = []
+    best_defaults: list = []
+    for item in class_node.body:
+        if not isinstance(item, ast.FunctionDef) or item.name != "__init__":
+            continue
+        if len(item.args.args) >= len(best_args):
+            best_args = item.args.args
+            best_defaults = item.args.defaults
+
+    if not best_args:
+        return None
+
+    num_args = len(best_args)
+    num_defaults = len(best_defaults)
+    first_default_idx = num_args - num_defaults
+
+    params: Dict[str, inspect.Parameter] = {}
+    for i, arg in enumerate(best_args):
+        if arg.arg == "self":
+            continue
+        has_default = i >= first_default_idx
+        params[arg.arg] = inspect.Parameter(
+            arg.arg,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            default=None if has_default else inspect.Parameter.empty,
+        )
+    return params
+
+
+def _parse_param_type_from_pyi(cls: type, param_name: str) -> Optional[type]:
+    """Parse the type annotation of an __init__ parameter from the .pyi stub."""
+    class_node = _parse_pyi_tree(cls)
+    if class_node is None:
+        return None
+
+    for item in class_node.body:
+        if not isinstance(item, ast.FunctionDef) or item.name != "__init__":
+            continue
+
+        for arg in item.args.args:
+            if arg.arg != param_name or arg.annotation is None:
+                continue
+
+            type_str = ast.unparse(arg.annotation)
+            # Try as fully-qualified name first
+            try:
+                return resolve_class(type_str)
+            except ImportError:
+                pass
+            # Try just the class name (strips module prefix)
+            short = type_str.split(".")[-1]
+            if short != type_str:
+                try:
+                    return resolve_class(f"raccoon.{short}")
+                except ImportError:
+                    pass
+
+    return None
+
+
 def get_init_params(cls: type) -> Dict[str, Any]:
-    """Get __init__ parameters for a ClassProxy."""
-    from .type_index import ClassProxy
+    """Get __init__ parameters for a class as inspect.Parameter objects.
 
-    if isinstance(cls, ClassProxy):
-        return cls.get_cached_params()
+    Falls back to parsing the installed .pyi stub when inspect.signature fails
+    (common for pybind11 native classes).
+    """
+    try:
+        sig = inspect.signature(cls.__init__)
+        params = {name: p for name, p in sig.parameters.items() if name != "self"}
+        if params:
+            return params
+    except (ValueError, TypeError):
+        pass
 
-    raise TypeError(f"Expected ClassProxy, got {type(cls).__name__}")
+    pyi_params = _parse_init_from_pyi(cls)
+    if pyi_params is not None:
+        return pyi_params
+
+    return {}
 
 
 def infer_param_type(parent_cls: type, param_name: str) -> Optional[type]:
-    """Infer the type of an __init__ parameter from the type index.
+    """Infer the type of an __init__ parameter from type annotations.
 
-    Returns the resolved ClassProxy for the parameter's type annotation,
-    or None if the parameter has no type or it cannot be resolved.
+    Falls back to parsing the .pyi stub for pybind11 classes where runtime
+    type hints are unavailable.
     """
-    from .type_index import ClassProxy
-
-    if not isinstance(parent_cls, ClassProxy):
-        logger.warning(f"Cannot infer param type: {parent_cls} is not a ClassProxy")
-        return None
-
-    type_str = parent_cls.get_param_type(param_name)
-    if not type_str:
-        logger.warning(f"No type found for parameter '{param_name}' in {parent_cls.__name__}")
-        return None
-
-    logger.debug(f"Found type for '{param_name}': {type_str}")
-
     try:
-        resolved = resolve_class(type_str)
-        logger.debug(f"Resolved {type_str} to {resolved}")
-        return resolved
-    except (ImportError, AttributeError):
+        hints = typing.get_type_hints(parent_cls.__init__)
+        type_hint = hints.get(param_name)
+        if type_hint is not None:
+            if isinstance(type_hint, type):
+                return type_hint
+            if isinstance(type_hint, str):
+                try:
+                    return resolve_class(type_hint)
+                except ImportError:
+                    pass
+    except Exception:
         pass
 
-    # Try just the class name portion
-    class_name = type_str.split('.')[-1]
-    if class_name != type_str:
-        try:
-            resolved = resolve_class(class_name)
-            logger.debug(f"Resolved {class_name} to {resolved}")
-            return resolved
-        except (ImportError, AttributeError):
-            pass
-
-    logger.warning(f"Could not resolve type {type_str}")
-    return None
+    return _parse_param_type_from_pyi(parent_cls, param_name)
 
 
 # Keep old name as alias for compatibility

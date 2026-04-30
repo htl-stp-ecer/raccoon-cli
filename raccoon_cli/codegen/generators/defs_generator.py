@@ -276,17 +276,6 @@ class DefsGenerator(BaseGenerator):
             except (ImportError, AttributeError):
                 continue
 
-        # When using ClassProxy, _is_analog_sensor handles it via
-        # proxy.is_subclass_of(), so we set a sentinel to avoid
-        # the None short-circuit.
-        from ..type_index import ClassProxy, get_type_index
-
-        proxy = get_type_index().resolve("raccoon.hal.AnalogSensor")
-        if proxy is not None:
-            self._analog_sensor_class = proxy  # type: ignore[assignment]
-            logger.debug("Resolved AnalogSensor from type index (offline)")
-            return
-
         logger.warning(
             "Could not resolve AnalogSensor class. "
             "analog_sensors list will not be generated."
@@ -294,15 +283,8 @@ class DefsGenerator(BaseGenerator):
 
     def _is_analog_sensor(self, hw_class: type) -> bool:
         """Check if a hardware class is a subclass of AnalogSensor."""
-        from ..type_index import ClassProxy
-
         if self._analog_sensor_class is None:
             return False
-
-        # Handle ClassProxy objects (offline codegen)
-        if isinstance(hw_class, ClassProxy):
-            return hw_class.is_subclass_of("raccoon.hal.AnalogSensor")
-
         try:
             return issubclass(hw_class, self._analog_sensor_class)
         except TypeError:
