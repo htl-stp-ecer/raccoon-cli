@@ -10,7 +10,7 @@ env:
 
 jobs:
   test:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux]
     container: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
     steps:
       - name: Checkout
@@ -27,7 +27,7 @@ jobs:
 
   build-and-release:
     needs: test
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux]
     container: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
     permissions:
       contents: write
