@@ -37,6 +37,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Clean submodule directories
+        run: rm -rf web-ide raccoon-transport
+
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
