@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+  packages: read
+
 env:
   VERSION: "0.1.${{ github.run_number }}"
 
