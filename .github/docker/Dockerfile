@@ -19,8 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Remove apt-managed Python packages that pip can't uninstall/upgrade (no RECORD file)
-RUN apt-get remove -y python3-wheel python3-setuptools 2>/dev/null || true \
+# apt-managed pip/wheel/setuptools have no RECORD file → pip can't upgrade them.
+# Bootstrap pip from scratch so all packages are pip-owned from the start.
+RUN apt-get remove -y python3-pip python3-wheel python3-setuptools \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3 \
     && rm -f /usr/lib/python3*/EXTERNALLY-MANAGED
 
 # Pre-install raccoon ecosystem + CI tooling so the test job works without setup steps
