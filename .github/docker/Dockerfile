@@ -19,15 +19,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Allow pip to install into the system Python (no venv required in CI container)
-RUN rm -f /usr/lib/python3*/EXTERNALLY-MANAGED
+# Remove apt-managed Python packages that pip can't uninstall/upgrade (no RECORD file)
+RUN apt-get remove -y python3-wheel python3-setuptools 2>/dev/null || true \
+    && rm -f /usr/lib/python3*/EXTERNALLY-MANAGED
 
 # Pre-install raccoon ecosystem + CI tooling so the test job works without setup steps
 RUN pip3 install --no-cache-dir \
+        wheel \
+        setuptools \
         raccoon-stubs \
         raccoon-transport \
         pytest \
         pytest-asyncio \
-        build \
-        wheel \
-        setuptools
+        build
