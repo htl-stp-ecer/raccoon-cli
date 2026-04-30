@@ -20,7 +20,7 @@ jobs:
             || { echo "ERROR: raccoon is not installed on this runner."; echo "Install it from raccoon-lib before running raccoon-cli tests."; exit 1; }
 
       - name: Install raccoon-cli
-        run: pip install -e . --break-system-packages -q
+        run: pip3 install -e . --break-system-packages -q
 
       - name: Run tests
         run: python3 -m pytest tests/ -x -q --tb=short
@@ -62,28 +62,28 @@ jobs:
           restore-keys: pip-
 
       - name: Install build tools
-        run: pip install build wheel setuptools
+        run: pip3 install build wheel setuptools
 
       # --- Build raccoon-transport wheel first ---
       # Patch version in submodule at build time (submodule files stay clean in git)
       - name: Patch raccoon-transport version
         run: |
-          python -c "import pathlib, re; f=pathlib.Path('raccoon-transport/python/pyproject.toml'); f.write_text(re.sub(r'^version = \".*\"', 'version = \"${{ env.VERSION }}\"', f.read_text(), flags=re.MULTILINE))"
+          python3 -c "import pathlib, re; f=pathlib.Path('raccoon-transport/python/pyproject.toml'); f.write_text(re.sub(r'^version = \".*\"', 'version = \"${{ env.VERSION }}\"', f.read_text(), flags=re.MULTILINE))"
 
       - name: Build raccoon-transport wheel
         run: |
           rm -rf raccoon-transport/python/dist
           cd raccoon-transport/python
-          python -m build --wheel
+          python3 -m build --wheel
 
       - name: Install raccoon-transport (build dependency)
-        run: pip install raccoon-transport/python/dist/raccoon_transport-*.whl
+        run: pip3 install raccoon-transport/python/dist/raccoon_transport-*.whl
 
       # --- Build raccoon wheel (includes web-IDE) ---
       - name: Build raccoon wheel
         run: |
           rm -rf dist
-          python -m build --wheel
+          python3 -m build --wheel
         env:
           BUILD_NUMBER: ${{ github.run_number }}
 
