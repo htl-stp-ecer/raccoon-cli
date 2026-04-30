@@ -11,9 +11,28 @@ Env vars:
 
 import glob
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+def ensure_uv() -> None:
+    """Install uv locally if not already available."""
+    if shutil.which("uv"):
+        return
+    print("uv not found — installing via pip...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "uv"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"ERROR: Failed to install uv:\n{result.stderr}")
+        sys.exit(1)
+    if not shutil.which("uv"):
+        print("WARNING: uv installed but not found in PATH — you may need to restart your shell.")
+    else:
+        print("uv installed successfully.")
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -43,6 +62,8 @@ def scp(sources: list[str], dest: str) -> None:
 
 
 def main() -> None:
+    ensure_uv()
+
     script_dir = Path(__file__).resolve().parent
     host = os.environ.get("RPI_HOST", "192.168.4.1")
     user = os.environ.get("RPI_USER", "pi")

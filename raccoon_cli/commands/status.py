@@ -16,6 +16,7 @@ from raccoon_cli.client.connection import (
 from raccoon_cli.client.api import create_api_client
 from raccoon_cli.project import find_project_root, load_project_config
 from raccoon_cli.version_checker import check_all_versions, render_version_table
+from raccoon_cli.commands.doctor import stream_tool_checks
 
 
 @click.command(name="status")
@@ -116,6 +117,11 @@ def status_command(ctx: click.Context) -> None:
 
     # Package versions
     _show_package_versions(console, manager)
+
+    # Tool checks
+    console.print()
+    console.print("[bold]External tools[/bold]")
+    stream_tool_checks(console)
 
 
 def _try_auto_connect(console, manager, project_root):
