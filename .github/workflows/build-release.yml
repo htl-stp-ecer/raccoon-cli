@@ -10,17 +10,16 @@ env:
 jobs:
   test:
     runs-on: self-hosted
+    container: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify raccoon is installed on runner
-        run: |
-          python3 -c "import raccoon.hal; print('raccoon', raccoon.__version__ if hasattr(raccoon, '__version__') else 'installed')" \
-            || { echo "ERROR: raccoon is not installed on this runner."; echo "Install it from raccoon-lib before running raccoon-cli tests."; exit 1; }
+      - name: Verify raccoon HAL stubs are available
+        run: python3 -c "import raccoon.hal; print('raccoon.hal OK')"
 
       - name: Install raccoon-cli
-        run: pip3 install -e . --break-system-packages -q
+        run: pip3 install -e . -q
 
       - name: Run tests
         run: python3 -m pytest tests/ -x -q --tb=short
@@ -28,6 +27,7 @@ jobs:
   build-and-release:
     needs: test
     runs-on: self-hosted
+    container: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
     permissions:
       contents: write
 
