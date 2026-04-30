@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 AUTO_GIT_USER_NAME = "Raccoon Auto History"
@@ -31,6 +31,10 @@ class GitSnapshotResult:
     summary: str = ""
     reason: str = ""
     error: str = ""
+
+    @property
+    def short_sha(self) -> str | None:
+        return self.commit_sha[:7] if self.commit_sha else None
 
 
 def _run_git(project_root: Path, args: list[str]) -> subprocess.CompletedProcess:

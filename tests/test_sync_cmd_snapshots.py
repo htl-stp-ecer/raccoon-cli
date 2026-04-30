@@ -1,5 +1,6 @@
 """Tests that sync snapshots run from shared sync paths."""
 
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -93,4 +94,44 @@ def test_do_sync_creates_snapshot_for_pull(monkeypatch):
     assert snapshot_calls == [
         (project_root, "pull", "pi@192.168.4.1:/home/pi/programs/proj-123"),
     ]
+
+
+def test_do_sync_prints_short_sha_when_snapshot_created(monkeypatch):
+    """Regression: GitSnapshotResult.short_sha must exist; sync crashed without it."""
+    project_root = Path("/tmp/demo-project")
+
+    manager = SimpleNamespace(
+        is_connected=True,
+        state=SimpleNamespace(
+            pi_user="pi",
+            pi_address="192.168.4.1",
+            pi_hostname="wombat",
+            api_token=None,
+        ),
+    )
+
+    class FakeRsync:
+        def __init__(self, host: str, user: str):
+            pass
+
+        def sync(self, local_path: Path, remote_path: str, options):
+            return SyncResult(success=True)
+
+    def fake_snapshot(project_root: Path, direction: str, target: str):
+        return GitSnapshotResult(created=True, commit_sha="abc1234def5678", summary="1 file (+1)")
+
+    buf = StringIO()
+    console = Console(file=buf, highlight=False)
+
+    monkeypatch.setattr(sync_cmd, "load_project_config", lambda _: {"uuid": "proj-123", "name": "Demo"})
+    monkeypatch.setattr(sync_cmd, "get_connection_manager", lambda: manager)
+    monkeypatch.setattr(sync_cmd, "create_sync", lambda host, user: FakeRsync(host=host, user=user))
+    monkeypatch.setattr(sync_cmd, "load_raccoonignore", lambda _: [])
+    monkeypatch.setattr(sync_cmd, "create_pre_sync_snapshot", fake_snapshot)
+
+    ok = sync_cmd.do_sync(project_root, console, direction=SyncDirection.PUSH)
+
+    assert ok is True
+    output = buf.getvalue()
+    assert "abc1234" in output
 
