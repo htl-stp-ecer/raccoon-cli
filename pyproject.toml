@@ -50,7 +50,11 @@ dependencies = [
     "lcm",
     "raccoon-transport>=0.1",
     "raccoon-stubs",
+    "pytest-asyncio>=0.23",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [project.scripts]
 raccoon = "raccoon_cli.cli:main"

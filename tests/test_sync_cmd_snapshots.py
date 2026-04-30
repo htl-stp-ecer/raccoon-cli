@@ -21,6 +21,7 @@ def test_do_sync_creates_snapshot_for_push(monkeypatch):
             pi_user="pi",
             pi_address="192.168.4.1",
             pi_hostname="wombat",
+            api_token=None,
         ),
     )
 
@@ -64,6 +65,7 @@ def test_do_sync_creates_snapshot_for_pull(monkeypatch):
             pi_user="pi",
             pi_address="192.168.4.1",
             pi_hostname="wombat",
+            api_token=None,
         ),
     )
 
