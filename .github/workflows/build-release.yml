@@ -8,7 +8,25 @@ env:
   VERSION: "0.1.${{ github.run_number }}"
 
 jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify raccoon is installed on runner
+        run: |
+          python3 -c "import raccoon.hal; print('raccoon', raccoon.__version__ if hasattr(raccoon, '__version__') else 'installed')" \
+            || { echo "ERROR: raccoon is not installed on this runner."; echo "Install it from raccoon-lib before running raccoon-cli tests."; exit 1; }
+
+      - name: Install raccoon-cli
+        run: pip install -e . --break-system-packages -q
+
+      - name: Run tests
+        run: python3 -m pytest tests/ -x -q --tb=short
+
   build-and-release:
+    needs: test
     runs-on: self-hosted
     permissions:
       contents: write
