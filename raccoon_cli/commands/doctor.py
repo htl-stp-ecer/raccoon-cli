@@ -260,7 +260,7 @@ async def _show_remote_status(console: Console, state, project_uuid: str) -> Non
 
 
 def _show_package_versions(console: Console, manager) -> None:
-    from raccoon_cli.version_checker import check_all_versions, render_version_table
+    from raccoon_cli.version_checker import check_all_versions, render_version_table, fetch_bundle_manifest
 
     ssh_client = None
     server_url = None
@@ -275,11 +275,17 @@ def _show_package_versions(console: Console, manager) -> None:
             api_token = manager.state.api_token
 
     console.print()
-    statuses = check_all_versions(ssh_client=ssh_client, server_url=server_url, api_token=api_token)
-    any_outdated = render_version_table(console, statuses)
+    console.print("[dim]Fetching bundle manifest...[/dim]")
+    manifest = fetch_bundle_manifest("latest")
+
+    statuses = check_all_versions(ssh_client=ssh_client, server_url=server_url, api_token=api_token, manifest=manifest)
+    any_outdated, any_ahead = render_version_table(console, statuses)
     if any_outdated:
         console.print()
         console.print("Run [cyan]raccoon update[/cyan] to install updates.")
+    elif any_ahead:
+        console.print()
+        console.print("[blue]Some packages are ahead of the bundle.[/blue]")
 
 
 # ---------------------------------------------------------------------------
