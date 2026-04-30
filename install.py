@@ -117,26 +117,9 @@ def main() -> None:
         f"&& sudo pip3 install --break-system-packages {remote_tmp}/raccoon_cli-*.whl",
     )
 
-    # --- Install & start systemd service ---
-    print("Configuring systemd service...")
-    ssh(host, user, "sudo raccoon-server install")
-
-    # --- Ensure shell completion state exists ---
-    ssh(
-        host,
-        user,
-        'if [ ! -f ~/.raccoon/cli_state.yml ]; then '
-        "  mkdir -p ~/.raccoon; "
-        '  echo "completion_offered: true" > ~/.raccoon/cli_state.yml; '
-        "else "
-        '  grep -q "^completion_offered:" ~/.raccoon/cli_state.yml '
-        '  || echo "completion_offered: true" >> ~/.raccoon/cli_state.yml; '
-        "fi",
-    )
-
-    # --- Restart service ---
-    print("Starting raccoon service...")
-    ssh(host, user, "sudo systemctl restart raccoon.service")
+    # --- Install systemd service + run all migrations ---
+    print("Configuring systemd service and running migrations...")
+    ssh(host, user, "sudo raccoon-server post-install")
 
     # --- Verify ---
     print()
