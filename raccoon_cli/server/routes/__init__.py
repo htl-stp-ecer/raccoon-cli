@@ -11,5 +11,19 @@ from raccoon_cli.server.routes.logs import router as logs_router
 from raccoon_cli.server.routes.version import router as version_router
 from raccoon_cli.server.routes.arm import router as arm_router
 from raccoon_cli.server.routes.servo import router as servo_router
+from raccoon_cli.server.routes.calibrate_servos import router as calibrate_servos_router
 
-__all__ = ["health_router", "commands_router", "projects_router", "hardware_router", "device_router", "network_router", "steps_router", "logs_router", "version_router", "arm_router", "servo_router"]
+__all__ = [
+    "health_router",
+    "commands_router",
+    "projects_router",
+    "hardware_router",
+    "device_router",
+    "network_router",
+    "steps_router",
+    "logs_router",
+    "version_router",
+    "arm_router",
+    "servo_router",
+    "calibrate_servos_router",
+]

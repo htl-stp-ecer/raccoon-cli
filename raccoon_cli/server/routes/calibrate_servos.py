@@ -3,11 +3,9 @@
 import asyncio
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from pydantic import BaseModel
 from raccoon_cli.server.auth import require_auth
-from raccoon.ui.screen import UIScreen
-from raccoon.ui.widgets import Center, Text
 
 logger = logging.getLogger("raccoon")
 router = APIRouter(prefix="/api/v1", tags=["servo-calibration"], dependencies=[Depends(require_auth)])
@@ -24,7 +22,7 @@ class ServoCalibrationResponse(BaseModel):
 
 @router.post("/calibrate-servo/start")
 async def calibrate_servo_start(
-    servo_id: str, port: int, initial_angle: float
+    servo_id: str = Query(...), port: int = Query(...), initial_angle: float = Query(...)
 ):
     """
     Start a servo calibration session.
@@ -55,7 +53,7 @@ async def calibrate_servo_start(
 
 @router.post("/calibrate-servo/move")
 async def calibrate_servo_move(
-    angle: float
+    angle: float = Query(...)
 ):
     """
     Move a servo relative to its current position for calibration.

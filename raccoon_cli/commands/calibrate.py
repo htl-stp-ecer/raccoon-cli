@@ -290,14 +290,40 @@ async def _autotune_remote(ctx: click.Context, project_root: Path, config: dict)
 
 def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> None:
     import httpx
-    import tty
-    import termios
+
+    if sys.platform == "win32":
+        import msvcrt
+
+        def _read_key():
+            ch = msvcrt.getwch()
+            if ch in ("\r", "\n"): return None
+            if ch in ("q", "Q"):   return "skip"
+            if ch in ("k", "K"):   return +0.5
+            if ch in ("j", "J"):   return -0.5
+            if ch == "\xe0":
+                ch2 = msvcrt.getwch()
+                if ch2 == "H": return +0.5   # ↑
+                if ch2 == "P": return -0.5   # ↓
+            return "ignore"
+    else:
+        import tty
+        import termios
+
+        def _read_key():
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"): return None
+            if ch in ("q", "Q"):   return "skip"
+            if ch in ("k", "K"):   return +0.5
+            if ch in ("j", "J"):   return -0.5
+            if ch == "\x1b":
+                seq = sys.stdin.read(2)
+                if seq == "[A": return +0.5  # ↑
+                if seq == "[B": return -0.5  # ↓
+            return "ignore"
 
     console: Console = ctx.obj["console"]
-
     console.print(Panel("[bold]Servo Calibration[/bold]", border_style="cyan"))
 
-    # Filter to servos that have named positions
     servo_defs = {
         name: defn
         for name, defn in config.get("definitions", {}).items()
@@ -314,7 +340,7 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
     state = manager.state
     base_url = f"http://{state.pi_address}:{state.pi_port}/api/v1"
 
-    saved: Dict[str, tuple[str, float]] = {}  # servo_name → (pos_name, final_deg)
+    saved: Dict[str, tuple[str, float]] = {}
 
     while True:
         servo_pick = _pick_servo(servo_defs)
@@ -329,7 +355,6 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
 
         port = int(defn.get("port", 0))
 
-        # Start session
         try:
             r = httpx.post(
                 f"{base_url}/calibrate-servo/start",
@@ -350,44 +375,40 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
         current_deg = start_deg
         skipped = False
 
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
+        if sys.platform != "win32":
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
             tty.setraw(fd)
+
+        try:
             while True:
-                ch = sys.stdin.read(1)
-                if ch == "\x1b":
-                    seq = sys.stdin.read(2)
-                    if seq == "[A":       delta = +0.5   # ↑
-                    elif seq == "[B":     delta = -0.5   # ↓
-                    else:                 continue
-                elif ch in ("k", "K"):   delta = +0.5
-                elif ch in ("j", "J"):   delta = -0.5
-                elif ch in ("\r", "\n"): break
-                elif ch in ("q", "Q"):
+                key = _read_key()
+                if key is None:
+                    break
+                if key == "skip":
                     skipped = True
                     break
-                else:
+                if key == "ignore":
                     continue
 
                 try:
                     httpx.post(
                         f"{base_url}/calibrate-servo/move",
-                        params={"angle": delta},
+                        params={"angle": key},
                         timeout=2.0,
                     )
-                    current_deg = max(0.0, min(270.0, current_deg + delta))
+                    current_deg = max(0.0, min(270.0, current_deg + key))
                 except Exception:
-                    pass  # failed nudge — keep going, display is still accurate
+                    pass
 
                 sys.stdout.write(f"\r  Position: {current_deg:+.1f}°  ")
                 sys.stdout.flush()
         finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            if sys.platform != "win32":
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             sys.stdout.write("\n")
             sys.stdout.flush()
 
-        # End session — always, even if skipped or something threw
         final_deg = current_deg
         try:
             r = httpx.post(f"{base_url}/calibrate-servo/end", timeout=5.0)
@@ -408,7 +429,6 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
     if not saved:
         return
 
-    # Write back only the changed position values
     definitions = config.setdefault("definitions", {})
     for servo_name, (pos_name, new_deg) in saved.items():
         definitions[servo_name]["positions"][pos_name] = round(new_deg, 1)
@@ -425,6 +445,8 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
 
 # Calibrate Servos Helpers
 
+_DONE = object()
+
 def _pick_servo(servo_defs: Dict[str, dict]) -> Optional[tuple[str, dict]]:
     choices = [
         questionary.Choice(
@@ -433,12 +455,11 @@ def _pick_servo(servo_defs: Dict[str, dict]) -> Optional[tuple[str, dict]]:
         )
         for name, defn in servo_defs.items()
     ]
-    choices.append(questionary.Choice(title="✕  Done", value=None))
+    choices.append(questionary.Choice(title="✕  Done", value=_DONE))
     result = questionary.select("Select servo to calibrate:", choices=choices, style=_STYLE).ask()
-    if result is None:
+    if result is None or result is _DONE:
         return None
     return result, servo_defs[result]
-
 
 def _pick_position(servo_name: str, defn: dict) -> Optional[tuple[str, float]]:
     positions: dict = defn["positions"]
@@ -446,11 +467,11 @@ def _pick_position(servo_name: str, defn: dict) -> Optional[tuple[str, float]]:
         questionary.Choice(title=f"{pos_name}  ({deg}°)", value=pos_name)
         for pos_name, deg in positions.items()
     ]
-    choices.append(questionary.Choice(title="✕  Cancel", value=None))
+    choices.append(questionary.Choice(title="✕  Cancel", value=_DONE))
     result = questionary.select(
         f"Select position to calibrate on {servo_name}:", choices=choices, style=_STYLE
     ).ask()
-    if result is None:
+    if result is None or result is _DONE:
         return None
     return result, float(positions[result])
 
