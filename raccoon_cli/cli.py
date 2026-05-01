@@ -6,7 +6,7 @@ import click
 from rich.console import Console
 
 from raccoon_cli.commands import (
-    calibrate_command,
+    calibrate_group,
     codegen_command,
     run_command,
     wizard_command,
@@ -76,7 +76,7 @@ def main(ctx: click.Context) -> None:
     _setup_context(ctx)
 
 
-main.add_command(calibrate_command)
+main.add_command(calibrate_group)
 main.add_command(codegen_command)
 main.add_command(run_command)
 main.add_command(wizard_command)
