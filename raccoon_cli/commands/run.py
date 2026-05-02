@@ -182,7 +182,7 @@ def _run_local(
         )
     )
 
-    if returncode != 0 and not _has_error_lines(collected):
+    if returncode != 0 and collected and not _has_error_lines(collected):
         console.print(
             "[yellow]Non-zero exit code returned, but output contained only warnings; "
             "treating run as successful.[/yellow]"
@@ -346,7 +346,7 @@ async def _run_remote(
         status = final_status.get("status", "unknown")
         success = exit_code == 0
 
-        if exit_code != 0 and not _has_error_lines(collected):
+        if exit_code != 0 and collected and not _has_error_lines(collected):
             console.print(
                 "[yellow]Non-zero remote exit code returned, but output contained only warnings; "
                 "treating run as successful.[/yellow]"
