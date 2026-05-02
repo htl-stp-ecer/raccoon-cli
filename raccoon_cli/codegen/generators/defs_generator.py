@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseGenerator
@@ -31,18 +32,47 @@ _SENSOR_GROUP_PARAM_KEYS = frozenset(
 _WFL_EXTRA_KEYS = frozenset({"mode", "drop_fraction"})
 
 
+class _ImportProxy:
+    """Minimal class-like object used when runtime imports lag behind stubs."""
+
+    def __init__(self, module: str, name: str):
+        self.__module__ = module
+        self.__name__ = name
+
+
 class DefsGenerator(BaseGenerator):
     """Generator for hardware definitions file (defs.py)."""
 
     def __init__(self, class_name: str = "Defs"):
         super().__init__(class_name)
         self.resolver = create_hardware_resolver()
-        self._imu_class = resolve_class("raccoon.IMU")
-        self._analog_sensor_class = resolve_class("raccoon.AnalogSensor")
+        self._imu_class = self._resolve_import_class(
+            ("raccoon.IMU", "raccoon.hal.IMU"), "raccoon", "IMU"
+        )
+        self._analog_sensor_class = self._resolve_import_class(
+            ("raccoon.AnalogSensor", "raccoon.hal.AnalogSensor"),
+            "raccoon",
+            "AnalogSensor",
+        )
         self._analog_sensor_fields: list[str] = []
 
     def get_output_filename(self) -> str:
         return "defs.py"
+
+    @staticmethod
+    def _resolve_import_class(
+        candidates: Tuple[str, ...], fallback_module: str, fallback_name: str
+    ) -> type:
+        for qualname in candidates:
+            try:
+                return resolve_class(qualname)
+            except ImportError:
+                continue
+        logger.info(
+            "Could not resolve %s from runtime imports; using generated import fallback",
+            fallback_name,
+        )
+        return _ImportProxy(fallback_module, fallback_name)  # type: ignore[return-value]
 
     def extract_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         definitions = config.get("definitions")
@@ -265,9 +295,13 @@ class DefsGenerator(BaseGenerator):
         positions: Dict[str, float],
         offset: float,
     ) -> str:
-        preset_cls = resolve_class("raccoon.ServoPreset")
+        preset_cls = self._resolve_import_class(
+            ("raccoon.ServoPreset", "raccoon.step.servo.preset.ServoPreset"),
+            "raccoon.step.servo.preset",
+            "ServoPreset",
+        )
         self.imports.add(preset_cls)
-        positions_literal = build_literal_expr(positions)
+        positions_literal = json.dumps(positions)
         if offset:
             return f"ServoPreset({servo_expr}, positions={positions_literal}, offset={build_literal_expr(offset)})"
         return f"ServoPreset({servo_expr}, positions={positions_literal})"
@@ -304,7 +338,11 @@ class DefsGenerator(BaseGenerator):
                 )
 
     def _build_sensor_group_expr(self, hw_cfg: Dict[str, Any]) -> str:
-        sg_cls = resolve_class("raccoon.SensorGroup")
+        sg_cls = self._resolve_import_class(
+            ("raccoon.SensorGroup", "raccoon.step.motion.sensor_group.SensorGroup"),
+            "raccoon.step.motion.sensor_group",
+            "SensorGroup",
+        )
         self.imports.add(sg_cls)
 
         pieces: List[str] = []
