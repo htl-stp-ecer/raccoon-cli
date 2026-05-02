@@ -3,27 +3,36 @@
 import asyncio
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from raccoon_cli.server.auth import require_auth
 
 logger = logging.getLogger("raccoon")
-router = APIRouter(prefix="/api/v1", tags=["servo-calibration"], dependencies=[Depends(require_auth)])
+router = APIRouter(prefix="/api/v1/calibrate-servos", tags=["servo-calibration"], dependencies=[Depends(require_auth)])
 
-_session: Optional[dict] = None  # { port, position_deg, initial_deg,  ui_task }
+_session: Optional[dict] = None  # { servo_port, current_angle, initial_angle,  ui_task }
 _session_lock = asyncio.Lock()
 
-class ServoCalibrationResponse(BaseModel):
+
+class ServoCalibrationStartRequest(BaseModel):
+    """ Request to start a servo calibration session. """
+    servo_id: str
+    servo_port: int
+    initial_angle: float
+
+class ServoCalibrationMoveRequest(BaseModel):
+    """ Request to move the servo during calibration. """
+    delta_to_move: float
+
+class ServoCalibrationEndResponse(BaseModel):
     """ The response model of the /end endpoint """
-    initial_deg: float
-    final_deg: float
-    delta_deg: float
+    initial_angle: float
+    final_angle: float
+    delta: float
 
 
-@router.post("/calibrate-servo/start")
-async def calibrate_servo_start(
-    servo_id: str = Query(...), port: int = Query(...), initial_angle: float = Query(...)
-):
+@router.post("/start")
+async def calibrate_servo_start(request: ServoCalibrationStartRequest):
     """
     Start a servo calibration session.
     Creates a blank UI and moves the servo to the given position
@@ -34,27 +43,27 @@ async def calibrate_servo_start(
         if _session is not None:
             raise HTTPException(
                 status_code=409,
-                detail=f"Session for '{servo_id}' already active. Call /end first."
+                detail=f"Session for '{request.servo_id}' already active. Call /end first."
             )
 
         try:
             from raccoon.hal import Servo
-            Servo(port=port).set_angle(initial_angle)
+            Servo(port=request.servo_port).set_angle(request.initial_angle)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to move servo: {e}")
 
         _session = {
-            "port": port,
-            "position_deg": initial_angle,
-            "initial_deg": initial_angle,
-            "ui_task": asyncio.create_task(_servo_calibration_ui(servo_id, port))
+            "servo_port": request.servo_port,
+            "current_angle": request.initial_angle,
+            "initial_angle": request.initial_angle,
+            "ui_task": asyncio.create_task(_servo_calibration_ui(request.servo_id, request.servo_port))
         }
 
+    return {"status": "ok"}
 
-@router.post("/calibrate-servo/move")
-async def calibrate_servo_move(
-    angle: float = Query(...)
-):
+
+@router.post("/move")
+async def calibrate_servo_move(request: ServoCalibrationMoveRequest):
     """
     Move a servo relative to its current position for calibration.
     Only works when a calibration session is active.
@@ -68,19 +77,22 @@ async def calibrate_servo_move(
                 detail=f"No active calibration session, call /start first"
             )
 
-        _session["position_deg"] += angle
+        _session["current_angle"] += request.delta_to_move
 
         try:
             from raccoon.hal import Servo
-            Servo(port=_session["port"]).set_angle(_session["position_deg"])
+            Servo(port=_session["servo_port"]).set_angle(_session["current_angle"])
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to move servo: {e}")
 
+    return {"status": "ok", "current_angle": _session["current_angle"]}
 
-@router.post("/calibrate-servo/end", response_model=ServoCalibrationResponse)
+
+@router.post("/end", response_model=ServoCalibrationEndResponse)
 async def calibrate_servo_end():
     """
     Stop a servo calibration session.
+    Only works when a calibration session is active.
     """
     global _session
 
@@ -99,17 +111,22 @@ async def calibrate_servo_end():
             except (asyncio.CancelledError, Exception):
                 pass
 
-        response = ServoCalibrationResponse(
-            initial_deg=_session["initial_deg"],
-            final_deg=_session["position_deg"],
-            delta_deg=_session["position_deg"] - _session["initial_deg"]
+        response = ServoCalibrationEndResponse(
+            initial_angle=_session["initial_angle"],
+            final_angle=_session["current_angle"],
+            delta=_session["current_angle"] - _session["initial_angle"]
         )
         _session = None
         return response
 
 
-async def _servo_calibration_ui(servo_id: str, port: int):
-    """ Servo Calibration UI Lock """
+async def _servo_calibration_ui(servo_id: str, servo_port: int):
+    """
+    Servo Calibration UI Screen
+
+    This screen serves the purpose of blocking the botui so that users
+    cannot interfere with the calibration routine using the botui
+    """
 
     from raccoon.ui.step import UIStep
     from raccoon.ui.screen import UIScreen
@@ -121,7 +138,8 @@ async def _servo_calibration_ui(servo_id: str, port: int):
 
         def build(self):
             return Center(children=[
-                Text(f"Calibrating {servo_id} on port {port}...", size="large"),
+                Text(f"Calibrating {servo_id} on port {servo_port}", size="large"),
+                Text("Use your laptop to calibrate", size="medium"),
             ])
 
     step = UIStep.__new__(UIStep)
