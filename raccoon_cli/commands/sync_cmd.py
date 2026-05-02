@@ -18,7 +18,7 @@ from raccoon_cli.client.connection import (
     ParamikoVersionError,
     print_paramiko_version_error,
 )
-from raccoon_cli.checkpoint import create_checkpoint
+from raccoon_cli.git_history import create_pre_sync_snapshot
 from raccoon_cli.client.sftp_sync import create_sync, SyncDirection, SyncOptions, load_raccoonignore
 from raccoon_cli.fingerprint import FingerprintResult, compute_fingerprint, default_exclude_patterns
 from raccoon_cli.project import find_project_root, load_project_config
@@ -162,7 +162,8 @@ def do_sync(
     console.print(f"[cyan]Syncing '{project_name}' ({direction_str} {state.pi_hostname})...[/cyan]")
 
     if config.get("auto_checkpoints", True):
-        checkpoint_result = create_checkpoint(project_root, label=f"pre-{direction.value}")
+        target = f"{state.pi_user}@{state.pi_address}:{remote_path}"
+        checkpoint_result = create_pre_sync_snapshot(project_root, direction.value, target)
         if checkpoint_result.created:
             console.print(f"[dim]Checkpoint {checkpoint_result.short_sha} saved[/dim]")
         elif checkpoint_result.reason == "not_git_repo":

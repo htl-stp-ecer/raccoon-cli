@@ -11,17 +11,17 @@ _ROTATED_NAMES = ["libstp.3.log", "libstp.2.log", "libstp.1.log", "libstp.log"]
 
 
 def find_log_dir(start: Optional[Path] = None) -> Optional[Path]:
-    """Find the ``logs/`` directory by searching upward from *start*.
+    """Find the ``.raccoon/logs/`` directory by searching upward from *start*.
 
     Checks:
-    1. ``{start}/logs/`` (CWD or project root)
-    2. Walk up to 5 parents looking for a ``logs/libstp.log``
+    1. ``{start}/.raccoon/logs/`` (CWD or project root)
+    2. Walk up to 5 parents looking for a ``.raccoon/logs/libstp.log``
     """
     if start is None:
         start = Path.cwd()
     start = start.resolve()
 
-    candidate = start / "logs"
+    candidate = start / ".raccoon" / "logs"
     if _is_log_dir(candidate):
         return candidate
 
@@ -30,7 +30,7 @@ def find_log_dir(start: Optional[Path] = None) -> Optional[Path]:
         parent = current.parent
         if parent == current:
             break
-        candidate = parent / "logs"
+        candidate = parent / ".raccoon" / "logs"
         if _is_log_dir(candidate):
             return candidate
         current = parent

@@ -8,7 +8,6 @@ from .create import create_command
 from .list_cmd import list_command
 from .remove_cmd import remove_command
 from .connect import connect_command, disconnect_command
-from .status import status_command
 from .sync_cmd import sync_command
 from .lcm import lcm_group
 from .web import web_command
@@ -18,6 +17,8 @@ from .reorder_cmd import reorder_command
 from .logs import logs_group
 from .migrate import migrate_command
 from .validate import validate_command
+from .shell import shell_command
+from .doctor import doctor_command
 
 __all__ = [
     "calibrate_command",
@@ -29,8 +30,7 @@ __all__ = [
     "remove_command",
     "connect_command",
     "disconnect_command",
-    "status_command",
-    "sync_command",
+    "sync_cmd",
     "lcm_group",
     "web_command",
     "update_command",
@@ -39,4 +39,6 @@ __all__ = [
     "logs_group",
     "migrate_command",
     "validate_command",
+    "shell_command",
+    "doctor_command",
 ]

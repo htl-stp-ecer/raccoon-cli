@@ -3,17 +3,43 @@ name: Build & Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: read
 
 env:
   VERSION: "0.1.${{ github.run_number }}"
 
 jobs:
-  build-and-release:
+  test:
     runs-on: self-hosted
+    container: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify raccoon HAL stubs are available
+        run: python3 -c "import raccoon.hal; print('raccoon.hal OK')"
+
+      - name: Install raccoon-cli
+        run: pip3 install -e . -q
+
+      - name: Run tests
+        run: python3 -m pytest tests/ -x -q --tb=short
+
+  build-and-release:
+    needs: test
+    runs-on: self-hosted
+    container: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
     permissions:
       contents: write
 
     steps:
+      - name: Clean submodule directories
+        run: rm -rf web-ide raccoon-transport
+
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
@@ -44,28 +70,28 @@ jobs:
           restore-keys: pip-
 
       - name: Install build tools
-        run: pip install build wheel setuptools
+        run: pip3 install build wheel setuptools
 
       # --- Build raccoon-transport wheel first ---
       # Patch version in submodule at build time (submodule files stay clean in git)
       - name: Patch raccoon-transport version
         run: |
-          python -c "import pathlib, re; f=pathlib.Path('raccoon-transport/python/pyproject.toml'); f.write_text(re.sub(r'^version = \".*\"', 'version = \"${{ env.VERSION }}\"', f.read_text(), flags=re.MULTILINE))"
+          python3 -c "import pathlib, re; f=pathlib.Path('raccoon-transport/python/pyproject.toml'); f.write_text(re.sub(r'^version = \".*\"', 'version = \"${{ env.VERSION }}\"', f.read_text(), flags=re.MULTILINE))"
 
       - name: Build raccoon-transport wheel
         run: |
           rm -rf raccoon-transport/python/dist
           cd raccoon-transport/python
-          python -m build --wheel
+          python3 -m build --wheel
 
       - name: Install raccoon-transport (build dependency)
-        run: pip install raccoon-transport/python/dist/raccoon_transport-*.whl
+        run: pip3 install raccoon-transport/python/dist/raccoon_transport-*.whl
 
       # --- Build raccoon wheel (includes web-IDE) ---
       - name: Build raccoon wheel
         run: |
           rm -rf dist
-          python -m build --wheel
+          python3 -m build --wheel
         env:
           BUILD_NUMBER: ${{ github.run_number }}
 

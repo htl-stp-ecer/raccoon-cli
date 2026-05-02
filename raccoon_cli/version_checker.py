@@ -354,15 +354,9 @@ def check_all_versions(
         if "laptop" in pkg.targets and pkg.pip_name:
             status.laptop_version = get_local_pip_version(pkg.pip_name)
 
-        # Pi version — HTTP preferred, SSH fallback
-        if "pi" in pkg.targets:
-            if pi_versions_http is not None:
-                status.pi_version = pi_versions_http.get(pkg.name)
-            elif ssh_client:
-                if pkg.pip_name:
-                    status.pi_version = get_remote_pip_version(ssh_client, pkg.pip_name)
-                else:
-                    status.pi_version = _get_remote_version_ssh(ssh_client, pkg)
+        # Pi version — HTTP only; if /version endpoint missing, leave as None → update everything
+        if "pi" in pkg.targets and pi_versions_http is not None:
+            status.pi_version = pi_versions_http.get(pkg.name)
 
         statuses.append(status)
 

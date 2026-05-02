@@ -72,6 +72,26 @@ def _render_codegen_success(
     )
 
 
+def _resolve_ftmap_paths(config: dict, project_root: Path) -> dict:
+    """Replace table_map file-path strings with the parsed .ftmap JSON dict."""
+    import json
+    import copy
+
+    physical = config.get("robot", {}).get("physical", {})
+    table_map = physical.get("table_map")
+    if not isinstance(table_map, str):
+        return config
+
+    ftmap_path = project_root / table_map
+    if not ftmap_path.exists():
+        raise ProjectError(f"table_map file not found: {ftmap_path}")
+
+    config = copy.deepcopy(config)
+    with open(ftmap_path, encoding="utf-8") as f:
+        config["robot"]["physical"]["table_map"] = json.load(f)
+    return config
+
+
 def _codegen_local(
     console: Console,
     project_root: Path,
@@ -87,6 +107,8 @@ def _codegen_local(
         out_dir = Path(output_dir)
     else:
         out_dir = project_root / "src" / "hardware"
+
+    config = _resolve_ftmap_paths(config, project_root)
 
     # Add project root to sys.path so user-defined types (e.g.
     # src.hardware.thresholded_sensor.ThresholdedSensor) can be resolved.

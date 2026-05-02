@@ -15,7 +15,6 @@ from raccoon_cli.commands import (
     remove_command,
     connect_command,
     disconnect_command,
-    status_command,
     sync_command,
     lcm_group,
     web_command,
@@ -25,6 +24,8 @@ from raccoon_cli.commands import (
     logs_group,
     migrate_command,
     validate_command,
+    shell_command,
+    doctor_command,
 )
 from raccoon_cli.logging_utils import configure_logging, render_banner, render_summary
 
@@ -85,7 +86,6 @@ main.add_command(list_command)
 main.add_command(remove_command)
 main.add_command(connect_command)
 main.add_command(disconnect_command)
-main.add_command(status_command)
 main.add_command(sync_command)
 main.add_command(lcm_group)
 main.add_command(web_command)
@@ -95,6 +95,8 @@ main.add_command(reorder_command)
 main.add_command(logs_group)
 main.add_command(migrate_command)
 main.add_command(validate_command)
+main.add_command(shell_command)
+main.add_command(doctor_command)
 
 
 if __name__ == "__main__":

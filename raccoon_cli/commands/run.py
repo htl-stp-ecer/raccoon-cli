@@ -21,6 +21,7 @@ from rich.text import Text
 from raccoon_cli.checkpoint import create_checkpoint
 from raccoon_cli.codegen import create_pipeline
 from raccoon_cli.project import ProjectError, load_project_config, require_project
+from raccoon_cli.commands.codegen import _resolve_ftmap_paths
 from raccoon_cli.commands.migrate import _get_format_version, _load_migrations
 from raccoon_cli.validation import run_validation_or_exit
 
@@ -108,7 +109,9 @@ def _run_local(
     if not no_codegen:
         pipeline = create_pipeline()
         output_dir = project_root / "src" / "hardware"
-        pipeline.run_all(config, output_dir, format_code=True)
+        pipeline.run_all(
+            _resolve_ftmap_paths(config, project_root), output_dir, format_code=True
+        )
 
     if (project_root / "pyproject.toml").exists():
         import shutil
@@ -180,7 +183,7 @@ def _run_local(
         )
     )
 
-    if returncode != 0 and not _has_error_lines(collected):
+    if returncode != 0 and collected and not _has_error_lines(collected):
         console.print(
             "[yellow]Non-zero exit code returned, but output contained only warnings; "
             "treating run as successful.[/yellow]"
@@ -251,7 +254,9 @@ async def _run_remote(
             sys.path.insert(0, str(project_root))
         pipeline = create_pipeline()
         output_dir = project_root / "src" / "hardware"
-        pipeline.run_all(config, output_dir, format_code=True)
+        pipeline.run_all(
+            _resolve_ftmap_paths(config, project_root), output_dir, format_code=True
+        )
 
     # Sync project to Pi before running
     if no_sync:
@@ -342,7 +347,7 @@ async def _run_remote(
         status = final_status.get("status", "unknown")
         success = exit_code == 0
 
-        if exit_code != 0 and not _has_error_lines(collected):
+        if exit_code != 0 and collected and not _has_error_lines(collected):
             console.print(
                 "[yellow]Non-zero remote exit code returned, but output contained only warnings; "
                 "treating run as successful.[/yellow]"

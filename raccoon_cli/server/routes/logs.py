@@ -26,7 +26,7 @@ def _get_project_path_or_404(project_id: str) -> Path:
 
 def _get_log_dir_or_404(project_id: str) -> Path:
     project_path = _get_project_path_or_404(project_id)
-    log_dir = project_path / "logs"
+    log_dir = project_path / ".raccoon" / "logs"
     if not log_dir.is_dir() or not (log_dir / "libstp.log").exists():
         raise HTTPException(status_code=404, detail="No logs directory found for this project")
     return log_dir

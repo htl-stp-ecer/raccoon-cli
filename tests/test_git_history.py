@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from raccoon_cli.git_history import create_pre_sync_snapshot, initialize_project_history
+from raccoon_cli.git_history import GitSnapshotResult, create_pre_sync_snapshot, initialize_project_history
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
@@ -95,3 +95,33 @@ def test_pre_sync_snapshot_skips_when_not_git_repo(tmp_path: Path):
 
     assert result.created is False
     assert result.reason == "not_git_repo"
+
+
+def test_snapshot_result_short_sha_returns_first_7_chars():
+    result = GitSnapshotResult(created=True, commit_sha="abc1234def5678")
+    assert result.short_sha == "abc1234"
+
+
+def test_snapshot_result_short_sha_returns_none_when_no_commit():
+    result = GitSnapshotResult(created=False, reason="no_changes")
+    assert result.short_sha is None
+
+
+def test_pre_sync_snapshot_created_result_has_short_sha(tmp_path: Path):
+    config_path = tmp_path / "raccoon.project.yml"
+    config_path.write_text("name: Demo\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('v1')\n", encoding="utf-8")
+    initialize_project_history(tmp_path, "DemoBot")
+
+    (tmp_path / "src" / "main.py").write_text("print('v2')\n", encoding="utf-8")
+
+    result = create_pre_sync_snapshot(
+        project_root=tmp_path,
+        direction="push",
+        target="pi@192.168.4.1:/home/pi/programs/demo",
+    )
+
+    assert result.created is True
+    assert result.commit_sha is not None
+    assert result.short_sha == result.commit_sha[:7]
