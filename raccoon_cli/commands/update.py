@@ -152,13 +152,9 @@ def update_command(
         else:
             _update_pi(console, ssh_client, pi_updates, force)
 
-    # After pip installs, refresh the server-side install (systemd units etc.)
-    # on both client and Pi by running install.py from the raccoon-cli release.
-    raccoon_cli_updated = any(
-        s.info.name == "raccoon-cli" for s in (laptop_updates + pi_updates)
-    )
-    if raccoon_cli_updated:
-        _run_raccoon_server_install(console, ssh_client)
+    # After any Pi update, run post-install migrations via the bundled command.
+    if pi_updates and ssh_client is not None:
+        _run_post_install(console, ssh_client)
 
 
 def _get_ssh_client(console: Console):
@@ -553,54 +549,29 @@ def _update_pi_tarball(
     console.print(f"[green]{repo_short} updated on Pi.[/green]")
 
 
-def _run_raccoon_server_install(console: Console, ssh_client) -> None:
-    """Refresh the raccoon-server systemd setup on the Pi.
+def _run_post_install(console: Console, ssh_client) -> None:
+    """Run `raccoon-server post-install` on the Pi after any Pi package update."""
+    console.print()
+    console.print("[bold]Running post-install on Pi...[/bold]")
 
-    The pip install of ``raccoon-cli`` has already happened at this point
-    (either on the laptop, the Pi, or both). This step just runs the
-    service-lifecycle commands that the legacy ``install.py`` used to do:
-    stop the service, (re)install the systemd unit, restart, and report
-    status.
-    """
-    if ssh_client is None:
+    try:
+        _, stdout, stderr = ssh_client.exec_command(
+            "sudo raccoon-server post-install", timeout=120
+        )
+        exit_code = stdout.channel.recv_exit_status()
+        out = stdout.read().decode(errors="replace").strip()
+        err = stderr.read().decode(errors="replace").strip()
+    except Exception as e:
+        console.print(f"[red]post-install failed: {e}[/red]")
         return
 
-    console.print()
-    console.print("[bold]Running raccoon-server install on Pi...[/bold]")
+    if out:
+        console.print(out)
+    if exit_code != 0:
+        console.print(f"[red]post-install failed (exit {exit_code}):[/red]\n{err}")
+        return
 
-    steps: list[tuple[str, str, bool]] = [
-        ("Stopping raccoon service", "sudo systemctl stop raccoon.service 2>/dev/null || true", True),
-        ("Configuring systemd unit", "sudo raccoon-server install", False),
-        ("Restarting raccoon service", "sudo systemctl restart raccoon.service", False),
-    ]
-
-    for desc, cmd, allow_fail in steps:
-        console.print(f"[dim]{desc}...[/dim]")
-        try:
-            _, stdout, stderr = ssh_client.exec_command(cmd, timeout=120)
-            exit_code = stdout.channel.recv_exit_status()
-        except Exception as e:
-            console.print(f"[red]{desc} failed: {e}[/red]")
-            return
-        if exit_code != 0 and not allow_fail:
-            err = stderr.read().decode(errors="replace").strip()
-            console.print(f"[red]{desc} failed (exit {exit_code}):[/red]\n{err}")
-            return
-
-    # Status check — best-effort, don't fail the whole update if it's noisy
-    try:
-        _, stdout, _ = ssh_client.exec_command(
-            "systemctl is-active raccoon.service", timeout=10
-        )
-        state = stdout.read().decode().strip()
-        if state == "active":
-            console.print("[green]raccoon service is active.[/green]")
-        else:
-            console.print(f"[yellow]raccoon service state: {state or 'unknown'}[/yellow]")
-    except Exception:
-        pass
-
-    console.print("[green]raccoon-server install complete.[/green]")
+    console.print("[green]Post-install complete.[/green]")
 
 
 def _find_install_script(tmpdir: str) -> str | None:

@@ -138,23 +138,22 @@ class YamlResolver:
 
 def create_hardware_resolver() -> YamlResolver:
     """Create a resolver configured for hardware types."""
-    resolver = YamlResolver(default_namespaces=["raccoon", "raccoon.hal", "raccoon.foundation", "raccoon.imu"])
-    return resolver
+    return YamlResolver(default_namespaces=["raccoon"])
 
 
 def create_kinematics_resolver() -> YamlResolver:
     """Create a resolver configured for kinematics types."""
-    resolver = YamlResolver()
-    resolver.add_type_mapping("differential", "raccoon.kinematics_differential.DifferentialKinematics")
-    resolver.add_type_mapping("mecanum", "raccoon.kinematics_mecanum.MecanumKinematics")
+    resolver = YamlResolver(default_namespaces=["raccoon"])
+    resolver.add_type_mapping("differential", "raccoon.DifferentialKinematics")
+    resolver.add_type_mapping("mecanum", "raccoon.MecanumKinematics")
     return resolver
 
 
 def create_odometry_resolver() -> YamlResolver:
     """Create a resolver configured for odometry types."""
-    resolver = YamlResolver(default_namespaces=["raccoon.odometry", "raccoon"])
-    resolver.add_type_mapping("imuodometry", "raccoon.odometry_imu.ImuOdometry")
-    resolver.add_type_mapping("imu", "raccoon.odometry_imu.ImuOdometry")
-    resolver.add_type_mapping("fusedodometry", "raccoon.odometry_fused.FusedOdometry")
-    resolver.add_type_mapping("fused", "raccoon.odometry_fused.FusedOdometry")
+    resolver = YamlResolver(default_namespaces=["raccoon"])
+    resolver.add_type_mapping("fusedodometry", "raccoon.FusedOdometry")
+    resolver.add_type_mapping("fused", "raccoon.FusedOdometry")
+    resolver.add_type_mapping("stm32odometry", "raccoon.Stm32Odometry")
+    resolver.add_type_mapping("stm32", "raccoon.Stm32Odometry")
     return resolver

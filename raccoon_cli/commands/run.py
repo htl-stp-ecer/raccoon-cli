@@ -21,6 +21,7 @@ from rich.text import Text
 from raccoon_cli.checkpoint import create_checkpoint
 from raccoon_cli.codegen import create_pipeline
 from raccoon_cli.project import ProjectError, load_project_config, require_project
+from raccoon_cli.commands.codegen import _resolve_ftmap_paths
 from raccoon_cli.commands.migrate import _get_format_version, _load_migrations
 
 logger = logging.getLogger("raccoon")
@@ -107,7 +108,9 @@ def _run_local(
     if not no_codegen:
         pipeline = create_pipeline()
         output_dir = project_root / "src" / "hardware"
-        pipeline.run_all(config, output_dir, format_code=True)
+        pipeline.run_all(
+            _resolve_ftmap_paths(config, project_root), output_dir, format_code=True
+        )
 
     if (project_root / "pyproject.toml").exists():
         import shutil
@@ -250,7 +253,9 @@ async def _run_remote(
             sys.path.insert(0, str(project_root))
         pipeline = create_pipeline()
         output_dir = project_root / "src" / "hardware"
-        pipeline.run_all(config, output_dir, format_code=True)
+        pipeline.run_all(
+            _resolve_ftmap_paths(config, project_root), output_dir, format_code=True
+        )
 
     # Sync project to Pi before running
     if no_sync:

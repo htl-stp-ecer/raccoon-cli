@@ -13,3 +13,4 @@ web-ide/.angular
 build
 raccoon_cli.egg-info
 dist
+.raccoon
