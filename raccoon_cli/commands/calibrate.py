@@ -332,6 +332,16 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
            and defn.get("positions")
     }
     if not servo_defs:
+        servos_yml = project_root / "config" / "servos.yml"
+        if servos_yml.exists():
+            import yaml
+            extra = yaml.safe_load(servos_yml.read_text()) or {}
+            servo_defs = {
+                name: defn
+                for name, defn in extra.items()
+                if isinstance(defn, dict) and defn.get("positions")
+            }
+    if not servo_defs:
         console.print("[yellow]No servos with named positions found — aborting.[/yellow]")
         return
 
@@ -339,8 +349,6 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
     manager = get_connection_manager()
     state = manager.state
     base_url = f"http://{state.pi_address}:{state.pi_port}/api/v1"
-
-    saved: Dict[str, tuple[str, float]] = {}
 
     while True:
         servo_pick = _pick_servo(servo_defs)
@@ -357,8 +365,8 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
 
         try:
             r = httpx.post(
-                f"{base_url}/calibrate-servo/start",
-                params={"servo_id": servo_name, "port": port, "initial_angle": start_deg},
+                f"{base_url}/calibrate-servos/start",
+                json={"servo_id": servo_name, "servo_port": port, "initial_angle": start_deg},
                 timeout=5.0,
             )
             if r.status_code == 409:
@@ -372,7 +380,6 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
         console.print(f"\n[bold cyan]Jogging {servo_name} · {pos_name}[/bold cyan]  [dim](starting at {start_deg:.1f}°)[/dim]")
         console.print("  [dim]↑ / k  +0.5°    ↓ / j  −0.5°    Enter  confirm    Q  skip[/dim]\n")
 
-        current_deg = start_deg
         skipped = False
 
         if sys.platform != "win32":
@@ -392,59 +399,39 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
                     continue
 
                 try:
-                    httpx.post(
-                        f"{base_url}/calibrate-servo/move",
-                        params={"angle": key},
+                    r = httpx.post(
+                        f"{base_url}/calibrate-servos/move",
+                        json={"delta_to_move": key},
                         timeout=2.0,
                     )
-                    current_deg = max(0.0, min(270.0, current_deg + key))
+                    current_angle = r.json().get("current_angle")
+                    if current_angle is not None:
+                        offset = current_angle - start_deg
+                        sys.stdout.write(f"\r  Offset: {offset:+.1f}°  (current: {current_angle:.1f}°)  ")
+                        sys.stdout.flush()
                 except Exception:
                     pass
-
-                sys.stdout.write(f"\r  Position: {current_deg:+.1f}°  ")
-                sys.stdout.flush()
         finally:
             if sys.platform != "win32":
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             sys.stdout.write("\n")
             sys.stdout.flush()
 
-        final_deg = current_deg
-        try:
-            r = httpx.post(f"{base_url}/calibrate-servo/end", timeout=5.0)
-            if r.status_code == 200:
-                final_deg = r.json().get("final_deg", current_deg)
-        except Exception as exc:
-            console.print(f"[yellow]Could not cleanly end session: {exc}[/yellow]")
-
         if skipped:
             console.print(f"[dim]Skipped {servo_name} · {pos_name}[/dim]")
         else:
-            saved[servo_name] = (pos_name, final_deg)
-            console.print(f"[green]{servo_name}.{pos_name} = {final_deg:.1f}°[/green]")
+            try:
+                r = httpx.post(f"{base_url}/calibrate-servos/end", timeout=5.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    console.print(f"  delta: {data['delta']:+.1f}°  final: {data['final_angle']:.1f}°")
+            except Exception as exc:
+                console.print(f"[yellow]Could not cleanly end session: {exc}[/yellow]")
 
         if not questionary.confirm("Calibrate another servo?", default=True, style=_STYLE).ask():
             break
 
-    if not saved:
-        return
-
-    definitions = config.setdefault("definitions", {})
-    for servo_name, (pos_name, new_deg) in saved.items():
-        definitions[servo_name]["positions"][pos_name] = round(new_deg, 1)
-    save_project_keys(project_root, {"definitions": definitions})
-
-    table = Table(title="Saved Servo Positions")
-    table.add_column("Servo", style="cyan")
-    table.add_column("Position")
-    table.add_column("Value", justify="right")
-    for servo_name, (pos_name, deg) in saved.items():
-        table.add_row(servo_name, pos_name, f"{deg:.1f}°")
-    console.print(table)
-    console.print("[green]Saved to raccoon.project.yml[/green]")
-
 # Calibrate Servos Helpers
-
 _DONE = object()
 
 def _pick_servo(servo_defs: Dict[str, dict]) -> Optional[tuple[str, dict]]:
