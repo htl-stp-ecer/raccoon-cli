@@ -290,6 +290,9 @@ async def _autotune_remote(ctx: click.Context, project_root: Path, config: dict)
 
 def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> None:
     import httpx
+    import logging
+
+    _httpx_logger = logging.getLogger("httpx")
 
     if sys.platform == "win32":
         import msvcrt
@@ -298,12 +301,14 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
             ch = msvcrt.getwch()
             if ch in ("\r", "\n"): return None
             if ch in ("q", "Q"):   return "skip"
-            if ch in ("k", "K"):   return +0.5
-            if ch in ("j", "J"):   return -0.5
+            if ch in ("\x03",):    return "quit"   # Ctrl+C
+            if ch == "\x1b":       return "quit"   # Esc
+            if ch in ("k", "K"):   return +1.0
+            if ch in ("j", "J"):   return -1.0
             if ch == "\xe0":
                 ch2 = msvcrt.getwch()
-                if ch2 == "H": return +0.5   # ↑
-                if ch2 == "P": return -0.5   # ↓
+                if ch2 == "H": return +1.0   # ↑
+                if ch2 == "P": return -1.0   # ↓
             return "ignore"
     else:
         import tty
@@ -313,16 +318,18 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
             ch = sys.stdin.read(1)
             if ch in ("\r", "\n"): return None
             if ch in ("q", "Q"):   return "skip"
-            if ch in ("k", "K"):   return +0.5
-            if ch in ("j", "J"):   return -0.5
+            if ch == "\x03":       return "quit"   # Ctrl+C
             if ch == "\x1b":
+                # peek for escape sequence vs bare Esc
                 seq = sys.stdin.read(2)
-                if seq == "[A": return +0.5  # ↑
-                if seq == "[B": return -0.5  # ↓
+                if seq == "[A": return +1.0  # ↑
+                if seq == "[B": return -1.0  # ↓
+                return "quit"               # bare Esc
+            if ch in ("k", "K"):   return +1.0
+            if ch in ("j", "J"):   return -1.0
             return "ignore"
 
     console: Console = ctx.obj["console"]
-    console.print(Panel("[bold]Servo Calibration[/bold]", border_style="cyan"))
 
     servo_defs = {
         name: defn
@@ -349,8 +356,21 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
     manager = get_connection_manager()
     state = manager.state
     base_url = f"http://{state.pi_address}:{state.pi_port}/api/v1"
+    request_headers = {"X-API-Token": state.api_token}
 
-    while True:
+    console.print(f"[dim]Connecting to {state.pi_address}:{state.pi_port}...[/dim]")
+    try:
+        httpx.get(f"http://{state.pi_address}:{state.pi_port}/health", timeout=3.0).raise_for_status()
+        console.print(f"[green]Connected to {state.pi_address}:{state.pi_port}[/green]")
+    except Exception as exc:
+        console.print(f"[red]Failed to connect to {state.pi_address}:{state.pi_port} — {exc}[/red]")
+        return
+
+    console.print(Panel("[bold]Servo Calibration[/bold]", border_style="cyan"))
+
+    quit_all = False
+
+    while not quit_all:
         servo_pick = _pick_servo(servo_defs)
         if servo_pick is None:
             break
@@ -367,18 +387,24 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
             r = httpx.post(
                 f"{base_url}/calibrate-servos/start",
                 json={"servo_id": servo_name, "servo_port": port, "initial_angle": start_deg},
+                headers=request_headers,
                 timeout=5.0,
             )
             if r.status_code == 409:
                 console.print("[red]A calibration session is already active on the Pi.[/red]")
                 continue
             r.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            console.print(f"[red]Could not start session ({exc.response.status_code}): {exc.response.text}[/red]")
+            continue
         except Exception as exc:
             console.print(f"[red]Could not start session: {exc}[/red]")
             continue
 
         console.print(f"\n[bold cyan]Jogging {servo_name} · {pos_name}[/bold cyan]  [dim](starting at {start_deg:.1f}°)[/dim]")
-        console.print("  [dim]↑ / k  +0.5°    ↓ / j  −0.5°    Enter  confirm    Q  skip[/dim]\n")
+        console.print("  [dim]↑ / k  +1°    ↓ / j  −1°    Enter  confirm    Q  skip    Esc/Ctrl+C  quit[/dim]")
+        sys.stdout.write(f"\n  Offset: +0.0°  (current: {start_deg:.1f}°)  ")
+        sys.stdout.flush()
 
         skipped = False
 
@@ -387,10 +413,15 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
             old_settings = termios.tcgetattr(fd)
             tty.setraw(fd)
 
+        _httpx_logger.setLevel(logging.WARNING)
         try:
             while True:
                 key = _read_key()
                 if key is None:
+                    break
+                if key == "quit":
+                    skipped = True
+                    quit_all = True
                     break
                 if key == "skip":
                     skipped = True
@@ -402,6 +433,7 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
                     r = httpx.post(
                         f"{base_url}/calibrate-servos/move",
                         json={"delta_to_move": key},
+                        headers=request_headers,
                         timeout=2.0,
                     )
                     current_angle = r.json().get("current_angle")
@@ -412,21 +444,27 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
                 except Exception:
                     pass
         finally:
+            _httpx_logger.setLevel(logging.INFO)
             if sys.platform != "win32":
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             sys.stdout.write("\n")
             sys.stdout.flush()
+            logging.getLogger("httpx").setLevel(logging.INFO)
 
-        if skipped:
+        # Always call /end to clean up the session
+        try:
+            r = httpx.post(f"{base_url}/calibrate-servos/end", headers=request_headers, timeout=5.0)
+            if r.status_code == 200 and not skipped:
+                data = r.json()
+                console.print(f"  delta: {data['delta']:+.1f}°  final: {data['final_angle']:.1f}°")
+        except Exception as exc:
+            console.print(f"[yellow]Could not cleanly end session: {exc}[/yellow]")
+
+        if skipped and not quit_all:
             console.print(f"[dim]Skipped {servo_name} · {pos_name}[/dim]")
-        else:
-            try:
-                r = httpx.post(f"{base_url}/calibrate-servos/end", timeout=5.0)
-                if r.status_code == 200:
-                    data = r.json()
-                    console.print(f"  delta: {data['delta']:+.1f}°  final: {data['final_angle']:.1f}°")
-            except Exception as exc:
-                console.print(f"[yellow]Could not cleanly end session: {exc}[/yellow]")
+
+        if quit_all:
+            break
 
         if not questionary.confirm("Calibrate another servo?", default=True, style=_STYLE).ask():
             break
