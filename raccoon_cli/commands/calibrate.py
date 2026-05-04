@@ -1,4 +1,4 @@
-"""Calibrate command — encoder ticks (Phase 1) and autotune (Phase 2)."""
+"""Calibrate command — encoder ticks, autotune and servo calibration."""
 
 from __future__ import annotations
 
@@ -15,11 +15,25 @@ import click
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+import questionary
+from questionary import Style as QStyle
 
 from raccoon_cli.codegen import create_pipeline
 from raccoon_cli.project import ProjectError, load_project_config, require_project, save_project_keys
 
 logger = logging.getLogger("raccoon")
+
+# Style for servo calibration questions
+_STYLE = QStyle([
+    ("qmark",       "fg:#8b5cf6 bold"),
+    ("question",    "bold"),
+    ("answer",      "fg:#22d3ee bold"),
+    ("pointer",     "fg:#8b5cf6 bold"),
+    ("highlighted", "fg:#8b5cf6 bold"),
+    ("selected",    "fg:#22d3ee"),
+    ("separator",   "fg:#6b7280"),
+    ("instruction", "fg:#6b7280 italic"),
+])
 
 NUM_TRIALS = 3
 
@@ -47,74 +61,15 @@ robot.start()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Calibrate Encoder ticks
 # ---------------------------------------------------------------------------
 
-
-def _get_motor_defs(config: dict) -> Dict[str, tuple[int, bool]]:
-    """Return {name: (port, inverted)} for every Motor in definitions."""
-    result: Dict[str, tuple[int, bool]] = {}
-    for name, defn in config.get("definitions", {}).items():
-        if isinstance(defn, dict) and defn.get("type") == "Motor":
-            result[name] = (int(defn.get("port", 0)), bool(defn.get("inverted", False)))
-    return result
-
-
-def _read_encoder_local(port: int, inverted: bool) -> int:
-    from raccoon.hal import Motor as HalMotor  # type: ignore
-
-    return HalMotor(port=port, inverted=inverted).get_position()
-
-
-def _make_remote_reader(api_client) -> Callable[[int, bool], int]:
-    def _read(port: int, inverted: bool) -> int:
-        async def _inner():
-            async with api_client:
-                reading = await api_client.read_encoder(port, inverted)
-                if not reading.success:
-                    raise RuntimeError(f"Failed to read encoder: {reading.error}")
-                return reading.position
-
-        return asyncio.run(_inner())
-
-    return _read
-
-
-def _calibrate_single_motor(
-    console: Console,
-    motor_name: str,
-    port: int,
-    inverted: bool,
-    read_fn: Callable[[int, bool], int],
-) -> float:
-    measurements = []
-    for trial in range(1, NUM_TRIALS + 1):
-        console.print(f"\n[bold cyan]Trial {trial}/{NUM_TRIALS} — {motor_name}[/bold cyan]")
-        start = read_fn(port, inverted)
-        console.print(f"[dim]Encoder position: {start}[/dim]")
-        console.print("[green]→ Rotate the wheel exactly ONE full turn (360°), then press Enter.[/green]")
-        click.prompt("", default="", show_default=False, prompt_suffix="")
-        end = read_fn(port, inverted)
-        ticks = abs(end - start)
-        console.print(f"[cyan]  Measured: {ticks} ticks[/cyan]")
-        measurements.append(ticks)
-
-    avg = sum(measurements) / len(measurements)
-    console.print(f"[bold green]{motor_name} average: {avg:.1f} ticks/rev[/bold green]")
-    return avg
-
-
-# ---------------------------------------------------------------------------
-# Phase 1 — Encoder ticks
-# ---------------------------------------------------------------------------
-
-
-def _phase1(console: Console, project_root: Path, config: dict, local: bool) -> None:
-    console.print(Panel("[bold]Phase 1 — Encoder Ticks Calibration[/bold]", border_style="cyan"))
+def _calibrate_ticks(console: Console, project_root: Path, config: dict, local: bool) -> None:
+    console.print(Panel("[bold]Encoder Ticks Calibration[/bold]", border_style="cyan"))
 
     motor_defs = _get_motor_defs(config)
     if not motor_defs:
-        console.print("[yellow]No motors found in definitions — skipping Phase 1.[/yellow]")
+        console.print("[yellow]No motors found in definitions — aborting Tick Calibration.[/yellow]")
         return
 
     read_fn: Callable[[int, bool], int]
@@ -168,14 +123,67 @@ def _phase1(console: Console, project_root: Path, config: dict, local: bool) -> 
     save_project_keys(project_root, {"definitions": definitions})
     console.print("[green]Saved ticks_to_rad to raccoon.project.yml[/green]")
 
+# Calibrate Encoder Ticks Helpers
+
+def _get_motor_defs(config: dict) -> Dict[str, tuple[int, bool]]:
+    """Return {name: (port, inverted)} for every Motor in definitions."""
+    result: Dict[str, tuple[int, bool]] = {}
+    for name, defn in config.get("definitions", {}).items():
+        if isinstance(defn, dict) and defn.get("type") == "Motor":
+            result[name] = (int(defn.get("port", 0)), bool(defn.get("inverted", False)))
+    return result
+
+
+def _read_encoder_local(port: int, inverted: bool) -> int:
+    from raccoon.hal import Motor as HalMotor  # type: ignore
+
+    return HalMotor(port=port, inverted=inverted).get_position()
+
+
+def _make_remote_reader(api_client) -> Callable[[int, bool], int]:
+    def _read(port: int, inverted: bool) -> int:
+        async def _inner():
+            async with api_client:
+                reading = await api_client.read_encoder(port, inverted)
+                if not reading.success:
+                    raise RuntimeError(f"Failed to read encoder: {reading.error}")
+                return reading.position
+
+        return asyncio.run(_inner())
+
+    return _read
+
+
+def _calibrate_single_motor(
+        console: Console,
+        motor_name: str,
+        port: int,
+        inverted: bool,
+        read_fn: Callable[[int, bool], int],
+) -> float:
+    measurements = []
+    for trial in range(1, NUM_TRIALS + 1):
+        console.print(f"\n[bold cyan]Trial {trial}/{NUM_TRIALS} — {motor_name}[/bold cyan]")
+        start = read_fn(port, inverted)
+        console.print(f"[dim]Encoder position: {start}[/dim]")
+        console.print("[green]→ Rotate the wheel exactly ONE full turn (360°), then press Enter.[/green]")
+        click.prompt("", default="", show_default=False, prompt_suffix="")
+        end = read_fn(port, inverted)
+        ticks = abs(end - start)
+        console.print(f"[cyan]  Measured: {ticks} ticks[/cyan]")
+        measurements.append(ticks)
+
+    avg = sum(measurements) / len(measurements)
+    console.print(f"[bold green]{motor_name} average: {avg:.1f} ticks/rev[/bold green]")
+    return avg
+
 
 # ---------------------------------------------------------------------------
-# Phase 2 — Autotune
+# Autotune
 # ---------------------------------------------------------------------------
 
-
-def _phase2_local(console: Console, project_root: Path, config: dict) -> None:
-    console.print(Panel("[bold]Phase 2 — Autotune[/bold]", border_style="cyan"))
+def _autotune_local(console: Console, project_root: Path, config: dict) -> None:
+    console.print(Panel("[bold]Autotune Calibration[/bold]", border_style="cyan"))
 
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
@@ -209,7 +217,7 @@ def _phase2_local(console: Console, project_root: Path, config: dict) -> None:
         script_path.unlink(missing_ok=True)
 
 
-async def _phase2_remote(ctx: click.Context, project_root: Path, config: dict) -> None:
+async def _autotune_remote(ctx: click.Context, project_root: Path, config: dict) -> None:
     console: Console = ctx.obj["console"]
 
     from raccoon_cli.client.connection import get_connection_manager
@@ -277,26 +285,279 @@ async def _phase2_remote(ctx: click.Context, project_root: Path, config: dict) -
 
 
 # ---------------------------------------------------------------------------
+# Calibrate Servos
+# ---------------------------------------------------------------------------
+
+def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> None:
+    import httpx
+    import logging
+    import threading
+    import queue as _queue
+
+    _httpx_logger = logging.getLogger("httpx")
+
+    if sys.platform == "win32":
+        import msvcrt
+
+        def _read_key():
+            ch = msvcrt.getwch()
+            if ch in ("\r", "\n"): return "confirm"
+            if ch == "\x03":       return "quit"
+            if ch == "\x1b":       return "quit"
+            if ch == "\xe0":
+                ch2 = msvcrt.getwch()
+                if ch2 == "H": return "up"
+                if ch2 == "P": return "down"
+                if ch2 == "K": return "left"
+                if ch2 == "M": return "right"
+            return "ignore"
+    else:
+        import tty
+        import termios
+
+        def _read_key():
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"): return "confirm"
+            if ch == "\x03":       return "quit"
+            if ch == "\x1b":
+                seq = sys.stdin.read(2)
+                if seq == "[A": return "up"
+                if seq == "[B": return "down"
+                if seq == "[D": return "left"
+                if seq == "[C": return "right"
+                return "quit"  # bare Esc
+            return "ignore"
+
+    console: Console = ctx.obj["console"]
+
+    servo_defs = {
+        name: defn
+        for name, defn in config.get("definitions", {}).items()
+        if isinstance(defn, dict)
+           and defn.get("type") == "Servo"
+           and defn.get("positions")
+    }
+    if not servo_defs:
+        servos_yml = project_root / "config" / "servos.yml"
+        if servos_yml.exists():
+            import yaml
+            extra = yaml.safe_load(servos_yml.read_text()) or {}
+            servo_defs = {
+                name: defn
+                for name, defn in extra.items()
+                if isinstance(defn, dict) and defn.get("positions")
+            }
+    if not servo_defs:
+        console.print("[yellow]No servos with named positions found — aborting.[/yellow]")
+        return
+
+    from raccoon_cli.client.connection import get_connection_manager
+    manager = get_connection_manager()
+    state = manager.state
+    base_url = f"http://{state.pi_address}:{state.pi_port}/api/v1"
+    request_headers = {"X-API-Token": state.api_token}
+
+    console.print(f"[dim]Connecting to {state.pi_address}:{state.pi_port}...[/dim]")
+    try:
+        httpx.get(f"http://{state.pi_address}:{state.pi_port}/health", timeout=3.0).raise_for_status()
+        console.print(f"[green]Connected to {state.pi_address}:{state.pi_port}[/green]")
+    except Exception as exc:
+        console.print(f"[red]Failed to connect to {state.pi_address}:{state.pi_port} — {exc}[/red]")
+        return
+
+    console.print(Panel("[bold]Servo Calibration[/bold]", border_style="cyan"))
+
+    quit_all = False
+
+    while not quit_all:
+        servo_pick = _pick_servo(servo_defs)
+        if servo_pick is None:
+            break
+        servo_name, defn = servo_pick
+
+        pos_pick = _pick_position(servo_name, defn)
+        if pos_pick is None:
+            continue
+        pos_name, start_deg = pos_pick
+
+        port = int(defn.get("port", 0))
+
+        try:
+            r = httpx.post(
+                f"{base_url}/calibrate-servos/start",
+                json={"servo_id": servo_name, "servo_port": port, "initial_angle": start_deg},
+                headers=request_headers,
+                timeout=5.0,
+            )
+            if r.status_code == 409:
+                console.print("[red]A calibration session is already active on the Pi.[/red]")
+                continue
+            r.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            console.print(f"[red]Could not start session ({exc.response.status_code}): {exc.response.text}[/red]")
+            continue
+        except Exception as exc:
+            console.print(f"[red]Could not start session: {exc}[/red]")
+            continue
+
+        _step = 1.0
+        _steps = [0.5, 1.0, 2.0]
+        _current_angle = [start_deg]  # mutable so worker can update it
+
+        console.print(f"\n[bold cyan]Jogging {servo_name} · {pos_name}[/bold cyan]  [dim](starting at {start_deg:.1f}°)[/dim]")
+        console.print("  [dim]↑ / ↓  move    ← / →  change step    Enter  confirm    Esc/Ctrl+C  quit[/dim]")
+        sys.stdout.write(f"\n  [{_step:g}°]  Offset: +0.0°  (current: {start_deg:.1f}°)  ")
+        sys.stdout.flush()
+
+        skipped = False
+        _move_queue: _queue.Queue = _queue.Queue(maxsize=2)
+
+        def _move_worker():
+            while True:
+                delta = _move_queue.get()
+                if delta is None:
+                    break
+                try:
+                    r = httpx.post(
+                        f"{base_url}/calibrate-servos/move",
+                        json={"delta_to_move": delta},
+                        headers=request_headers,
+                        timeout=2.0,
+                    )
+                    current_angle = r.json().get("current_angle")
+                    if current_angle is not None:
+                        _current_angle[0] = current_angle
+                        offset = current_angle - start_deg
+                        sys.stdout.write(f"\r  [{_step:g}°]  Offset: {offset:+.1f}°  (current: {current_angle:.1f}°)  ")
+                        sys.stdout.flush()
+                except Exception:
+                    pass
+
+        worker = threading.Thread(target=_move_worker, daemon=True)
+        worker.start()
+
+        if sys.platform != "win32":
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            tty.setraw(fd)
+
+        _httpx_logger.setLevel(logging.WARNING)
+        try:
+            while True:
+                key = _read_key()
+                if key == "confirm":
+                    break
+                if key == "quit":
+                    skipped = True
+                    quit_all = True
+                    break
+                if key == "ignore":
+                    continue
+                if key == "left":
+                    idx = _steps.index(_step)
+                    _step = _steps[max(0, idx - 1)]
+                    _ang = _current_angle[0]
+                    sys.stdout.write(f"\r  [{_step:g}°]  Offset: {_ang - start_deg:+.1f}°  (current: {_ang:.1f}°)  ")
+                    sys.stdout.flush()
+                    continue
+                if key == "right":
+                    idx = _steps.index(_step)
+                    _step = _steps[min(len(_steps) - 1, idx + 1)]
+                    _ang = _current_angle[0]
+                    sys.stdout.write(f"\r  [{_step:g}°]  Offset: {_ang - start_deg:+.1f}°  (current: {_ang:.1f}°)  ")
+                    sys.stdout.flush()
+                    continue
+                if key == "up":
+                    try:
+                        _move_queue.put_nowait(+_step)
+                    except _queue.Full:
+                        pass
+                if key == "down":
+                    try:
+                        _move_queue.put_nowait(-_step)
+                    except _queue.Full:
+                        pass
+        finally:
+            _move_queue.put(None)
+            worker.join()
+            _httpx_logger.setLevel(logging.INFO)
+            if sys.platform != "win32":
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+        # Always call /end to clean up the session
+        try:
+            r = httpx.post(f"{base_url}/calibrate-servos/end", headers=request_headers, timeout=5.0)
+            if r.status_code == 200 and not skipped:
+                data = r.json()
+                console.print(f"  delta: {data['delta']:+.1f}°  final: {data['final_angle']:.1f}°")
+        except Exception as exc:
+            console.print(f"[yellow]Could not cleanly end session: {exc}[/yellow]")
+
+        if skipped and not quit_all:
+            console.print(f"[dim]Skipped {servo_name} · {pos_name}[/dim]")
+
+        if quit_all:
+            break
+
+        if not questionary.confirm("Calibrate another servo?", default=True, style=_STYLE).ask():
+            break
+
+# Calibrate Servos Helpers
+_DONE = object()
+
+def _pick_servo(servo_defs: Dict[str, dict]) -> Optional[tuple[str, dict]]:
+    choices = [
+        questionary.Choice(
+            title=f"{name}  ({', '.join(defn['positions'].keys())})",
+            value=name,
+        )
+        for name, defn in servo_defs.items()
+    ]
+    choices.append(questionary.Choice(title="✕  Done", value=_DONE))
+    result = questionary.select("Select servo to calibrate:", choices=choices, style=_STYLE).ask()
+    if result is None or result is _DONE:
+        return None
+    return result, servo_defs[result]
+
+def _pick_position(servo_name: str, defn: dict) -> Optional[tuple[str, float]]:
+    positions: dict = defn["positions"]
+    choices = [
+        questionary.Choice(title=f"{pos_name}  ({deg}°)", value=pos_name)
+        for pos_name, deg in positions.items()
+    ]
+    choices.append(questionary.Choice(title="✕  Cancel", value=_DONE))
+    result = questionary.select(
+        f"Select position to calibrate on {servo_name}:", choices=choices, style=_STYLE
+    ).ask()
+    if result is None or result is _DONE:
+        return None
+    return result, float(positions[result])
+
+
+# ---------------------------------------------------------------------------
 # Command
 # ---------------------------------------------------------------------------
 
-
-@click.command(name="calibrate")
+@click.group(name="calibrate", invoke_without_command=True)
 @click.option("--local", "-l", is_flag=True, help="Run locally on this machine (requires hardware)")
-@click.option("--skip-ticks", is_flag=True, help="Skip Phase 1 (encoder ticks)")
-@click.option("--skip-autotune", is_flag=True, help="Skip Phase 2 (autotune)")
 @click.pass_context
-def calibrate_command(
-    ctx: click.Context, local: bool, skip_ticks: bool, skip_autotune: bool
+def calibrate_group(
+        ctx: click.Context, local: bool
 ) -> None:
-    """Two-phase robot calibration.
+    """Robot calibration.
 
     \b
-    Phase 1: Encoder ticks — rotate each wheel by hand to measure ticks/revolution.
-    Phase 2: Autotune — runs auto_tune() as a mission step via the robot context.
+    Runs all phases by default:
+      Phase 1 (ticks)    — rotate each wheel to measure ticks/revolution.
+      Phase 2 (autotune) — runs auto_tune() as a mission step.
+      Phase 3 (servos)   — sweeps servos to find min/max/center.
 
-    By default, Phase 1 reads encoders from the connected Pi and Phase 2 runs
-    on the Pi.  Use --local to run everything on this machine instead.
+    Or run a single phase with a subcommand:
+      calibrate ticks
+      calibrate autotune
+      calibrate servos
     """
     console: Console = ctx.obj["console"]
 
@@ -329,12 +590,42 @@ def calibrate_command(
             console.print(f"[yellow]No Pi connection ({exc}). Running locally.[/yellow]")
             local = True
 
-    if not skip_ticks:
-        _phase1(console, project_root, config, local)
-        config = load_project_config(project_root)
+    ctx.obj["local"] = local
+    ctx.obj["project_root"] = project_root
+    ctx.obj["config"] = config
 
-    if not skip_autotune:
-        if local:
-            _phase2_local(console, project_root, config)
-        else:
-            asyncio.run(_phase2_remote(ctx, project_root, config))
+    if ctx.invoked_subcommand is not None:
+        return
+
+    _calibrate_ticks(console, project_root, config, local)
+    if local:
+        _autotune_local(console, project_root, config)
+    else:
+        asyncio.run(_autotune_remote(ctx, project_root, config))
+    _calibrate_servos(ctx, project_root, config)
+
+
+@calibrate_group.command(name="ticks")
+@click.pass_context
+def calibrate_ticks_cmd(ctx: click.Context) -> None:
+    """Phase 1: measure encoder ticks/revolution."""
+    console = ctx.obj["console"]
+    _calibrate_ticks(console, ctx.obj["project_root"], ctx.obj["config"], ctx.obj["local"])
+
+
+@calibrate_group.command(name="autotune")
+@click.pass_context
+def calibrate_autotune_cmd(ctx: click.Context) -> None:
+    """Phase 2: run auto_tune() as a mission step."""
+    console = ctx.obj["console"]
+    if ctx.obj["local"]:
+        _autotune_local(console, ctx.obj["project_root"], ctx.obj["config"])
+    else:
+        asyncio.run(_autotune_remote(ctx, ctx.obj["project_root"], ctx.obj["config"]))
+
+
+@calibrate_group.command(name="servos")
+@click.pass_context
+def calibrate_servos_cmd(ctx: click.Context) -> None:
+    """Phase 3: jog servos to find named positions."""
+    _calibrate_servos(ctx, ctx.obj["project_root"], ctx.obj["config"])
