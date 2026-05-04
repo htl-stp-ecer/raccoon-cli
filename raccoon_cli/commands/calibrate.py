@@ -291,6 +291,8 @@ async def _autotune_remote(ctx: click.Context, project_root: Path, config: dict)
 def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> None:
     import httpx
     import logging
+    import threading
+    import queue as _queue
 
     _httpx_logger = logging.getLogger("httpx")
 
@@ -299,16 +301,15 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
 
         def _read_key():
             ch = msvcrt.getwch()
-            if ch in ("\r", "\n"): return None
-            if ch in ("q", "Q"):   return "skip"
-            if ch in ("\x03",):    return "quit"   # Ctrl+C
-            if ch == "\x1b":       return "quit"   # Esc
-            if ch in ("k", "K"):   return +1.0
-            if ch in ("j", "J"):   return -1.0
+            if ch in ("\r", "\n"): return "confirm"
+            if ch == "\x03":       return "quit"
+            if ch == "\x1b":       return "quit"
             if ch == "\xe0":
                 ch2 = msvcrt.getwch()
-                if ch2 == "H": return +1.0   # ↑
-                if ch2 == "P": return -1.0   # ↓
+                if ch2 == "H": return "up"
+                if ch2 == "P": return "down"
+                if ch2 == "K": return "left"
+                if ch2 == "M": return "right"
             return "ignore"
     else:
         import tty
@@ -316,17 +317,15 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
 
         def _read_key():
             ch = sys.stdin.read(1)
-            if ch in ("\r", "\n"): return None
-            if ch in ("q", "Q"):   return "skip"
-            if ch == "\x03":       return "quit"   # Ctrl+C
+            if ch in ("\r", "\n"): return "confirm"
+            if ch == "\x03":       return "quit"
             if ch == "\x1b":
-                # peek for escape sequence vs bare Esc
                 seq = sys.stdin.read(2)
-                if seq == "[A": return +1.0  # ↑
-                if seq == "[B": return -1.0  # ↓
-                return "quit"               # bare Esc
-            if ch in ("k", "K"):   return +1.0
-            if ch in ("j", "J"):   return -1.0
+                if seq == "[A": return "up"
+                if seq == "[B": return "down"
+                if seq == "[D": return "left"
+                if seq == "[C": return "right"
+                return "quit"  # bare Esc
             return "ignore"
 
     console: Console = ctx.obj["console"]
@@ -401,12 +400,39 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
             console.print(f"[red]Could not start session: {exc}[/red]")
             continue
 
+        _step = 1.0
+        _steps = [0.5, 1.0, 2.0]
+
         console.print(f"\n[bold cyan]Jogging {servo_name} · {pos_name}[/bold cyan]  [dim](starting at {start_deg:.1f}°)[/dim]")
-        console.print("  [dim]↑ / k  +1°    ↓ / j  −1°    Enter  confirm    Q  skip    Esc/Ctrl+C  quit[/dim]")
-        sys.stdout.write(f"\n  Offset: +0.0°  (current: {start_deg:.1f}°)  ")
+        console.print("  [dim]↑ / ↓  move    ← / →  change step    Enter  confirm    Esc/Ctrl+C  quit[/dim]")
+        sys.stdout.write(f"\n  [{_step:g}°]  Offset: +0.0°  (current: {start_deg:.1f}°)  ")
         sys.stdout.flush()
 
         skipped = False
+        _move_queue: _queue.Queue = _queue.Queue(maxsize=2)
+
+        def _move_worker():
+            while True:
+                delta = _move_queue.get()
+                if delta is None:
+                    break
+                try:
+                    r = httpx.post(
+                        f"{base_url}/calibrate-servos/move",
+                        json={"delta_to_move": delta},
+                        headers=request_headers,
+                        timeout=2.0,
+                    )
+                    current_angle = r.json().get("current_angle")
+                    if current_angle is not None:
+                        offset = current_angle - start_deg
+                        sys.stdout.write(f"\r  [{_step:g}°]  Offset: {offset:+.1f}°  (current: {current_angle:.1f}°)  ")
+                        sys.stdout.flush()
+                except Exception:
+                    pass
+
+        worker = threading.Thread(target=_move_worker, daemon=True)
+        worker.start()
 
         if sys.platform != "win32":
             fd = sys.stdin.fileno()
@@ -417,33 +443,39 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
         try:
             while True:
                 key = _read_key()
-                if key is None:
+                if key == "confirm":
                     break
                 if key == "quit":
                     skipped = True
                     quit_all = True
                     break
-                if key == "skip":
-                    skipped = True
-                    break
                 if key == "ignore":
                     continue
-
-                try:
-                    r = httpx.post(
-                        f"{base_url}/calibrate-servos/move",
-                        json={"delta_to_move": key},
-                        headers=request_headers,
-                        timeout=2.0,
-                    )
-                    current_angle = r.json().get("current_angle")
-                    if current_angle is not None:
-                        offset = current_angle - start_deg
-                        sys.stdout.write(f"\r  Offset: {offset:+.1f}°  (current: {current_angle:.1f}°)  ")
-                        sys.stdout.flush()
-                except Exception:
-                    pass
+                if key == "left":
+                    idx = _steps.index(_step)
+                    _step = _steps[max(0, idx - 1)]
+                    sys.stdout.write(f"\r  [{_step:g}°]  " + " " * 40)
+                    sys.stdout.flush()
+                    continue
+                if key == "right":
+                    idx = _steps.index(_step)
+                    _step = _steps[min(len(_steps) - 1, idx + 1)]
+                    sys.stdout.write(f"\r  [{_step:g}°]  " + " " * 40)
+                    sys.stdout.flush()
+                    continue
+                if key == "up":
+                    try:
+                        _move_queue.put_nowait(+_step)
+                    except _queue.Full:
+                        pass
+                if key == "down":
+                    try:
+                        _move_queue.put_nowait(-_step)
+                    except _queue.Full:
+                        pass
         finally:
+            _move_queue.put(None)
+            worker.join()
             _httpx_logger.setLevel(logging.INFO)
             if sys.platform != "win32":
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

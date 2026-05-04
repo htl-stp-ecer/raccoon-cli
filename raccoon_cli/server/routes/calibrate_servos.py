@@ -105,7 +105,7 @@ async def calibrate_servo_end():
             except (asyncio.CancelledError, Exception):
                 pass
 
-        _session["servo"].disable()
+        _session["servo"].fully_disable_all()
 
         response = ServoCalibrationEndResponse(
             initial_angle=_session["initial_angle"],
