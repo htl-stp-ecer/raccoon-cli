@@ -402,6 +402,7 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
 
         _step = 1.0
         _steps = [0.5, 1.0, 2.0]
+        _current_angle = [start_deg]  # mutable so worker can update it
 
         console.print(f"\n[bold cyan]Jogging {servo_name} · {pos_name}[/bold cyan]  [dim](starting at {start_deg:.1f}°)[/dim]")
         console.print("  [dim]↑ / ↓  move    ← / →  change step    Enter  confirm    Esc/Ctrl+C  quit[/dim]")
@@ -425,6 +426,7 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
                     )
                     current_angle = r.json().get("current_angle")
                     if current_angle is not None:
+                        _current_angle[0] = current_angle
                         offset = current_angle - start_deg
                         sys.stdout.write(f"\r  [{_step:g}°]  Offset: {offset:+.1f}°  (current: {current_angle:.1f}°)  ")
                         sys.stdout.flush()
@@ -454,13 +456,15 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
                 if key == "left":
                     idx = _steps.index(_step)
                     _step = _steps[max(0, idx - 1)]
-                    sys.stdout.write(f"\r  [{_step:g}°]  " + " " * 40)
+                    _ang = _current_angle[0]
+                    sys.stdout.write(f"\r  [{_step:g}°]  Offset: {_ang - start_deg:+.1f}°  (current: {_ang:.1f}°)  ")
                     sys.stdout.flush()
                     continue
                 if key == "right":
                     idx = _steps.index(_step)
                     _step = _steps[min(len(_steps) - 1, idx + 1)]
-                    sys.stdout.write(f"\r  [{_step:g}°]  " + " " * 40)
+                    _ang = _current_angle[0]
+                    sys.stdout.write(f"\r  [{_step:g}°]  Offset: {_ang - start_deg:+.1f}°  (current: {_ang:.1f}°)  ")
                     sys.stdout.flush()
                     continue
                 if key == "up":
@@ -481,7 +485,6 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             sys.stdout.write("\n")
             sys.stdout.flush()
-            logging.getLogger("httpx").setLevel(logging.INFO)
 
         # Always call /end to clean up the session
         try:
