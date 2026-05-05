@@ -186,7 +186,7 @@ async def _ping_until_ready(host: str, console: Console, attempts: int = 6, inte
 
 async def _run_remote(
     ctx: click.Context, project_root: Path, config: dict, args: tuple,
-    dev: bool = False, no_calibrate: bool = False,
+    dev: bool = False, no_calibrate: bool = False, no_codegen: bool = False,
     no_checkpoints: bool = False, skip_missions: set[int] | None = None,
 ) -> None:
     """Run the project on the connected Pi."""
@@ -204,11 +204,12 @@ async def _run_remote(
     from raccoon_cli.commands.sync_cmd import sync_project_interactive
 
     # Run codegen locally before syncing so generated files are included
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-    pipeline = create_pipeline()
-    output_dir = project_root / "src" / "hardware"
-    pipeline.run_all(_resolve_ftmap_paths(config, project_root), output_dir, format_code=True)
+    if not no_codegen:
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        pipeline = create_pipeline()
+        output_dir = project_root / "src" / "hardware"
+        pipeline.run_all(_resolve_ftmap_paths(config, project_root), output_dir, format_code=True)
 
     # Sync project to Pi before running
     if not sync_project_interactive(project_root, console):
@@ -407,7 +408,7 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
 
             if manager.is_connected:
                 # Run remotely
-                asyncio.run(_run_remote(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate, no_checkpoints=no_checkpoints, skip_missions=skip_missions))
+                asyncio.run(_run_remote(ctx, project_root, config, args, dev=dev, no_calibrate=no_calibrate, no_codegen=no_codegen, no_checkpoints=no_checkpoints, skip_missions=skip_missions))
                 return
 
             console.print("[red]Remote execution requested, but no Pi connection is available.[/red]")
