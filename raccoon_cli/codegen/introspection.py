@@ -9,13 +9,21 @@ import inspect
 import logging
 import typing
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("raccoon")
 
+# Process-lifetime cache of synthesised stub classes keyed by fully-qualified name.
+# Ensures identical objects are returned for the same qualname (required for issubclass).
+_stub_class_registry: dict[str, type] = {}
+
 
 def resolve_class(qualname: str) -> type:
-    """Resolve a fully-qualified class name to a class object via real import."""
+    """Resolve a fully-qualified class name to a class object.
+
+    Tries a real import first; falls back to synthesising a class from the
+    installed .pyi stub when only raccoon-stubs (no runtime) is present.
+    """
     if "." not in qualname:
         raise ImportError(f"Cannot resolve simple name '{qualname}' without namespace")
 
@@ -24,8 +32,9 @@ def resolve_class(qualname: str) -> type:
         mod = importlib.import_module(module_name)
         cls = getattr(mod, class_name)
         return cls
-    except (ImportError, AttributeError) as e:
-        raise ImportError(f"Cannot resolve '{qualname}': {e}")
+    except (ImportError, AttributeError):
+        pass
+    return _resolve_class_from_stub(qualname)
 
 
 def qualname_of(cls: type) -> str:
@@ -34,20 +43,140 @@ def qualname_of(cls: type) -> str:
 
 
 def _find_pyi_for_module(module_name: str) -> Optional[Path]:
-    """Find the installed .pyi stub file for a module (e.g. raccoon.hal → hal.pyi)."""
+    """Find the installed .pyi stub file for a module.
+
+    Handles three cases:
+    - Regular .py/.so module: sibling .pyi next to the origin file.
+    - Namespace package (origin=None, has search locations): __init__.pyi in the
+      first matching search location (covers raccoon, raccoon.hal, etc.).
+    - .pyi-only leaf module (no .py file): located via parent's search locations.
+    """
     try:
         spec = importlib.util.find_spec(module_name)
     except (ModuleNotFoundError, ValueError):
+        spec = None
+
+    if spec is not None and spec.origin is not None:
+        origin = Path(spec.origin)
+        stem = origin.stem.split(".")[0]
+        pyi = origin.parent / f"{stem}.pyi"
+        return pyi if pyi.exists() else None
+
+    if spec is not None and spec.submodule_search_locations:
+        for search_path in spec.submodule_search_locations:
+            pyi = Path(search_path) / "__init__.pyi"
+            if pyi.exists():
+                return pyi
         return None
 
-    if spec is None or spec.origin is None:
+    # .pyi-only leaf module or module not found: look via parent's search locations.
+    parts = module_name.rsplit(".", 1)
+    if len(parts) < 2:
         return None
+    parent_name, stem = parts
+    try:
+        parent_spec = importlib.util.find_spec(parent_name)
+    except (ModuleNotFoundError, ValueError):
+        return None
+    if parent_spec is None or not parent_spec.submodule_search_locations:
+        return None
+    for search_path in parent_spec.submodule_search_locations:
+        pyi = Path(search_path) / f"{stem}.pyi"
+        if pyi.exists():
+            return pyi
+    return None
 
-    origin = Path(spec.origin)
-    # Strip .cpython-313-x86_64-linux-gnu to get the bare module stem
-    stem = origin.stem.split(".")[0]
-    pyi = origin.parent / f"{stem}.pyi"
-    return pyi if pyi.exists() else None
+
+def _resolve_pyi_bases(class_node: ast.ClassDef, module_name: str, tree: ast.Module) -> List[type]:
+    """Resolve base classes of a synthesised stub class from the AST import map."""
+    import_map: dict[str, str] = {}
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ImportFrom) and node.names:
+            for alias in node.names:
+                local_name = alias.asname if alias.asname else alias.name
+                if node.level == 0 and node.module:
+                    import_map[local_name] = f"{node.module}.{alias.name}"
+                elif node.level > 0:
+                    parts = module_name.split(".")
+                    base_parts = parts[:-node.level] if node.level <= len(parts) else []
+                    base = ".".join(base_parts)
+                    source_module = f"{base}.{node.module}" if node.module else base
+                    import_map[local_name] = f"{source_module}.{alias.name}"
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                local_name = alias.asname if alias.asname else alias.name
+                import_map[local_name] = alias.name
+
+    bases: List[type] = []
+    for base_expr in class_node.bases:
+        base_str = ast.unparse(base_expr)
+        try:
+            if "." in base_str:
+                bases.append(resolve_class(base_str))
+            elif base_str in import_map:
+                bases.append(resolve_class(import_map[base_str]))
+            elif base_str not in ("object", "ABC"):
+                bases.append(resolve_class(f"{module_name}.{base_str}"))
+        except ImportError:
+            pass
+    return bases
+
+
+def _resolve_class_from_stub(qualname: str) -> type:
+    """Synthesise a class object from an installed .pyi stub file.
+
+    Checks the process-lifetime registry first so repeated calls for the same
+    name return the identical object (required for issubclass correctness).
+    """
+    if qualname in _stub_class_registry:
+        return _stub_class_registry[qualname]
+
+    module_name, class_name = qualname.rsplit(".", 1)
+    pyi = _find_pyi_for_module(module_name)
+    if pyi is None:
+        raise ImportError(
+            f"Cannot resolve '{qualname}': no stub file found for '{module_name}'"
+        )
+
+    try:
+        tree = ast.parse(pyi.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as e:
+        raise ImportError(f"Cannot resolve '{qualname}': failed to parse {pyi}: {e}")
+
+    # Look for a ClassDef with the target name.
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            raw_bases = _resolve_pyi_bases(node, module_name, tree)
+            bases = tuple(raw_bases) if raw_bases else (object,)
+            cls = type(class_name, bases, {"__module__": module_name})
+            _stub_class_registry[qualname] = cls
+            return cls
+
+    # Look for a re-export: `from X import Y [as Z]`
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.ImportFrom) or not node.names:
+            continue
+        for alias in node.names:
+            imported_name = alias.asname if alias.asname else alias.name
+            if imported_name != class_name:
+                continue
+            if node.level == 0 and node.module:
+                source_qualname = f"{node.module}.{alias.name}"
+            elif node.level > 0:
+                parts = module_name.split(".")
+                base_parts = parts[:-node.level] if node.level <= len(parts) else []
+                base = ".".join(base_parts)
+                source_module = f"{base}.{node.module}" if node.module else base
+                source_qualname = f"{source_module}.{alias.name}"
+            else:
+                continue
+            cls = _resolve_class_from_stub(source_qualname)
+            _stub_class_registry[qualname] = cls
+            return cls
+
+    raise ImportError(
+        f"Cannot resolve '{qualname}': class '{class_name}' not found in {pyi}"
+    )
 
 
 def _parse_pyi_tree(cls: type) -> Optional[ast.ClassDef]:
