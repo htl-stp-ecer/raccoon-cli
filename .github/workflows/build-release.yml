@@ -18,7 +18,7 @@ jobs:
     container: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Verify raccoon HAL stubs are available
         run: python3 -c "import raccoon.hal; print('raccoon.hal OK')"
@@ -41,18 +41,18 @@ jobs:
         run: rm -rf web-ide raccoon-transport
 
       - name: Checkout (with submodules)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
@@ -63,7 +63,7 @@ jobs:
         working-directory: web-ide
 
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: pip-${{ hashFiles('pyproject.toml', 'raccoon-transport/python/pyproject.toml') }}
@@ -155,7 +155,7 @@ jobs:
 
       # --- Upload wheel as artifact for the publish job ---
       - name: Upload raccoon-cli wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: raccoon-cli-wheel
           path: dist/raccoon_cli-*.whl
@@ -168,7 +168,7 @@ jobs:
 
     steps:
       - name: Download raccoon-cli wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: raccoon-cli-wheel
           path: dist/
