@@ -20,7 +20,9 @@ def build_literal_expr(v: Any) -> str:
     if isinstance(v, (list, tuple)):
         return "[" + ", ".join(build_literal_expr(x) for x in v) + "]"
     if isinstance(v, dict):
-        items = ", ".join(f"{repr(k)}: {build_literal_expr(val)}" for k, val in v.items())
+        items = ", ".join(
+            f"{repr(k)}: {build_literal_expr(val)}" for k, val in v.items()
+        )
         return "{" + items + "}"
     return repr(v)
 
@@ -38,30 +40,14 @@ class ImportSet:
         self._entries.add((cls.__module__, cls.__name__))
 
     def render(self) -> str:
-        """Render the imports as Python import statements.
-
-        All raccoon.* submodule imports are consolidated into a single
-        'from raccoon import ...' statement for cleaner generated code.
-        """
-        # Consolidate raccoon.* imports into a single 'from raccoon import ...'
-        raccoon_names: Set[str] = set()
+        """Render the imports as Python import statements."""
         by_mod: Dict[str, Set[str]] = {}
 
         for mod, name in self._entries:
-            if mod.startswith("raccoon.") or mod == "raccoon":
-                # Consolidate all raccoon submodule imports
-                raccoon_names.add(name)
-            else:
-                by_mod.setdefault(mod, set()).add(name)
+            by_mod.setdefault(mod, set()).add(name)
 
         lines = []
 
-        # Add consolidated raccoon import first
-        if raccoon_names:
-            names = ", ".join(sorted(raccoon_names))
-            lines.append(f"from raccoon import {names}")
-
-        # Add other imports
         for mod in sorted(by_mod.keys()):
             names = ", ".join(sorted(by_mod[mod]))
             lines.append(f"from {mod} import {names}")
@@ -69,16 +55,18 @@ class ImportSet:
         return "\n".join(lines)
 
 
-def infer_nested_class(parent_cls: type, param_name: str, value: Dict[str, Any]) -> type | None:
+def infer_nested_class(
+    parent_cls: type, param_name: str, value: Dict[str, Any]
+) -> type | None:
     """Try to infer nested class from parent class's __init__ parameter type."""
     return infer_param_type(parent_cls, param_name)
 
 
 def build_constructor_expr(
-        cls: type,
-        data: Dict[str, Any],
-        context: str,
-        imports: ImportSet,
+    cls: type,
+    data: Dict[str, Any],
+    context: str,
+    imports: ImportSet,
 ) -> str:
     """
     Turn dict into 'ClassName(kw=...)' - recursively handles nested classes.
@@ -87,7 +75,9 @@ def build_constructor_expr(
     and checks their types against the class signature.
     """
     if not isinstance(data, dict):
-        raise ValueError(f"{context}: expected mapping for {cls.__name__}, got {type(data).__name__}")
+        raise ValueError(
+            f"{context}: expected mapping for {cls.__name__}, got {type(data).__name__}"
+        )
 
     logger.info(f"Building {cls.__name__} for {context}")
     imports.add(cls)
@@ -97,7 +87,8 @@ def build_constructor_expr(
 
     # Validate required parameters
     required_params = {
-        name for name, param in init_params.items()
+        name
+        for name, param in init_params.items()
         if param.default == inspect.Parameter.empty
     }
 
@@ -131,7 +122,9 @@ def build_constructor_expr(
             nested_cls = infer_nested_class(cls, name, value)
             if nested_cls:
                 logger.info(f"Treating '{name}' as {nested_cls.__name__} constructor")
-                nested_expr = build_constructor_expr(nested_cls, value, f"{context}.{name}", imports)
+                nested_expr = build_constructor_expr(
+                    nested_cls, value, f"{context}.{name}", imports
+                )
                 pieces.append(f"{name}={nested_expr}")
             else:
                 logger.debug(f"Using literal dict for '{name}'")

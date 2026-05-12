@@ -15,6 +15,7 @@ from rich.text import Text
 
 from raccoon_cli.codegen import create_pipeline
 from raccoon_cli.project import ProjectError, load_project_config, require_project
+from raccoon_cli.validation import run_validation_or_exit
 
 logger = logging.getLogger("raccoon")
 
@@ -148,7 +149,7 @@ def _codegen_local(
     default=None,
     help="Override output directory (default: src/hardware/)",
 )
-@click.option("--no-validate", is_flag=True, help="Skip pre-flight project validation.")
+@click.option("--no-validate", is_flag=True, help="Skip pre-codegen validation checks.")
 @click.pass_context
 def codegen_command(
     ctx: click.Context,
@@ -167,14 +168,13 @@ def codegen_command(
         project_root = require_project()
         logger.info(f"Running in project: {project_root}")
 
-        if not no_validate:
-            from raccoon_cli.validation import run_validation_or_exit
-            run_validation_or_exit(console, project_root)
-
         logger.info("Reading config from raccoon.project.yml")
         config = load_project_config(project_root)
         if not isinstance(config, dict):
             raise ProjectError("raccoon.project.yml must be a mapping")
+
+        if not no_validate:
+            run_validation_or_exit(console, project_root, config=config)
 
         _codegen_local(console, project_root, config, only, no_format, output_dir)
 
