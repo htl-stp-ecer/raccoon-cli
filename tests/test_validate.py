@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from raccoon_cli.validate import (
+from raccoon_cli.validation import (
     Severity,
     ValidationResult,
     class_name_to_expected_file,

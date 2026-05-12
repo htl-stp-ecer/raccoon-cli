@@ -368,7 +368,7 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
         logger.info(f"Running in project: {project_root}")
 
         if not no_validate:
-            from raccoon_cli.validate import run_validation_or_exit
+            from raccoon_cli.validation import run_validation_or_exit
             run_validation_or_exit(console, project_root)
 
         logger.info("Reading config from raccoon.project.yml")

@@ -6,7 +6,7 @@ import click
 from rich.console import Console
 
 from raccoon_cli.project import ProjectError, find_project_root
-from raccoon_cli.validate import Severity, validate_project
+from raccoon_cli.validation import Severity, validate_project
 
 
 @click.command(name="validate")
