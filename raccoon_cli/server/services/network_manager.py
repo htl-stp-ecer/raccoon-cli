@@ -331,11 +331,13 @@ class NetworkManager:
             "maxClients": 8,
         }
 
-    def _access_point_connection_names(self) -> set[str]:
-        names = {"STP-Velox-AP"}
+    def _access_point_connection_names(self) -> list[str]:
+        names: list[str] = []
         saved_config = self.get_access_point_config()
         if saved_config and saved_config.get("ssid"):
-            names.add(str(saved_config["ssid"]))
+            names.append(str(saved_config["ssid"]))
+        if "STP-Velox-AP" not in names:
+            names.append("STP-Velox-AP")
         return names
 
     def find_best_wifi_band(self) -> str:
