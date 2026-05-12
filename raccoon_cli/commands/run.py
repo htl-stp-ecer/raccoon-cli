@@ -346,9 +346,9 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
 @click.option("--no-calibrate", is_flag=True, help="Skip calibration steps, use stored values")
 @click.option("--no-codegen", is_flag=True, help="Skip code generation (used by server when codegen was done client-side)")
 @click.option("--no-checkpoints", is_flag=True, help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)")
-@click.option("--skip-validate", is_flag=True, help="Skip pre-flight project validation")
+@click.option("--no-validate", is_flag=True, help="Skip pre-flight project validation.")
 @click.pass_context
-def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool, no_codegen: bool, no_checkpoints: bool, skip_validate: bool) -> None:
+def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync: bool, no_calibrate: bool, no_codegen: bool, no_checkpoints: bool, no_validate: bool) -> None:
     """Run codegen and then execute src.main.
 
     If connected to a Pi, syncs the project and runs remotely.
@@ -367,9 +367,9 @@ def run_command(ctx: click.Context, args: tuple, dev: bool, local: bool, no_sync
         project_root = require_project()
         logger.info(f"Running in project: {project_root}")
 
-        if not skip_validate:
-            from raccoon_cli.commands.validate import run_preflight_validation
-            run_preflight_validation(console, project_root)
+        if not no_validate:
+            from raccoon_cli.validate import run_validation_or_exit
+            run_validation_or_exit(console, project_root)
 
         logger.info("Reading config from raccoon.project.yml")
         config = load_project_config(project_root)

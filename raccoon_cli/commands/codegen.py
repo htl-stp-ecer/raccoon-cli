@@ -148,14 +148,14 @@ def _codegen_local(
     default=None,
     help="Override output directory (default: src/hardware/)",
 )
-@click.option("--skip-validate", is_flag=True, help="Skip pre-flight project validation")
+@click.option("--no-validate", is_flag=True, help="Skip pre-flight project validation.")
 @click.pass_context
 def codegen_command(
     ctx: click.Context,
     only: tuple,
     no_format: bool,
     output_dir: str | None,
-    skip_validate: bool,
+    no_validate: bool,
 ) -> None:
     """Generate Python code from raccoon.project.yml.
 
@@ -167,9 +167,9 @@ def codegen_command(
         project_root = require_project()
         logger.info(f"Running in project: {project_root}")
 
-        if not skip_validate:
-            from raccoon_cli.commands.validate import run_preflight_validation
-            run_preflight_validation(console, project_root)
+        if not no_validate:
+            from raccoon_cli.validate import run_validation_or_exit
+            run_validation_or_exit(console, project_root)
 
         logger.info("Reading config from raccoon.project.yml")
         config = load_project_config(project_root)

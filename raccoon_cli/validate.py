@@ -1,7 +1,9 @@
-"""Project consistency validation — checks config/file/import alignment."""
+"""Project consistency validation — config/file/import drift + basic integrity."""
 
 from __future__ import annotations
 
+import logging
+import py_compile
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -10,6 +12,8 @@ from typing import List, Optional
 
 from raccoon_cli.mission_config import ensure_mission_list, mission_entry_name
 from raccoon_cli.naming import normalize_name
+
+logger = logging.getLogger("raccoon")
 
 
 class Severity(Enum):
@@ -59,10 +63,7 @@ _MAIN_IMPORT_RE = re.compile(r'from \.missions\.(\w+_mission) import (\w+Mission
 
 
 def class_name_to_expected_file(class_name: str) -> Optional[str]:
-    """Convert a mission class name to its expected filename.
-
-    ``M030HelloMission`` → ``m030_hello_mission.py``
-    """
+    """``M030HelloMission`` → ``m030_hello_mission.py``"""
     m = _CLASS_RE.match(class_name)
     if not m:
         return None
@@ -72,10 +73,7 @@ def class_name_to_expected_file(class_name: str) -> Optional[str]:
 
 
 def file_name_to_expected_class(file_name: str) -> Optional[str]:
-    """Convert a mission filename to its expected class name.
-
-    ``m030_hello_mission.py`` → ``M030HelloMission``
-    """
+    """``m030_hello_mission.py`` → ``M030HelloMission``"""
     stem = file_name[:-3] if file_name.endswith(".py") else file_name
     m = _FILE_STEM_RE.match(stem)
     if not m:
@@ -86,8 +84,21 @@ def file_name_to_expected_class(file_name: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Validation checks
+# Individual checks
 # ---------------------------------------------------------------------------
+
+def _check_required_keys(result: ValidationResult, config: dict) -> None:
+    """ERROR when mandatory top-level keys are missing or blank."""
+    for key in ("name", "uuid"):
+        value = config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            result.add(ValidationIssue(
+                severity=Severity.ERROR,
+                code="missing_required_key",
+                message=f"Missing required project key: '{key}'",
+                hint=f"Add '{key}' to raccoon.project.yml",
+            ))
+
 
 def _check_config_vs_files(
     result: ValidationResult,
@@ -141,13 +152,13 @@ def _check_main_imports(
     missions_dir: Path,
     main_py: Path,
 ) -> None:
-    """Check main.py imports against files and config."""
+    """Check main.py imports against files on disk and config."""
     if not main_py.exists():
         return
     content = main_py.read_text(encoding="utf-8")
     for m in _MAIN_IMPORT_RE.finditer(content):
-        module_name = m.group(1)   # e.g. m030_hello_mission
-        class_name = m.group(2)    # e.g. M030HelloMission
+        module_name = m.group(1)
+        class_name = m.group(2)
         file_name = f"{module_name}.py"
 
         if not (missions_dir / file_name).exists():
@@ -167,12 +178,53 @@ def _check_main_imports(
             ))
 
 
+def _check_python_compile(
+    result: ValidationResult,
+    project_root: Path,
+) -> None:
+    """ERROR for any .py file under src/ that fails to compile."""
+    src_root = project_root / "src"
+    if not src_root.exists():
+        result.add(ValidationIssue(
+            severity=Severity.WARNING,
+            code="no_src_dir",
+            message="No src/ directory found; skipping Python compile checks",
+        ))
+        return
+
+    for py_file in sorted(src_root.rglob("*.py")):
+        if "__pycache__" in py_file.parts:
+            continue
+        try:
+            py_compile.compile(str(py_file), doraise=True)
+        except py_compile.PyCompileError as exc:
+            rel = py_file.relative_to(project_root)
+            result.add(ValidationIssue(
+                severity=Severity.ERROR,
+                code="python_compile_error",
+                message=f"Syntax error in {rel}: {exc.msg}",
+                hint="Fix the syntax error before running",
+            ))
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def validate_project(project_root: Path) -> ValidationResult:
-    """Run all project consistency checks and return a structured result."""
+def validate_project(
+    project_root: Path,
+    *,
+    python_compile: bool = True,
+) -> ValidationResult:
+    """Run all project consistency checks and return a structured result.
+
+    Checks performed:
+    - Required config keys (name, uuid)
+    - Config entries → mission files on disk
+    - Mission files on disk → config entries
+    - main.py imports → files + config
+    - Python compile check for src/**/*.py (optional)
+    """
     result = ValidationResult()
 
     try:
@@ -186,12 +238,13 @@ def validate_project(project_root: Path) -> ValidationResult:
         ))
         return result
 
+    _check_required_keys(result, config)
+
     missions_dir = project_root / "src" / "missions"
     main_py = project_root / "src" / "main.py"
 
-    mission_list = ensure_mission_list(config)
     config_classes: set[str] = set()
-    for entry in mission_list:
+    for entry in ensure_mission_list(config):
         name = mission_entry_name(entry)
         if name:
             config_classes.add(name)
@@ -200,4 +253,32 @@ def validate_project(project_root: Path) -> ValidationResult:
     _check_files_vs_config(result, config_classes, missions_dir)
     _check_main_imports(result, config_classes, missions_dir, main_py)
 
+    if python_compile:
+        _check_python_compile(result, project_root)
+
     return result
+
+
+def run_validation_or_exit(
+    console,
+    project_root: Path,
+    *,
+    python_compile: bool = True,
+) -> None:
+    """Run validation and abort with SystemExit(1) if any errors are found."""
+    result = validate_project(project_root, python_compile=python_compile)
+
+    for issue in result.warnings:
+        console.print(f"[yellow]⚠ validate: {issue.message}[/yellow]")
+        if issue.hint:
+            console.print(f"  [dim]{issue.hint}[/dim]")
+
+    if result.has_errors:
+        console.print()
+        for issue in result.errors:
+            console.print(f"[red]✗ validate: {issue.message}[/red]")
+            if issue.hint:
+                console.print(f"  [dim]{issue.hint}[/dim]")
+        console.print()
+        console.print("[red]Project validation failed. Run 'raccoon validate' for details.[/red]")
+        raise SystemExit(1)
