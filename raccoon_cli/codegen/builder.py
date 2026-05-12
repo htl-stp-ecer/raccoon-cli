@@ -48,10 +48,11 @@ def _constructor_node(
 
     init_params = get_init_params(cls)
 
+    _variadic = {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
     required_params = {
         name
         for name, param in init_params.items()
-        if param.default == inspect.Parameter.empty
+        if param.default == inspect.Parameter.empty and param.kind not in _variadic
     }
     provided_params = set(data.keys())
     missing_params = required_params - provided_params
@@ -63,7 +64,7 @@ def _constructor_node(
             f"Provided: {', '.join(sorted(provided_params)) if provided_params else 'none'}"
         )
 
-    valid_params = set(init_params.keys())
+    valid_params = {n for n, p in init_params.items() if p.kind not in _variadic}
     unknown_params = provided_params - valid_params
     if unknown_params:
         logger.warning(

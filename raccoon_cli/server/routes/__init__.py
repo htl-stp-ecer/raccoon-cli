@@ -9,5 +9,6 @@ from raccoon_cli.server.routes.network import router as network_router
 from raccoon_cli.server.routes.steps import router as steps_router
 from raccoon_cli.server.routes.logs import router as logs_router
 from raccoon_cli.server.routes.version import router as version_router
+from raccoon_cli.server.routes.arm import router as arm_router
 
-__all__ = ["health_router", "commands_router", "projects_router", "hardware_router", "device_router", "network_router", "steps_router", "logs_router", "version_router"]
+__all__ = ["health_router", "commands_router", "projects_router", "hardware_router", "device_router", "network_router", "steps_router", "logs_router", "version_router", "arm_router"]

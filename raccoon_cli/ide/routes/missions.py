@@ -8,8 +8,6 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Body, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, field_validator
 
-from raccoon_cli.ide.core.project_code_gen import ProjectCodeGen
-from raccoon_cli.ide.core.naming import normalize_name
 from raccoon_cli.ide.schemas.mission import DiscoveredMission
 from raccoon_cli.ide.schemas.mission_detail import ParsedMission
 from raccoon_cli.ide.schemas.simulation import MissionSimulationData, ProjectSimulationData
@@ -65,11 +63,6 @@ router = APIRouter()
 def get_mission_service() -> MissionService:
     """Dependency injection for MissionService - will be overridden by app."""
     raise NotImplementedError("MissionService dependency not configured")
-
-
-def get_project_codegen() -> ProjectCodeGen:
-    """Dependency injection for ProjectCodeGen - will be overridden by app."""
-    raise NotImplementedError("ProjectCodeGen dependency not configured")
 
 
 @router.get("/{project_uuid}", response_model=List[DiscoveredMission])
@@ -169,14 +162,13 @@ async def save_mission_source(
 async def create_mission(
         project_uuid: UUID,
         request: CreateMissionRequest,
-        project_codegen: ProjectCodeGen = Depends(get_project_codegen),
+        svc: MissionService = Depends(get_mission_service),
 ):
     """Create a new mission in the project."""
     try:
-        normalized_name = normalize_name(request.name)
-        project_codegen.add_mission_to_project(project_uuid, normalized_name)
-        logger.info(f"Successfully created mission '{normalized_name.pascal}' for project {project_uuid}")
-        return {"success": True, "message": f"Mission '{normalized_name.pascal}' created successfully"}
+        await asyncio.to_thread(svc.create_mission, project_uuid, request.name)
+        logger.info(f"Successfully created mission '{request.name}' for project {project_uuid}")
+        return {"success": True, "message": f"Mission '{request.name}' created successfully"}
     except FileExistsError as e:
         logger.warning(f"Mission '{request.name}' already exists in project {project_uuid}: {str(e)}")
         raise HTTPException(status_code=409, detail=f"Mission '{request.name}' already exists in this project")
