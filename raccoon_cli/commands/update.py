@@ -550,13 +550,13 @@ def _update_pi_tarball(
 
 
 def _run_post_install(console: Console, ssh_client) -> None:
-    """Run `raccoon-server post-install` on the Pi after any Pi package update."""
+    """Run Pi post-update migrations after any Pi package update."""
     console.print()
     console.print("[bold]Running post-install on Pi...[/bold]")
 
     try:
         _, stdout, stderr = ssh_client.exec_command(
-            "sudo raccoon-server post-install", timeout=120
+            "sudo python3 -m raccoon_cli.server.cli post-install", timeout=120
         )
         exit_code = stdout.channel.recv_exit_status()
         out = stdout.read().decode(errors="replace").strip()

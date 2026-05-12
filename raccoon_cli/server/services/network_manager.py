@@ -190,9 +190,37 @@ class NetworkManager:
         return self._load_state().get("network_mode", "client")
 
     def set_network_mode(self, mode: str) -> None:
-        state = self._load_state()
-        state["network_mode"] = mode
-        self._save_state(state)
+        if mode == "access_point":
+            if not self.is_access_point_active():
+                self.start_access_point(self._default_access_point_config())
+            else:
+                self._persist_network_mode("access_point")
+            return
+
+        if mode == "lan_only":
+            self.enable_lan_only_mode()
+            return
+
+        if self.is_access_point_active():
+            self.stop_access_point()
+        else:
+            self._ensure_wifi_enabled()
+        self._persist_network_mode("client")
+
+    def restore_persisted_network_mode(self) -> None:
+        mode = self.get_network_mode()
+        if mode == "access_point":
+            if not self.is_access_point_active():
+                self.start_access_point(self._default_access_point_config())
+            else:
+                self._persist_network_mode("access_point")
+            return
+
+        if mode == "lan_only":
+            self.enable_lan_only_mode()
+            return
+
+        self._persist_network_mode("client")
 
     def start_access_point(self, config: dict[str, Any]) -> dict[str, Any]:
         self.stop_access_point()
@@ -230,12 +258,13 @@ class NetworkManager:
 
         self._run(args)
         self.save_access_point_config(config)
-        self.set_network_mode("access_point")
+        self._persist_network_mode("access_point")
         return config
 
     def stop_access_point(self) -> None:
-        self._run(["nmcli", "connection", "down", "STP-Velox-AP"], check=False)
-        self._run(["nmcli", "connection", "delete", "STP-Velox-AP"], check=False)
+        for connection_name in self._access_point_connection_names():
+            self._run(["nmcli", "connection", "down", connection_name], check=False)
+            self._run(["nmcli", "connection", "delete", connection_name], check=False)
         self._reset_wifi_interface()
 
     def is_access_point_active(self) -> bool:
@@ -243,10 +272,42 @@ class NetworkManager:
             ["nmcli", "-t", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"],
             check=False,
         )
-        return any(
-            "STP-Velox-AP" in line and "wifi" in line
-            for line in result.stdout.splitlines()
+        if result.returncode == 0:
+            active_names = self._access_point_connection_names()
+
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    continue
+                parts = line.split(":")
+                name = parts[0].strip() if parts else ""
+                connection_type = parts[1].strip().lower() if len(parts) > 1 else ""
+                if name in active_names and (
+                    "wifi" in connection_type or "wireless" in connection_type or "802-11" in connection_type
+                ):
+                    return True
+
+        device_result = self._run(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"],
+            check=False,
         )
+        if device_result.returncode != 0:
+            return False
+
+        active_names = self._access_point_connection_names()
+
+        for line in device_result.stdout.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(":")
+            device_type = parts[1].strip().lower() if len(parts) > 1 else ""
+            state = parts[2].strip().lower() if len(parts) > 2 else ""
+            connection = parts[3].strip() if len(parts) > 3 else ""
+            if device_type != "wifi":
+                continue
+            if state == "connected" and connection in active_names:
+                return True
+
+        return False
 
     def get_access_point_config(self) -> dict[str, Any] | None:
         return self._load_state().get("access_point_config")
@@ -255,6 +316,27 @@ class NetworkManager:
         state = self._load_state()
         state["access_point_config"] = config
         self._save_state(state)
+
+    def _default_access_point_config(self) -> dict[str, Any]:
+        saved_config = self.get_access_point_config()
+        if saved_config is not None:
+            return saved_config
+        return {
+            "ssid": "STP-Velox-Robot",
+            "password": "Robot123!",
+            "band": self.find_best_wifi_band(),
+            "channel": 0,
+            "encryptionType": "wpa3Personal",
+            "hidden": False,
+            "maxClients": 8,
+        }
+
+    def _access_point_connection_names(self) -> set[str]:
+        names = {"STP-Velox-AP"}
+        saved_config = self.get_access_point_config()
+        if saved_config and saved_config.get("ssid"):
+            names.add(str(saved_config["ssid"]))
+        return names
 
     def find_best_wifi_band(self) -> str:
         result = self._run(["iw", "phy", "phy0", "info"], check=False)
@@ -317,11 +399,11 @@ class NetworkManager:
             )
         self._run(["nmcli", "radio", "wifi", "off"])
         self._activate_first_ethernet_connection()
-        self.set_network_mode("lan_only")
+        self._persist_network_mode("lan_only")
 
     def disable_lan_only_mode(self) -> None:
         self._run(["nmcli", "radio", "wifi", "on"])
-        self.set_network_mode("client")
+        self._persist_network_mode("client")
 
     def is_lan_only_mode_active(self) -> bool:
         result = self._run(["nmcli", "radio", "wifi"], check=False)
@@ -504,6 +586,11 @@ class NetworkManager:
     def _save_state(self, state: dict[str, Any]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.write_text(json.dumps(state, indent=2, sort_keys=True))
+
+    def _persist_network_mode(self, mode: str) -> None:
+        state = self._load_state()
+        state["network_mode"] = mode
+        self._save_state(state)
 
     def _run(self, command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         use_sudo = command[0] in {"nmcli", "ip", "iw", "iwlist"}

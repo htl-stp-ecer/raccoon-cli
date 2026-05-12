@@ -352,12 +352,31 @@ async def get_table_map(
     project_uuid: UUID,
     svc: ProjectService = Depends(get_project_service),
 ):
-    """Get table map for a project."""
+    """Get table map for a project.
+
+    If physical.table_map is a file path, reads and returns the file content.
+    If it is inline data, returns it directly.
+    """
+    import json
+
     config = svc.project_repository.read_project_config(project_uuid)
     if not config:
         return {"map": None}
     physical = config.get("robot", {}).get("physical", {})
-    return {"map": physical.get("table_map")}
+    table_map = physical.get("table_map")
+
+    if isinstance(table_map, str):
+        project_path = svc.get_project_path(project_uuid)
+        map_file = project_path / table_map
+        if not map_file.exists():
+            return {"map": None}
+        try:
+            with open(map_file, "r", encoding="utf-8") as f:
+                return {"map": json.load(f)}
+        except Exception:
+            return {"map": None}
+
+    return {"map": table_map}
 
 
 @router.put("/{project_uuid}/table-map")
@@ -366,8 +385,30 @@ async def update_table_map(
     request: TableMapRequest,
     svc: ProjectService = Depends(get_project_service),
 ):
-    """Update table map for a project."""
+    """Update table map for a project.
 
+    If physical.table_map is already a file path, writes the map data to that file
+    and preserves the path reference in robot.yml. Otherwise saves inline.
+    """
+    import json
+
+    config = svc.project_repository.read_project_config(project_uuid)
+    if config is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    physical = config.get("robot", {}).get("physical", {})
+    existing_map_ref = physical.get("table_map")
+
+    if isinstance(existing_map_ref, str):
+        # Write map data to the referenced file, keep path in robot.yml unchanged.
+        project_path = svc.get_project_path(project_uuid)
+        map_file = project_path / existing_map_ref
+        map_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(map_file, "w", encoding="utf-8") as f:
+            json.dump(request.model_dump(), f, indent=2)
+        return {"success": True}
+
+    # Inline fallback: save data directly into robot.yml.
     def mutate(config: dict) -> dict:
         config = _ensure_physical_section(config)
         if request.lines:

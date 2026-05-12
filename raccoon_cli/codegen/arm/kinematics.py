@@ -58,6 +58,7 @@ def build_chain(
     all_definitions: dict[str, Any],
     *,
     field_name: str = "arm",
+    tip_offset_cm: list[float] | None = None,
 ):
     """Build an ikpy ``Chain`` plus per-joint metadata.
 
@@ -83,7 +84,11 @@ def build_chain(
 
     chain_links = [ikpy_mod.link.OriginLink()]
     joint_mappings: list[dict[str, Any]] = []
-    prev_translation = [0.0, 0.0, 0.0]
+    # Translation that the *next* link should inherit if it doesn't specify an
+    # explicit offset_cm. Used as a backwards-compat shortcut: setting
+    # length_cm=L on joint i means joint i+1 (or the end-effector) defaults to
+    # sitting at [L, 0, 0] in joint i's output frame.
+    fallback_next_translation = [0.0, 0.0, 0.0]
 
     for i, joint_cfg in enumerate(joints_cfg):
         length_cm = joint_cfg.get("length_cm")
@@ -113,30 +118,64 @@ def build_chain(
             )
 
         axis = list(joint_cfg.get("axis", [0, 1, 0]))
+        mount_rpy_deg = list(joint_cfg.get("mount_rpy_deg", [0.0, 0.0, 0.0]))
+        mount_rpy_rad = [math.radians(float(v)) for v in mount_rpy_deg]
+
+        # Offset from the previous link's output frame to this joint's pivot.
+        # Explicit offset_cm wins; otherwise fall back to the previous joint's
+        # length-along-X shortcut.
+        offset_cm_cfg = joint_cfg.get("offset_cm")
+        if offset_cm_cfg is not None:
+            if len(offset_cm_cfg) != 3:
+                raise ValueError(
+                    f"definitions.{field_name}.joints[{i}].offset_cm: "
+                    f"expected 3 values [x,y,z], got {len(offset_cm_cfg)}"
+                )
+            origin_translation = [float(v) / 100.0 for v in offset_cm_cfg]
+        else:
+            origin_translation = list(fallback_next_translation)
 
         link = ikpy_mod.link.URDFLink(
             name=f"joint_{i}",
-            origin_translation=prev_translation,
-            origin_orientation=[0, 0, 0],
+            origin_translation=origin_translation,
+            origin_orientation=mount_rpy_rad,
             rotation=axis,
             bounds=bounds,
         )
         chain_links.append(link)
-        prev_translation = [length_m, 0.0, 0.0]
+        fallback_next_translation = [length_m, 0.0, 0.0]
         joint_mappings.append(
             {
                 "joint_range": joint_range,
                 "servo_range": servo_range,
                 "servo_ref": servo_ref,
                 "axis": axis,
+                "mount_rpy_deg": [float(v) for v in mount_rpy_deg],
                 "length_cm": float(length_cm),
+                "offset_cm": (
+                    [float(v) for v in offset_cm_cfg]
+                    if offset_cm_cfg is not None
+                    else None
+                ),
             }
         )
+
+    # End-effector offset: explicit tip_offset_cm wins, else previous joint's
+    # length-along-X.
+    if tip_offset_cm is not None:
+        if len(tip_offset_cm) != 3:
+            raise ValueError(
+                f"definitions.{field_name}.tip_offset_cm: "
+                f"expected 3 values [x,y,z], got {len(tip_offset_cm)}"
+            )
+        ee_translation = [float(v) / 100.0 for v in tip_offset_cm]
+    else:
+        ee_translation = list(fallback_next_translation)
 
     chain_links.append(
         ikpy_mod.link.URDFLink(
             name="end_effector",
-            origin_translation=prev_translation,
+            origin_translation=ee_translation,
             origin_orientation=[0, 0, 0],
             rotation=[0, 0, 0],
         )
@@ -211,6 +250,49 @@ def forward_kinematics(chain, joint_angles_deg: list[float]) -> list[list[float]
             frames.append([float(t[0, 3] * 100), float(t[1, 3] * 100), float(t[2, 3] * 100)])
 
     return frames
+
+
+def joint_world_axes(
+    chain, joint_angles_deg: list[float]
+) -> list[dict[str, list[float]]]:
+    """Return each active joint's pivot position (cm) and rotation axis (unit
+    vector) in world coordinates, for visualization.
+
+    Output: ``[{"origin_cm": [x,y,z], "axis": [ax,ay,az]}, ...]`` with one
+    entry per active joint, in chain order.
+    """
+    _, np = require_ikpy()
+    full = _expand_active_angles(chain, joint_angles_deg)
+    transforms = chain.forward_kinematics(full, full_kinematics=True)
+
+    out: list[dict[str, list[float]]] = []
+    # Active joints sit at indices 1..n in chain.links; their frame in
+    # `transforms` is the joint's *output* frame. The rotation axis lives in
+    # the link's local frame (before its own rotation) — but ikpy applies the
+    # joint rotation about that axis, so the axis direction in the parent's
+    # frame is the same as in the joint's own frame after the joint rotation
+    # (rotating around your own axis preserves that axis). So we transform the
+    # axis by the joint's frame rotation.
+    for i, link in enumerate(chain.links[1:-1], start=1):
+        rot_axis = getattr(link, "rotation", None)
+        if rot_axis is None:
+            continue
+        t = transforms[i]
+        # 3x3 rotation part times axis vector
+        R = t[:3, :3]
+        a = np.array([float(rot_axis[0]), float(rot_axis[1]), float(rot_axis[2])])
+        world_axis = R @ a
+        n = float(np.linalg.norm(world_axis))
+        if n > 1e-9:
+            world_axis = world_axis / n
+        origin = t[:3, 3] * 100.0  # cm
+        out.append(
+            {
+                "origin_cm": [float(origin[0]), float(origin[1]), float(origin[2])],
+                "axis": [float(world_axis[0]), float(world_axis[1]), float(world_axis[2])],
+            }
+        )
+    return out
 
 
 def end_effector_cm(chain, joint_angles_deg: list[float]) -> list[float]:
