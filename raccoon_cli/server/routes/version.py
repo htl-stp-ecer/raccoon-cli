@@ -63,5 +63,5 @@ async def get_versions() -> dict:
         "raccoon-transport": _pip_version("raccoon-transport"),
         "stm32-data-reader": _binary_version(_STM32_BINARY),
         "raccoon-cam": _binary_version(_CAM_BINARY),
-        "botui": _file_version(_BOTUI_VERSION_FILE),
+        "ui": _file_version(_BOTUI_VERSION_FILE),
     }

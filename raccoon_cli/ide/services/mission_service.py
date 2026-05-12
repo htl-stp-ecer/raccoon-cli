@@ -62,6 +62,10 @@ class MissionService:
         # Breakpoint wait handles per project (simulation/debug mode only)
         self._breakpoint_waiters: dict[UUID, asyncio.Event] = {}
 
+    def create_mission(self, project_uuid: UUID, mission_name: str) -> None:
+        """Create a mission via the shared CLI-backed repository path."""
+        self._repo.create_mission(project_uuid, mission_name)
+
     @staticmethod
     def build_step_timeline(mission: ParsedMission | None) -> List[Dict[str, Any]]:
         """Flatten mission steps into a sequential list carrying only index information."""

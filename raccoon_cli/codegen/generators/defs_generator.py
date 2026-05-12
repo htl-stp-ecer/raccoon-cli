@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import json
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import BaseGenerator
 from ..builder import build_constructor_expr, build_literal_expr
@@ -16,13 +17,32 @@ logger = logging.getLogger("raccoon")
 # SensorGroup field references (emitted as bare attribute names, not strings).
 _SENSOR_GROUP_REF_KEYS = frozenset({"left", "right"})
 # SensorGroup optional numeric parameters.
-_SENSOR_GROUP_PARAM_KEYS = frozenset({
-    "threshold", "speed",
-    "follow_speed", "follow_kp", "follow_ki", "follow_kd",
-})
+_SENSOR_GROUP_PARAM_KEYS = frozenset(
+    {
+        "threshold",
+        "speed",
+        "follow_speed",
+        "follow_kp",
+        "follow_ki",
+        "follow_kd",
+    }
+)
 # Extra keys on wait_for_light_sensor that are stripped from the hardware
 # constructor and emitted as separate Defs class attributes instead.
 _WFL_EXTRA_KEYS = frozenset({"mode", "drop_fraction"})
+
+# Registry of handlers for special hardware types that cannot go through the
+# standard yaml_resolver path.  Signature: (field_name, hw_cfg, all_defs, imports) -> expr_str
+# Add new entries here instead of adding more if/elif branches in generate_body.
+_SPECIAL_TYPE_BUILDERS: Dict[str, Callable] = {}
+
+
+class _ImportProxy:
+    """Minimal class-like object used when runtime imports lag behind stubs."""
+
+    def __init__(self, module: str, name: str):
+        self.__module__ = module
+        self.__name__ = name
 
 
 class DefsGenerator(BaseGenerator):
@@ -31,18 +51,41 @@ class DefsGenerator(BaseGenerator):
     def __init__(self, class_name: str = "Defs"):
         super().__init__(class_name)
         self.resolver = create_hardware_resolver()
-        self._imu_class = resolve_class("raccoon.IMU")
-        self._analog_sensor_class = resolve_class("raccoon.AnalogSensor")
+        self._imu_class = self._resolve_import_class(
+            ("raccoon.IMU", "raccoon.hal.IMU"), "raccoon", "IMU"
+        )
+        self._analog_sensor_class = self._resolve_import_class(
+            ("raccoon.AnalogSensor", "raccoon.hal.AnalogSensor"),
+            "raccoon",
+            "AnalogSensor",
+        )
         self._analog_sensor_fields: list[str] = []
 
     def get_output_filename(self) -> str:
         return "defs.py"
+
+    @staticmethod
+    def _resolve_import_class(
+        candidates: Tuple[str, ...], fallback_module: str, fallback_name: str
+    ) -> type:
+        for qualname in candidates:
+            try:
+                return resolve_class(qualname)
+            except ImportError:
+                continue
+        logger.info(
+            "Could not resolve %s from runtime imports; using generated import fallback",
+            fallback_name,
+        )
+        return _ImportProxy(fallback_module, fallback_name)  # type: ignore[return-value]
 
     def extract_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         definitions = config.get("definitions")
         if definitions is None:
             logger.warning("No 'definitions' key found in config")
             return {}
+        if not isinstance(definitions, dict):
+            raise ValueError("'definitions' must be a mapping")
         return definitions
 
     def validate_config(self, data: Dict[str, Any]) -> None:
@@ -105,10 +148,11 @@ class DefsGenerator(BaseGenerator):
 
             type_name = hw_cfg.get("type", "")
 
-            if type_name == "SensorGroup":
-                hw_expr = self._build_sensor_group_expr(hw_cfg)
+            special_builder = _SPECIAL_TYPE_BUILDERS.get(type_name)
+            if special_builder is not None:
+                hw_expr = special_builder(field_name, hw_cfg, data, self.imports)
                 attributes.append((field_name, hw_expr))
-                logger.info(f"Generated SensorGroup '{field_name}'")
+                logger.info(f"Generated {type_name} '{field_name}'")
                 continue
 
             preset_info = self._extract_servo_preset(hw_cfg)
@@ -120,10 +164,14 @@ class DefsGenerator(BaseGenerator):
 
             resolved_cfg = {k: v for k, v in hw_cfg.items() if k not in strip_keys}
             try:
-                hw_class, hw_params = self.resolver.resolve_from_config(resolved_cfg, type_key="type")
-                logger.info(f"Resolved type '{type_name}' to {hw_class.__name__} for {field_name}")
+                hw_class, hw_params = self.resolver.resolve_from_config(
+                    resolved_cfg, type_key="type"
+                )
+                logger.info(
+                    f"Resolved type '{type_name}' to {hw_class.__name__} for {field_name}"
+                )
             except ValueError as e:
-                raise ValueError(f"definitions.{field_name}: {e}")
+                raise ValueError(f"definitions.{field_name}: {e}") from e
 
             if self._is_analog_sensor(hw_class):
                 self._analog_sensor_fields.append(field_name)
@@ -136,7 +184,9 @@ class DefsGenerator(BaseGenerator):
             if preset_info is not None:
                 positions, offset = preset_info
                 hw_expr = self._build_servo_preset_expr(hw_expr, positions, offset)
-                logger.info(f"Wrapping '{field_name}' as ServoPreset with {len(positions)} positions (offset={offset})")
+                logger.info(
+                    f"Wrapping '{field_name}' as ServoPreset with {len(positions)} positions (offset={offset})"
+                )
 
             attributes.append((field_name, hw_expr))
 
@@ -146,7 +196,10 @@ class DefsGenerator(BaseGenerator):
                 wfl_extra_attrs.append(("wait_for_light_mode", f'"{wfl_mode}"'))
                 if wfl_drop is not None:
                     wfl_extra_attrs.append(
-                        ("wait_for_light_drop_fraction", build_literal_expr(float(wfl_drop)))
+                        (
+                            "wait_for_light_drop_fraction",
+                            build_literal_expr(float(wfl_drop)),
+                        )
                     )
                 logger.info(
                     f"WFL config: mode={wfl_mode}"
@@ -160,7 +213,15 @@ class DefsGenerator(BaseGenerator):
         return ClassBuilder.build_simple_class(self.class_name, attributes)
 
     @staticmethod
-    def _extract_servo_preset(hw_cfg: Dict[str, Any]) -> Optional[Tuple[Dict[str, float], float]]:
+    def _extract_servo_preset(
+        hw_cfg: Dict[str, Any],
+    ) -> Optional[Tuple[Dict[str, float], float]]:
+        """
+        Check if a hardware definition includes servo preset positions.
+
+        Returns:
+            (positions_dict, offset) if positions are defined, None otherwise.
+        """
         if hw_cfg.get("type") != "Servo":
             return None
         positions = hw_cfg.get("positions")
@@ -175,15 +236,21 @@ class DefsGenerator(BaseGenerator):
         positions: Dict[str, float],
         offset: float,
     ) -> str:
-        preset_cls = resolve_class("raccoon.ServoPreset")
+        preset_cls = self._resolve_import_class(
+            ("raccoon.ServoPreset", "raccoon.step.servo.preset.ServoPreset"),
+            "raccoon.step.servo.preset",
+            "ServoPreset",
+        )
         self.imports.add(preset_cls)
-        positions_literal = build_literal_expr(positions)
+        positions_literal = json.dumps(positions)
         if offset:
             return f"ServoPreset({servo_expr}, positions={positions_literal}, offset={build_literal_expr(offset)})"
         return f"ServoPreset({servo_expr}, positions={positions_literal})"
 
     def _build_imu_expr(self, params: Dict[str, Any]) -> str:
-        pieces = [f"{name}={build_literal_expr(value)}" for name, value in params.items()]
+        pieces = [
+            f"{name}={build_literal_expr(value)}" for name, value in params.items()
+        ]
         return "IMU(" + ", ".join(pieces) + ")"
 
     def _is_analog_sensor(self, hw_class: type) -> bool:
@@ -211,22 +278,6 @@ class DefsGenerator(BaseGenerator):
                     f"Available: {', '.join(sorted(hw_fields))}"
                 )
 
-    def _build_sensor_group_expr(self, hw_cfg: Dict[str, Any]) -> str:
-        sg_cls = resolve_class("raccoon.SensorGroup")
-        self.imports.add(sg_cls)
-
-        pieces: List[str] = []
-        for key in ("left", "right"):
-            ref = hw_cfg.get(key)
-            if ref is not None:
-                pieces.append(f"{key}={ref}")
-        for key in sorted(_SENSOR_GROUP_PARAM_KEYS):
-            val = hw_cfg.get(key)
-            if val is not None:
-                pieces.append(f"{key}={build_literal_expr(val)}")
-
-        return "SensorGroup(" + ", ".join(pieces) + ")"
-
     def generate_footer(self) -> str:
         instance_name = self.class_name[0].lower() + self.class_name[1:]
         return (
@@ -236,3 +287,41 @@ class DefsGenerator(BaseGenerator):
 
     def generate_imports(self) -> str:
         return super().generate_imports()
+
+
+# ---------------------------------------------------------------------------
+# Special-type handler functions — registered in _SPECIAL_TYPE_BUILDERS above.
+# Add new entries here; never add if/elif branches inside generate_body.
+# Signature: (field_name, hw_cfg, all_defs, imports) -> expr_str
+# ---------------------------------------------------------------------------
+
+def _build_sensor_group_expr(
+    field_name: str, hw_cfg: Dict[str, Any], all_defs: Dict[str, Any], imports: Any
+) -> str:
+    sg_cls = DefsGenerator._resolve_import_class(
+        ("raccoon.SensorGroup", "raccoon.step.motion.sensor_group.SensorGroup"),
+        "raccoon.step.motion.sensor_group",
+        "SensorGroup",
+    )
+    imports.add(sg_cls)
+    pieces: List[str] = []
+    for key in ("left", "right"):
+        ref = hw_cfg.get(key)
+        if ref is not None:
+            pieces.append(f"{key}={ref}")
+    for key in sorted(_SENSOR_GROUP_PARAM_KEYS):
+        val = hw_cfg.get(key)
+        if val is not None:
+            pieces.append(f"{key}={build_literal_expr(val)}")
+    return "SensorGroup(" + ", ".join(pieces) + ")"
+
+
+def _build_arm_chain_expr(
+    field_name: str, hw_cfg: Dict[str, Any], all_defs: Dict[str, Any], imports: Any
+) -> str:
+    from .arm_chain_generator import ArmChainGenerator  # noqa: PLC0415
+    return ArmChainGenerator(field_name, hw_cfg, all_defs, imports).build_expr()
+
+
+_SPECIAL_TYPE_BUILDERS["SensorGroup"] = _build_sensor_group_expr
+_SPECIAL_TYPE_BUILDERS["ArmChain"] = _build_arm_chain_expr

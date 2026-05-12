@@ -2,12 +2,14 @@
 
 from .base import BaseGenerator
 from .registry import GeneratorRegistry
+from .arm_chain_generator import ArmChainGenerator
 from .defs_generator import DefsGenerator
 from .robot_generator import RobotGenerator
 
 __all__ = [
-    'BaseGenerator',
-    'GeneratorRegistry',
-    'DefsGenerator',
-    'RobotGenerator',
+    "ArmChainGenerator",
+    "BaseGenerator",
+    "DefsGenerator",
+    "GeneratorRegistry",
+    "RobotGenerator",
 ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from typing import List, Tuple
 
 
@@ -14,29 +15,13 @@ class ClassBuilder:
     """
 
     def __init__(self, class_name: str, base_classes: List[str] = None):
-        """
-        Initialize the class builder.
-
-        Args:
-            class_name: Name of the class to build
-            base_classes: Optional list of base class names
-        """
         self.class_name = class_name
         self.base_classes = base_classes or []
         self._class_attrs: List[Tuple[str, str]] = []
         self._instance_attrs: List[Tuple[str, str, str]] = []
 
     def add_class_attribute(self, name: str, expression: str) -> ClassBuilder:
-        """
-        Add a class-level attribute.
-
-        Args:
-            name: Attribute name
-            expression: Python expression for the value
-
-        Returns:
-            Self for chaining
-        """
+        """Add a class-level attribute."""
         if not name.isidentifier():
             raise ValueError(f"'{name}' is not a valid Python identifier")
         self._class_attrs.append((name, expression))
@@ -45,70 +30,77 @@ class ClassBuilder:
     def add_instance_attribute(
         self, name: str, type_hint: str, expression: str
     ) -> ClassBuilder:
-        """
-        Add an instance attribute (typically in __init__).
-
-        Args:
-            name: Attribute name
-            type_hint: Type hint string
-            expression: Python expression for the value
-
-        Returns:
-            Self for chaining
-        """
+        """Add an instance attribute (typically in __init__)."""
         if not name.isidentifier():
             raise ValueError(f"'{name}' is not a valid Python identifier")
         self._instance_attrs.append((name, type_hint, expression))
         return self
 
     def build(self) -> str:
-        """
-        Build the class definition.
+        """Build the class definition as a Python source string."""
+        body: list[ast.stmt] = []
 
-        Returns:
-            Python class definition as a string
-        """
-        lines = []
+        for name, expr_str in self._class_attrs:
+            value = ast.parse(expr_str, mode="eval").body
+            stmt = ast.Assign(
+                targets=[ast.Name(id=name, ctx=ast.Store())],
+                value=value,
+                lineno=0,
+                col_offset=0,
+            )
+            body.append(stmt)
 
-        # Build class declaration with base classes if present
-        if self.base_classes:
-            base_classes_str = ", ".join(self.base_classes)
-            lines.append(f"class {self.class_name}({base_classes_str}):")
-        else:
-            lines.append(f"class {self.class_name}:")
-
-        # If no attributes, just pass
-        if not self._class_attrs and not self._instance_attrs:
-            lines.append("    pass")
-            return "\n".join(lines)
-
-        # Add class attributes
-        if self._class_attrs:
-            for name, expr in self._class_attrs:
-                lines.append(f"    {name} = {expr}")
-
-        # Add instance attributes if any
         if self._instance_attrs:
-            if self._class_attrs:
-                lines.append("")  # Blank line between class and instance attrs
-            lines.append("    def __init__(self):")
-            for name, type_hint, expr in self._instance_attrs:
-                lines.append(f"        self.{name}: {type_hint} = {expr}")
+            init_body: list[ast.stmt] = []
+            for attr_name, type_hint_str, expr_str in self._instance_attrs:
+                annotation = ast.parse(type_hint_str, mode="eval").body
+                value = ast.parse(expr_str, mode="eval").body
+                stmt = ast.AnnAssign(
+                    target=ast.Attribute(
+                        value=ast.Name(id="self", ctx=ast.Load()),
+                        attr=attr_name,
+                        ctx=ast.Store(),
+                    ),
+                    annotation=annotation,
+                    value=value,
+                    simple=0,
+                )
+                init_body.append(stmt)
+            init_fn = ast.FunctionDef(
+                name="__init__",
+                args=ast.arguments(
+                    posonlyargs=[],
+                    args=[ast.arg(arg="self")],
+                    vararg=None,
+                    kwonlyargs=[],
+                    kw_defaults=[],
+                    kwarg=None,
+                    defaults=[],
+                ),
+                body=init_body,
+                decorator_list=[],
+                returns=None,
+            )
+            body.append(init_fn)
 
-        return "\n".join(lines)
+        if not body:
+            body = [ast.Pass()]
+
+        bases = [ast.Name(id=b, ctx=ast.Load()) for b in self.base_classes]
+        class_def = ast.ClassDef(
+            name=self.class_name,
+            bases=bases,
+            keywords=[],
+            body=body,
+            decorator_list=[],
+        )
+        module = ast.Module(body=[class_def], type_ignores=[])
+        ast.fix_missing_locations(module)
+        return ast.unparse(module)
 
     @staticmethod
     def build_simple_class(class_name: str, attributes: List[Tuple[str, str]]) -> str:
-        """
-        Build a simple class with only class-level attributes.
-
-        Args:
-            class_name: Name of the class
-            attributes: List of (name, expression) tuples
-
-        Returns:
-            Python class definition as a string
-        """
+        """Build a simple class with only class-level attributes."""
         builder = ClassBuilder(class_name)
         for name, expr in attributes:
             builder.add_class_attribute(name, expr)

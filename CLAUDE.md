@@ -60,10 +60,14 @@ raccoon/
 │   ├── sftp_sync.py       # Hash-based file sync
 │   ├── connection.py      # Connection management
 │   └── api.py             # REST API client
-├── server/                # Pi-side FastAPI daemon
+├── server/                # Pi-side FastAPI daemon (raccoon-server)
 │   ├── app.py             # FastAPI application
 │   ├── routes/            # HTTP API endpoints
 │   └── services/          # Business logic (executor, project manager)
+├── ide/                   # Laptop-side FastAPI daemon (IDE backend)
+│   ├── app.py             # FastAPI application
+│   ├── routes/            # HTTP API endpoints
+│   └── repositories/      # ProjectRepository, etc.
 └── templates/             # Jinja2 project scaffolding
 ```
 
@@ -71,7 +75,10 @@ raccoon/
 
 - **Generator Registry**: Pluggable code generators in `codegen/generators/` are auto-discovered via `registry.py`
 - **Hash-based Sync**: SFTP sync uses content hashing for change detection, with `.raccoon_manifest.json` tracking state
-- **Client-Server Split**: Laptop runs CLI client, Pi runs FastAPI server with WebSocket streaming for real-time output
+- **Two backends** — the Web-IDE talks to *both*:
+  - **IDE backend** (`raccoon_cli/ide/`, laptop, default port 3000): owns the project files on disk. Handles project CRUD, missions, steps, type definitions, files, arm chain read/IK/FK/positions.
+  - **Pi server** (`raccoon_cli/server/`, robot, port 8421): owns the hardware. Handles real-time execution, motor/servo/hardware access, and arm `/command` (moves servos via `raccoon.hal`).
+  - Frontend split: `HttpService.localApi(...)` → IDE backend; `HttpService.deviceApi(...)` → Pi server. When adding a new endpoint, decide *which* server actually has the data/hardware it needs — putting it on the wrong one yields a generic 404 (FastAPI route-not-found).
 
 ### Configuration Files
 

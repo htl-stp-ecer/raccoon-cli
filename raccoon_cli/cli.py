@@ -23,6 +23,7 @@ from raccoon_cli.commands import (
     reorder_command,
     logs_group,
     migrate_command,
+    validate_command,
     shell_command,
     doctor_command,
 )
@@ -93,6 +94,7 @@ main.add_command(checkpoint_group)
 main.add_command(reorder_command)
 main.add_command(logs_group)
 main.add_command(migrate_command)
+main.add_command(validate_command)
 main.add_command(shell_command)
 main.add_command(doctor_command)
 
