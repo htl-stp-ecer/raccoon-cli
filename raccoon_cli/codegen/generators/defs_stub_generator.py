@@ -96,6 +96,16 @@ class DefsStubGenerator(BaseGenerator):
                     _build_preset_class(class_name, positions)
                 )
                 fields.append((field_name, class_name))
+            elif type_name == "ArmChain":
+                # Generate a typed arm preset class with one method per named position
+                class_name = f"_{_to_camel(field_name)}ArmPreset"
+                imports.add("from raccoon.step.arm import ArmPreset")
+                imports.add("from raccoon.step import Step")
+                arm_positions = hw_cfg.get("positions", {})
+                preset_classes.append(
+                    _build_arm_preset_class(class_name, arm_positions)
+                )
+                fields.append((field_name, class_name))
             else:
                 # Regular hardware type
                 import_name = _TYPE_IMPORTS.get(type_name, type_name)
@@ -148,4 +158,18 @@ def _build_preset_class(class_name: str, positions: Dict[str, float]) -> str:
     # Also expose .device property
     lines.append("    @property")
     lines.append("    def device(self) -> 'Servo': ...")
+    return "\n".join(lines)
+
+
+def _build_arm_preset_class(class_name: str, positions: Dict[str, Any]) -> str:
+    """Build a typed ArmPreset subclass stub with one method per named position."""
+    lines = [f"class {class_name}(ArmPreset):"]
+    for pos_name in positions:
+        lines.append(
+            f"    def {pos_name}(self, speed: float | None = None) -> Step: ..."
+        )
+    lines.append(
+        "    def to(self, x: float, y: float, z: float = 0.0, "
+        "speed: float | None = None) -> Step: ..."
+    )
     return "\n".join(lines)

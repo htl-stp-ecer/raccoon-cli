@@ -111,6 +111,14 @@ class DefsGenerator(BaseGenerator):
                 logger.info(f"Generated SensorGroup '{field_name}'")
                 continue
 
+            if type_name == "ArmChain":
+                from .arm_chain_generator import ArmChainGenerator  # noqa: PLC0415
+                arm_gen = ArmChainGenerator(field_name, hw_cfg, data, self.imports)
+                hw_expr = arm_gen.build_expr()
+                attributes.append((field_name, hw_expr))
+                logger.info(f"Generated ArmChain '{field_name}'")
+                continue
+
             preset_info = self._extract_servo_preset(hw_cfg)
 
             strip_keys = {"positions", "offset"}
