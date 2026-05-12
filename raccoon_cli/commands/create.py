@@ -28,20 +28,20 @@ logger = logging.getLogger("raccoon")
 _MISSION_NUMBER_RE = re.compile(r'^[Mm](\d{3})')
 
 
-_RESERVED_MISSION_NUMBERS = {999}  # M999 = shutdown, always last
+_RESERVED_MISSION_NUMBERS = {0, 999}  # M000 = setup (always first), M999 = shutdown (always last)
 
 
 def _get_next_mission_number(missions: list) -> int:
-    """Return the next mission number (highest non-reserved M-prefix + 10, or 0 if none)."""
-    max_num = -10
+    """Return the next mission number (highest non-reserved M-prefix + 10, min M010)."""
+    highest = 0  # produces 10 when no non-reserved missions exist
     for entry in missions:
         name = list(entry.keys())[0] if isinstance(entry, dict) else str(entry)
         m = _MISSION_NUMBER_RE.match(name)
         if m:
             num = int(m.group(1))
             if num not in _RESERVED_MISSION_NUMBERS:
-                max_num = max(max_num, num)
-    return max(0, max_num + 10)
+                highest = max(highest, num)
+    return highest + 10
 
 
 

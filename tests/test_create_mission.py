@@ -12,12 +12,13 @@ from raccoon_cli.commands.create import _get_next_mission_number
 # ---------------------------------------------------------------------------
 
 class TestNextMissionNumberEmpty:
-    def test_empty_list_returns_zero(self):
-        assert _get_next_mission_number([]) == 0
+    def test_empty_list_returns_ten(self):
+        # M000 is reserved for setup, so first user mission is M010
+        assert _get_next_mission_number([]) == 10
 
-    def test_list_with_no_m_prefix_entries_returns_zero(self):
+    def test_list_with_no_m_prefix_entries_returns_ten(self):
         # entries without a numeric prefix should be ignored
-        assert _get_next_mission_number(["HelloMission", "ShutdownMission"]) == 0
+        assert _get_next_mission_number(["HelloMission", "ShutdownMission"]) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -50,9 +51,9 @@ class TestNextMissionNumberSequential:
 # ---------------------------------------------------------------------------
 
 class TestNextMissionNumberReserved:
-    def test_only_shutdown_returns_zero(self):
-        """M999 alone → should not influence numbering → next is M000."""
-        assert _get_next_mission_number([{"M999ShutdownMission": None}]) == 0
+    def test_only_shutdown_returns_ten(self):
+        """M999 alone → should not influence numbering → next is M010 (M000 reserved for setup)."""
+        assert _get_next_mission_number([{"M999ShutdownMission": None}]) == 10
 
     def test_shutdown_does_not_inflate_next_number(self):
         """M020 and M999 present → next should be M030, not M1009."""
@@ -63,8 +64,9 @@ class TestNextMissionNumberReserved:
         ]
         assert _get_next_mission_number(missions) == 30
 
-    def test_only_reserved_in_list_returns_zero(self):
-        assert _get_next_mission_number([{"M999ShutdownMission": None}]) == 0
+    def test_only_reserved_in_list_returns_ten(self):
+        """Only reserved missions → next user mission is M010."""
+        assert _get_next_mission_number([{"M999ShutdownMission": None}]) == 10
 
     def test_realistic_clawbot_scenario(self):
         """Reproduces the exact bug from the Ecer2026/clawbot project."""

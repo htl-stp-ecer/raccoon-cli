@@ -1,35 +1,26 @@
 """Regression tests for defs generator edge cases."""
 
+import pytest
 from raccoon_cli.codegen.generators.defs_generator import DefsGenerator
 
 
-class _AlwaysFallbackResolver:
-    """Resolver stub that forces unresolved-constructor fallback paths."""
+class _AlwaysFailResolver:
+    """Resolver stub that always raises — used to verify errors propagate."""
 
     def resolve_from_config(self, _cfg, type_key="type"):
-        raise ValueError("forced fallback")
+        raise ValueError("unknown type")
 
 
-def test_servo_positions_preserved_in_fallback_codegen():
-    """Servo presets should still be generated when fallback constructors are used."""
+def test_unknown_type_raises_value_error():
+    """Unresolvable types must raise ValueError, not silently fall back."""
     gen = DefsGenerator()
-    gen.resolver = _AlwaysFallbackResolver()  # type: ignore[assignment]
+    gen.resolver = _AlwaysFailResolver()  # type: ignore[assignment]
 
     config = {
         "definitions": {
             "button": {"type": "DigitalSensor", "port": 10},
-            "arm_servo": {
-                "type": "Servo",
-                "port": 0,
-                "positions": {"up": 75, "down": 165},
-            },
         }
     }
 
-    source = gen.generate(config)
-
-    assert "from raccoon.step.servo.preset import ServoPreset" in source
-    assert (
-        'arm_servo = ServoPreset(Servo(port=0), positions={"up": 75, "down": 165})'
-        in source
-    )
+    with pytest.raises(ValueError, match="definitions.button"):
+        gen.generate(config)

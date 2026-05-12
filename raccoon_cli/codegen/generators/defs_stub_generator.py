@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from .base import BaseGenerator
 from ..yaml_resolver import create_hardware_resolver
@@ -19,6 +19,11 @@ _TYPE_IMPORTS = {
     "AnalogSensor": "AnalogSensor",
     "DigitalSensor": "DigitalSensor",
 }
+
+# Registry of handlers for special hardware types.
+# Signature: (field_name, hw_cfg) -> (type_annotation, set_of_import_lines, list_of_stub_classes)
+# Add new entries here; never add elif branches inside generate_body.
+_STUB_TYPE_HANDLERS: Dict[str, Callable] = {}
 
 
 class DefsStubGenerator(BaseGenerator):
@@ -85,26 +90,15 @@ class DefsStubGenerator(BaseGenerator):
             type_name = hw_cfg.get("type", "")
             positions = hw_cfg.get("positions")
 
-            if type_name == "SensorGroup":
-                # SensorGroup is a regular definition type
-                imports.add("from raccoon.step.motion.sensor_group import SensorGroup")
-                fields.append((field_name, "SensorGroup"))
+            special_handler = _STUB_TYPE_HANDLERS.get(type_name)
+            if special_handler is not None:
+                annotation, extra_imports, stub_classes = special_handler(field_name, hw_cfg)
+                imports.update(extra_imports)
+                preset_classes.extend(stub_classes)
+                fields.append((field_name, annotation))
             elif type_name == "Servo" and positions and isinstance(positions, dict):
-                # Generate a typed preset class for this servo
                 class_name = f"_{_to_camel(field_name)}Preset"
-                preset_classes.append(
-                    _build_preset_class(class_name, positions)
-                )
-                fields.append((field_name, class_name))
-            elif type_name == "ArmChain":
-                # Generate a typed arm preset class with one method per named position
-                class_name = f"_{_to_camel(field_name)}ArmPreset"
-                imports.add("from raccoon.step.arm import ArmPreset")
-                imports.add("from raccoon.step import Step")
-                arm_positions = hw_cfg.get("positions", {})
-                preset_classes.append(
-                    _build_arm_preset_class(class_name, arm_positions)
-                )
+                preset_classes.append(_build_preset_class(class_name, positions))
                 fields.append((field_name, class_name))
             else:
                 # Regular hardware type
@@ -173,3 +167,35 @@ def _build_arm_preset_class(class_name: str, positions: Dict[str, Any]) -> str:
         "speed: float | None = None) -> Step: ..."
     )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Special-type stub handlers — registered in _STUB_TYPE_HANDLERS above.
+# Add new entries here; never add elif branches inside generate_body.
+# Signature: (field_name, hw_cfg) -> (annotation, set_of_import_lines, list_of_stub_classes)
+# ---------------------------------------------------------------------------
+
+def _sensor_group_stub(
+    field_name: str, hw_cfg: Dict[str, Any]
+) -> Tuple[str, set, list]:
+    return (
+        "SensorGroup",
+        {"from raccoon.step.motion.sensor_group import SensorGroup"},
+        [],
+    )
+
+
+def _arm_chain_stub(
+    field_name: str, hw_cfg: Dict[str, Any]
+) -> Tuple[str, set, list]:
+    class_name = f"_{_to_camel(field_name)}ArmPreset"
+    stub_cls = _build_arm_preset_class(class_name, hw_cfg.get("positions", {}))
+    return (
+        class_name,
+        {"from raccoon.step.arm import ArmPreset", "from raccoon.step import Step"},
+        [stub_cls],
+    )
+
+
+_STUB_TYPE_HANDLERS["SensorGroup"] = _sensor_group_stub
+_STUB_TYPE_HANDLERS["ArmChain"] = _arm_chain_stub

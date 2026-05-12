@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import BaseGenerator
 from ..builder import build_constructor_expr, build_literal_expr
@@ -30,6 +30,11 @@ _SENSOR_GROUP_PARAM_KEYS = frozenset(
 # Extra keys on wait_for_light_sensor that are stripped from the hardware
 # constructor and emitted as separate Defs class attributes instead.
 _WFL_EXTRA_KEYS = frozenset({"mode", "drop_fraction"})
+
+# Registry of handlers for special hardware types that cannot go through the
+# standard yaml_resolver path.  Signature: (field_name, hw_cfg, all_defs, imports) -> expr_str
+# Add new entries here instead of adding more if/elif branches in generate_body.
+_SPECIAL_TYPE_BUILDERS: Dict[str, Callable] = {}
 
 
 class _ImportProxy:
@@ -80,29 +85,8 @@ class DefsGenerator(BaseGenerator):
             logger.warning("No 'definitions' key found in config")
             return {}
         if not isinstance(definitions, dict):
-            return definitions
-
-        # Backward compatibility: older projects may keep grouped hardware
-        # under helper keys such as "_motors" using !include (not !include-merge).
-        # Flatten those sections so downstream validation/codegen sees normal
-        # top-level hardware entries with "type" fields.
-        flattened = dict(definitions)
-        grouped_keys = [
-            key
-            for key, value in definitions.items()
-            if isinstance(key, str) and key.startswith("_") and isinstance(value, dict)
-        ]
-        for group_key in grouped_keys:
-            group_data = definitions[group_key]
-            del flattened[group_key]
-            for name, hw_cfg in group_data.items():
-                if name in flattened:
-                    raise ValueError(
-                        f"definitions.{group_key}: duplicate definition '{name}' "
-                        "already exists at top level"
-                    )
-                flattened[name] = hw_cfg
-        return flattened
+            raise ValueError("'definitions' must be a mapping")
+        return definitions
 
     def validate_config(self, data: Dict[str, Any]) -> None:
         if not isinstance(data, dict):
@@ -164,18 +148,11 @@ class DefsGenerator(BaseGenerator):
 
             type_name = hw_cfg.get("type", "")
 
-            if type_name == "SensorGroup":
-                hw_expr = self._build_sensor_group_expr(hw_cfg)
+            special_builder = _SPECIAL_TYPE_BUILDERS.get(type_name)
+            if special_builder is not None:
+                hw_expr = special_builder(field_name, hw_cfg, data, self.imports)
                 attributes.append((field_name, hw_expr))
-                logger.info(f"Generated SensorGroup '{field_name}'")
-                continue
-
-            if type_name == "ArmChain":
-                from .arm_chain_generator import ArmChainGenerator  # noqa: PLC0415
-                arm_gen = ArmChainGenerator(field_name, hw_cfg, data, self.imports)
-                hw_expr = arm_gen.build_expr()
-                attributes.append((field_name, hw_expr))
-                logger.info(f"Generated ArmChain '{field_name}'")
+                logger.info(f"Generated {type_name} '{field_name}'")
                 continue
 
             preset_info = self._extract_servo_preset(hw_cfg)
@@ -194,51 +171,7 @@ class DefsGenerator(BaseGenerator):
                     f"Resolved type '{type_name}' to {hw_class.__name__} for {field_name}"
                 )
             except ValueError as e:
-                # Compatibility fallback: type index can lag behind runtime classes
-                # during client/server version skew. Emit a constructor directly so
-                # codegen remains usable for standard hardware definitions.
-                if isinstance(type_name, str) and type_name:
-                    logger.info(
-                        "Falling back to unresolved constructor for "
-                        f"definitions.{field_name} ({type_name}): {e}"
-                    )
-                    hw_params = {k: v for k, v in resolved_cfg.items() if k != "type"}
-                    self.imports._entries.add(("raccoon.hal", type_name))
-                    fallback_params = dict(hw_params)
-                    if type_name == "Motor":
-                        calibration = fallback_params.get("calibration")
-                        if isinstance(calibration, dict):
-                            self.imports._entries.add(
-                                ("raccoon.foundation", "MotorCalibration")
-                            )
-                            cal_args = ", ".join(
-                                f"{k}={build_literal_expr(v)}"
-                                for k, v in calibration.items()
-                            )
-                            fallback_params["calibration"] = (
-                                f"MotorCalibration({cal_args})"
-                            )
-
-                    args_parts: list[str] = []
-                    for k, v in fallback_params.items():
-                        if isinstance(v, str) and v.startswith("MotorCalibration("):
-                            args_parts.append(f"{k}={v}")
-                        else:
-                            args_parts.append(f"{k}={build_literal_expr(v)}")
-                    args = ", ".join(args_parts)
-                    hw_expr = f"{type_name}({args})" if args else f"{type_name}()"
-
-                    # Preserve ServoPreset wrapping even when we had to fall back
-                    # to an unresolved constructor path.
-                    if preset_info is not None:
-                        positions, offset = preset_info
-                        hw_expr = self._build_servo_preset_expr(
-                            hw_expr, positions, offset
-                        )
-
-                    attributes.append((field_name, hw_expr))
-                    continue
-                raise ValueError(f"definitions.{field_name}: {e}")
+                raise ValueError(f"definitions.{field_name}: {e}") from e
 
             if self._is_analog_sensor(hw_class):
                 self._analog_sensor_fields.append(field_name)
@@ -345,26 +278,6 @@ class DefsGenerator(BaseGenerator):
                     f"Available: {', '.join(sorted(hw_fields))}"
                 )
 
-    def _build_sensor_group_expr(self, hw_cfg: Dict[str, Any]) -> str:
-        sg_cls = self._resolve_import_class(
-            ("raccoon.SensorGroup", "raccoon.step.motion.sensor_group.SensorGroup"),
-            "raccoon.step.motion.sensor_group",
-            "SensorGroup",
-        )
-        self.imports.add(sg_cls)
-
-        pieces: List[str] = []
-        for key in ("left", "right"):
-            ref = hw_cfg.get(key)
-            if ref is not None:
-                pieces.append(f"{key}={ref}")
-        for key in sorted(_SENSOR_GROUP_PARAM_KEYS):
-            val = hw_cfg.get(key)
-            if val is not None:
-                pieces.append(f"{key}={build_literal_expr(val)}")
-
-        return "SensorGroup(" + ", ".join(pieces) + ")"
-
     def generate_footer(self) -> str:
         instance_name = self.class_name[0].lower() + self.class_name[1:]
         return (
@@ -374,3 +287,41 @@ class DefsGenerator(BaseGenerator):
 
     def generate_imports(self) -> str:
         return super().generate_imports()
+
+
+# ---------------------------------------------------------------------------
+# Special-type handler functions — registered in _SPECIAL_TYPE_BUILDERS above.
+# Add new entries here; never add if/elif branches inside generate_body.
+# Signature: (field_name, hw_cfg, all_defs, imports) -> expr_str
+# ---------------------------------------------------------------------------
+
+def _build_sensor_group_expr(
+    field_name: str, hw_cfg: Dict[str, Any], all_defs: Dict[str, Any], imports: Any
+) -> str:
+    sg_cls = DefsGenerator._resolve_import_class(
+        ("raccoon.SensorGroup", "raccoon.step.motion.sensor_group.SensorGroup"),
+        "raccoon.step.motion.sensor_group",
+        "SensorGroup",
+    )
+    imports.add(sg_cls)
+    pieces: List[str] = []
+    for key in ("left", "right"):
+        ref = hw_cfg.get(key)
+        if ref is not None:
+            pieces.append(f"{key}={ref}")
+    for key in sorted(_SENSOR_GROUP_PARAM_KEYS):
+        val = hw_cfg.get(key)
+        if val is not None:
+            pieces.append(f"{key}={build_literal_expr(val)}")
+    return "SensorGroup(" + ", ".join(pieces) + ")"
+
+
+def _build_arm_chain_expr(
+    field_name: str, hw_cfg: Dict[str, Any], all_defs: Dict[str, Any], imports: Any
+) -> str:
+    from .arm_chain_generator import ArmChainGenerator  # noqa: PLC0415
+    return ArmChainGenerator(field_name, hw_cfg, all_defs, imports).build_expr()
+
+
+_SPECIAL_TYPE_BUILDERS["SensorGroup"] = _build_sensor_group_expr
+_SPECIAL_TYPE_BUILDERS["ArmChain"] = _build_arm_chain_expr
