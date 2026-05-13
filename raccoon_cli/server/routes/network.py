@@ -66,6 +66,34 @@ class AccessPointStatusPayload(BaseModel):
     config: AccessPointConfigPayload | None = None
 
 
+class AccessPointChannelPayload(BaseModel):
+    channel: int
+    networkCount: int
+    ssids: list[str]
+    isRecommended: bool
+
+
+class AccessPointDetectedNetworkPayload(BaseModel):
+    ssid: str
+    channel: int
+    frequencyMHz: int | None = None
+    centerFrequencyMHz: int | None = None
+    channelWidthMHz: int | None = None
+    signalDbm: int | None = None
+    qualityPercent: int | None = None
+    overlapStartChannel: int
+    overlapEndChannel: int
+    affectedChannels: list[int]
+
+
+class AccessPointChannelScanPayload(BaseModel):
+    band: Literal["band2_4GHz", "band5GHz", "bandAuto"]
+    recommendedChannel: int
+    detectedNetworks: int
+    channels: list[AccessPointChannelPayload]
+    networks: list[AccessPointDetectedNetworkPayload]
+
+
 class LanStatusPayload(BaseModel):
     isActive: bool
     isCableConnected: bool
@@ -128,7 +156,9 @@ async def get_access_point_config() -> AccessPointConfigPayload | None:
 
 
 @router.post("/access-point/start")
-async def start_access_point(config: AccessPointConfigPayload) -> AccessPointConfigPayload:
+async def start_access_point(
+    config: AccessPointConfigPayload,
+) -> AccessPointConfigPayload:
     try:
         applied = _network_manager.start_access_point(config.model_dump())
         return AccessPointConfigPayload(**applied)
@@ -159,8 +189,17 @@ async def best_band() -> dict[str, str]:
 
 
 @router.get("/access-point/best-channel")
-async def best_channel(band: Literal["band2_4GHz", "band5GHz", "bandAuto"]) -> dict[str, int]:
+async def best_channel(
+    band: Literal["band2_4GHz", "band5GHz", "bandAuto"],
+) -> dict[str, int]:
     return {"channel": _network_manager.find_best_channel(band)}
+
+
+@router.get("/access-point/channel-scan", response_model=AccessPointChannelScanPayload)
+async def channel_scan(
+    band: Literal["band2_4GHz", "band5GHz", "bandAuto"],
+) -> dict[str, Any]:
+    return _network_manager.scan_access_point_channels(band)
 
 
 @router.get("/saved", response_model=list[SavedNetworkPayload])

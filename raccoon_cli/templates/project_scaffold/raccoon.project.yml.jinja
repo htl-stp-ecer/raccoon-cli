@@ -5,3 +5,14 @@ robot: !include 'config/robot.yml'
 missions: !include 'config/missions.yml'
 definitions: !include 'config/hardware.yml'
 connection: !include 'config/connection.yml'
+
+# Optional: configure the libstp simulator used by `simulate=real` runs in
+# the Web-IDE. Falls back to defaults (empty_table.ftmap, robot.physical.
+# start_pose) when this block is omitted.
+#
+# simulation:
+#   scene: empty_table.ftmap          # path to a .ftmap (project-relative or absolute)
+#   start_pose:                       # overrides robot.physical.start_pose
+#     x_cm: 0.0
+#     y_cm: 0.0
+#     theta_deg: 0.0

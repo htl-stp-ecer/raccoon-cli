@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,9 @@ class NetworkManager:
     """Thin wrapper around nmcli/ip with persisted network UI state."""
 
     def __init__(self, state_path: Path | None = None) -> None:
-        self.state_path = state_path or (Path.home() / ".raccoon" / "network_state.json")
+        self.state_path = state_path or (
+            Path.home() / ".raccoon" / "network_state.json"
+        )
 
     def scan_networks(self) -> list[dict[str, Any]]:
         self._ensure_wifi_enabled()
@@ -30,7 +33,9 @@ class NetworkManager:
 
             in_use = line.rstrip().endswith("*")
             working_line = line[:-1].rstrip() if in_use else line
-            parts = [part for part in __import__("re").split(r"\s\s+", working_line) if part]
+            parts = [
+                part for part in __import__("re").split(r"\s\s+", working_line) if part
+            ]
             if not parts:
                 continue
 
@@ -51,7 +56,11 @@ class NetworkManager:
                 networks[ssid] = network
             elif network["isConnected"] and not existing["isConnected"]:
                 networks[ssid] = network
-            elif network["isKnown"] and not existing["isConnected"] and not existing["isKnown"]:
+            elif (
+                network["isKnown"]
+                and not existing["isConnected"]
+                and not existing["isKnown"]
+            ):
                 networks[ssid] = network
 
         return sorted(
@@ -80,7 +89,9 @@ class NetworkManager:
 
         if encryption_type in {"wpa2Personal", "wpa3Personal"}:
             password = credentials.get("password") or ""
-            self._run(["nmcli", "device", "wifi", "connect", ssid, "password", password])
+            self._run(
+                ["nmcli", "device", "wifi", "connect", ssid, "password", password]
+            )
             return
 
         if encryption_type not in {"wpa2Enterprise", "wpa3Enterprise"}:
@@ -131,15 +142,29 @@ class NetworkManager:
         try:
             self._run(["nmcli", "connection", "delete", ssid])
         except Exception:
-            result = self._run(["nmcli", "-t", "-f", "UUID", "connection", "show"], check=False)
-            uuids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            result = self._run(
+                ["nmcli", "-t", "-f", "UUID", "connection", "show"], check=False
+            )
+            uuids = [
+                line.strip() for line in result.stdout.splitlines() if line.strip()
+            ]
             for uuid in uuids:
                 show_result = self._run(
-                    ["nmcli", "-t", "-f", "802-11-wireless.ssid", "connection", "show", uuid],
+                    [
+                        "nmcli",
+                        "-t",
+                        "-f",
+                        "802-11-wireless.ssid",
+                        "connection",
+                        "show",
+                        uuid,
+                    ],
                     check=False,
                 )
                 if show_result.stdout.strip() == normalized:
-                    self._run(["nmcli", "connection", "delete", "uuid", uuid], check=False)
+                    self._run(
+                        ["nmcli", "connection", "delete", "uuid", uuid], check=False
+                    )
                     break
         self.remove_saved_network(normalized)
 
@@ -171,8 +196,7 @@ class NetworkManager:
         preferred_mac = (
             ethernet_details.get("mac")
             if mode == "lan_only" and ethernet_details.get("mac")
-            else wifi_details.get("mac")
-            or ethernet_details.get("mac")
+            else wifi_details.get("mac") or ethernet_details.get("mac")
         )
 
         return {
@@ -282,7 +306,9 @@ class NetworkManager:
                 name = parts[0].strip() if parts else ""
                 connection_type = parts[1].strip().lower() if len(parts) > 1 else ""
                 if name in active_names and (
-                    "wifi" in connection_type or "wireless" in connection_type or "802-11" in connection_type
+                    "wifi" in connection_type
+                    or "wireless" in connection_type
+                    or "802-11" in connection_type
                 ):
                     return True
 
@@ -347,32 +373,78 @@ class NetworkManager:
         return "band2_4GHz"
 
     def find_best_channel(self, band: str) -> int:
-        wifi_interface = self._get_wifi_interface()
+        scan = self.scan_access_point_channels(band)
+        return int(scan["recommendedChannel"])
+
+    def scan_access_point_channels(self, band: str) -> dict[str, Any]:
+        if self.is_access_point_active():
+            config = self.get_access_point_config()
+            if config is None:
+                raise RuntimeError(
+                    "Hotspot is active but no access point configuration is available to restore after scanning."
+                )
+
+            self.stop_access_point()
+            try:
+                return self.scan_access_point_channels(band)
+            finally:
+                self.start_access_point(config)
+
+        recommendation_band = self.find_best_wifi_band() if band == "bandAuto" else band
         channels = self._band_channels(band)
+        channel_data = {
+            channel: {
+                "channel": channel,
+                "networkCount": 0,
+                "ssids": [],
+            }
+            for channel in channels
+        }
+
+        wifi_interface = self._get_wifi_interface()
         if wifi_interface is None:
-            return channels[0]
+            return self._build_channel_scan_response(
+                band,
+                channel_data,
+                recommended_channels=self._recommended_channels(recommendation_band),
+            )
 
-        interference = {channel: 0 for channel in channels}
+        self._ensure_wifi_enabled()
         result = self._run(["iwlist", wifi_interface, "scan"], check=False)
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                if "Channel:" not in line:
-                    continue
-                match = __import__("re").search(r"Channel:(\d+)", line)
-                if not match:
-                    continue
-                channel = int(match.group(1))
-                if channel in interference:
-                    interference[channel] += 1
+        if result.returncode != 0:
+            return self._build_channel_scan_response(
+                band,
+                channel_data,
+                recommended_channels=self._recommended_channels(recommendation_band),
+            )
 
-        return min(channels, key=lambda channel: interference.get(channel, 0))
+        networks = self._parse_wifi_scan_networks(result.stdout, channels)
+        for network in networks:
+            for affected_channel in network["affectedChannels"]:
+                if affected_channel not in channel_data:
+                    continue
+                entry = channel_data[affected_channel]
+                entry["networkCount"] += 1
+                if network["ssid"] not in entry["ssids"]:
+                    entry["ssids"].append(network["ssid"])
+
+        return self._build_channel_scan_response(
+            band,
+            channel_data,
+            recommended_channels=self._recommended_channels(recommendation_band),
+            networks=networks,
+        )
 
     def get_saved_networks(self) -> list[dict[str, Any]]:
         return list(self._load_state().get("saved_networks", []))
 
     def save_network(self, network: dict[str, Any]) -> None:
         state = self._load_state()
-        networks = [item for item in state.get("saved_networks", []) if item.get("ssid") != network.get("ssid")]
+        networks = [
+            item
+            for item in state.get("saved_networks", [])
+            if item.get("ssid") != network.get("ssid")
+        ]
         networks.append(network)
         state["saved_networks"] = networks
         self._save_state(state)
@@ -430,12 +502,16 @@ class NetworkManager:
         return {
             "isActive": self.is_lan_only_mode_active(),
             "isCableConnected": device_info["ethernetCableConnected"],
-            "ipAddress": device_info.get("ethernetIpAddress") or device_info.get("ipAddress"),
-            "macAddress": device_info.get("ethernetMacAddress") or device_info.get("macAddress"),
+            "ipAddress": device_info.get("ethernetIpAddress")
+            or device_info.get("ipAddress"),
+            "macAddress": device_info.get("ethernetMacAddress")
+            or device_info.get("macAddress"),
         }
 
     def _activate_first_ethernet_connection(self) -> None:
-        result = self._run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], check=False)
+        result = self._run(
+            ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], check=False
+        )
         for line in result.stdout.splitlines():
             if not line.strip():
                 continue
@@ -446,7 +522,9 @@ class NetworkManager:
         self._run(["nmcli", "connection", "up", "Wired connection 1"], check=False)
 
     def _connected_wifi_network(self) -> dict[str, Any] | None:
-        result = self._run(["nmcli", "-t", "-f", "SSID,SECURITY,IN-USE", "dev", "wifi"], check=False)
+        result = self._run(
+            ["nmcli", "-t", "-f", "SSID,SECURITY,IN-USE", "dev", "wifi"], check=False
+        )
         for line in result.stdout.splitlines():
             if "*" not in line:
                 continue
@@ -498,14 +576,18 @@ class NetworkManager:
 
     def _get_primary_ip(self) -> str:
         try:
-            with __import__("socket").socket(__import__("socket").AF_INET, __import__("socket").SOCK_DGRAM) as sock:
+            with __import__("socket").socket(
+                __import__("socket").AF_INET, __import__("socket").SOCK_DGRAM
+            ) as sock:
                 sock.connect(("8.8.8.8", 80))
                 return sock.getsockname()[0]
         except Exception:
             return "127.0.0.1"
 
     def _get_wifi_interface(self) -> str | None:
-        result = self._run(["nmcli", "-t", "-f", "DEVICE,TYPE", "device", "status"], check=False)
+        result = self._run(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE", "device", "status"], check=False
+        )
         for line in result.stdout.splitlines():
             parts = line.split(":")
             if len(parts) >= 2 and parts[1] == "wifi":
@@ -515,7 +597,9 @@ class NetworkManager:
         return None
 
     def _get_ethernet_interfaces(self) -> list[str]:
-        result = self._run(["nmcli", "-t", "-f", "DEVICE,TYPE", "device", "status"], check=False)
+        result = self._run(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE", "device", "status"], check=False
+        )
         devices: list[str] = []
         for line in result.stdout.splitlines():
             parts = line.split(":")
@@ -524,7 +608,9 @@ class NetworkManager:
         return devices
 
     def _nmcli_device_state(self, device: str) -> str:
-        result = self._run(["nmcli", "-t", "-f", "DEVICE,STATE", "device", "status"], check=False)
+        result = self._run(
+            ["nmcli", "-t", "-f", "DEVICE,STATE", "device", "status"], check=False
+        )
         for line in result.stdout.splitlines():
             parts = line.split(":")
             if len(parts) >= 2 and parts[0] == device:
@@ -538,7 +624,10 @@ class NetworkManager:
 
         wifi_interface = self._get_wifi_interface()
         if wifi_interface:
-            self._run(["nmcli", "device", "set", wifi_interface, "managed", "yes"], check=False)
+            self._run(
+                ["nmcli", "device", "set", wifi_interface, "managed", "yes"],
+                check=False,
+            )
 
     def _reset_wifi_interface(self) -> None:
         wifi_interface = self._get_wifi_interface()
@@ -546,7 +635,9 @@ class NetworkManager:
             return
         self._run(["ip", "link", "set", wifi_interface, "down"], check=False)
         self._run(["ip", "link", "set", wifi_interface, "up"], check=False)
-        self._run(["nmcli", "device", "set", wifi_interface, "managed", "yes"], check=False)
+        self._run(
+            ["nmcli", "device", "set", wifi_interface, "managed", "yes"], check=False
+        )
         self._run(["nmcli", "device", "wifi", "rescan"], check=False)
 
     def _delete_existing_connection(self, ssid: str) -> None:
@@ -554,16 +645,28 @@ class NetworkManager:
         if direct.returncode == 0:
             return
 
-        list_result = self._run(["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"], check=False)
+        list_result = self._run(
+            ["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"], check=False
+        )
         for line in list_result.stdout.splitlines():
             parts = line.split(":")
             if len(parts) < 2:
                 continue
             uuid, connection_type = parts[0].strip(), parts[1]
-            if not uuid or ("wireless" not in connection_type and "wifi" not in connection_type):
+            if not uuid or (
+                "wireless" not in connection_type and "wifi" not in connection_type
+            ):
                 continue
             show_result = self._run(
-                ["nmcli", "-t", "-f", "802-11-wireless.ssid", "connection", "show", uuid],
+                [
+                    "nmcli",
+                    "-t",
+                    "-f",
+                    "802-11-wireless.ssid",
+                    "connection",
+                    "show",
+                    uuid,
+                ],
                 check=False,
             )
             if show_result.stdout.split(":")[-1].strip() == ssid:
@@ -594,7 +697,9 @@ class NetworkManager:
         state["network_mode"] = mode
         self._save_state(state)
 
-    def _run(self, command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self, command: list[str], *, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
         use_sudo = command[0] in {"nmcli", "ip", "iw", "iwlist"}
         full_command = ["sudo", *command] if use_sudo else command
         result = subprocess.run(
@@ -627,5 +732,310 @@ class NetworkManager:
 
     def _band_channels(self, band: str) -> list[int]:
         if band == "band2_4GHz":
+            return list(range(1, 14))
+        if band == "bandAuto":
+            return self._band_channels("band2_4GHz") + self._band_channels("band5GHz")
+        return [
+            36,
+            40,
+            44,
+            48,
+            52,
+            56,
+            60,
+            64,
+            100,
+            104,
+            108,
+            112,
+            116,
+            120,
+            124,
+            128,
+            132,
+            136,
+            140,
+            144,
+            149,
+            153,
+            157,
+            161,
+            165,
+        ]
+
+    def _recommended_channels(self, band: str) -> list[int]:
+        if band == "band2_4GHz":
             return [1, 6, 11]
-        return [36, 40, 44, 48, 149, 153, 157, 161]
+        return self._band_channels(band)
+
+    def _parse_wifi_scan_networks(
+        self,
+        scan_output: str,
+        available_channels: list[int],
+    ) -> list[dict[str, Any]]:
+        cells = re.split(r"(?=^\s*Cell\s+\d+\s+-)", scan_output, flags=re.MULTILINE)
+        valid_channels = set(available_channels)
+        networks: list[dict[str, Any]] = []
+
+        for cell in cells:
+            if "Cell " not in cell:
+                continue
+
+            channel = self._extract_scan_channel(cell)
+            if channel is None or channel not in valid_channels:
+                continue
+
+            ssid = self._extract_scan_ssid(cell) or "<Hidden>"
+            frequency_mhz = self._extract_frequency_mhz(
+                cell
+            ) or self._channel_to_frequency_mhz(channel)
+            signal_dbm = self._extract_signal_dbm(cell)
+            quality_percent = self._extract_quality_percent(cell)
+            secondary_offset = self._extract_secondary_channel_offset(cell)
+            width_mhz = self._extract_channel_width_mhz(cell, channel, secondary_offset)
+            center_frequency_mhz = self._infer_center_frequency_mhz(
+                channel=channel,
+                frequency_mhz=frequency_mhz,
+                width_mhz=width_mhz,
+                secondary_offset=secondary_offset,
+            )
+            affected_channels = [
+                candidate
+                for candidate in available_channels
+                if self._channels_overlap(
+                    center_frequency_mhz=center_frequency_mhz,
+                    width_mhz=width_mhz,
+                    candidate_channel=candidate,
+                )
+            ]
+
+            networks.append(
+                {
+                    "ssid": ssid,
+                    "channel": channel,
+                    "frequencyMHz": frequency_mhz,
+                    "centerFrequencyMHz": center_frequency_mhz,
+                    "channelWidthMHz": width_mhz,
+                    "signalDbm": signal_dbm,
+                    "qualityPercent": quality_percent,
+                    "overlapStartChannel": (
+                        affected_channels[0] if affected_channels else channel
+                    ),
+                    "overlapEndChannel": (
+                        affected_channels[-1] if affected_channels else channel
+                    ),
+                    "affectedChannels": affected_channels,
+                }
+            )
+
+        networks.sort(
+            key=lambda item: (
+                item["channel"],
+                -(item["signalDbm"] if item["signalDbm"] is not None else -120),
+                item["ssid"].lower(),
+            )
+        )
+        return networks
+
+    def _extract_scan_channel(self, cell: str) -> int | None:
+        channel_match = re.search(r"Channel:(\d+)", cell) or re.search(
+            r"\(Channel\s+(\d+)\)", cell
+        )
+        if not channel_match:
+            return None
+        return int(channel_match.group(1))
+
+    def _extract_scan_ssid(self, cell: str) -> str:
+        ssid_match = re.search(r'ESSID:"(.*)"', cell)
+        if not ssid_match:
+            return ""
+        return ssid_match.group(1).strip()
+
+    def _extract_signal_dbm(self, cell: str) -> int | None:
+        signal_match = re.search(r"Signal level=(-?\d+)\s*dBm", cell)
+        if signal_match:
+            return int(signal_match.group(1))
+        return None
+
+    def _extract_frequency_mhz(self, cell: str) -> int | None:
+        freq_match = re.search(r"Frequency:([0-9.]+)\s*GHz", cell)
+        if freq_match:
+            return round(float(freq_match.group(1)) * 1000)
+
+        freq_match = re.search(r"Frequency:([0-9.]+)\s*MHz", cell)
+        if freq_match:
+            return round(float(freq_match.group(1)))
+        return None
+
+    def _extract_quality_percent(self, cell: str) -> int | None:
+        quality_match = re.search(r"Quality=(\d+)/(\d+)", cell)
+        if not quality_match:
+            return None
+        numerator = int(quality_match.group(1))
+        denominator = int(quality_match.group(2))
+        if denominator <= 0:
+            return None
+        return round((numerator / denominator) * 100)
+
+    def _extract_secondary_channel_offset(self, cell: str) -> str | None:
+        offset_match = re.search(
+            r"secondary channel offset:\s*(above|below)",
+            cell,
+            flags=re.IGNORECASE,
+        )
+        if not offset_match:
+            return None
+        return offset_match.group(1).lower()
+
+    def _extract_channel_width_mhz(
+        self,
+        cell: str,
+        channel: int,
+        secondary_offset: str | None,
+    ) -> int:
+        width_match = re.search(
+            r"channel width:\s*(\d+)\s*MHz",
+            cell,
+            flags=re.IGNORECASE,
+        )
+        if width_match:
+            return int(width_match.group(1))
+
+        if re.search(r"\b160\s*MHz\b", cell, flags=re.IGNORECASE):
+            return 160
+        if re.search(r"\b80\s*MHz\b", cell, flags=re.IGNORECASE):
+            return 80
+        if re.search(r"\b40\s*MHz\b", cell, flags=re.IGNORECASE):
+            return 40
+        if "HT40" in cell or secondary_offset is not None:
+            return 40
+        if channel > 14 and (
+            "VHT Capabilities" in cell
+            or "VHT Operation" in cell
+            or "HE Capabilities" in cell
+        ):
+            return 80
+        return 20
+
+    def _infer_center_frequency_mhz(
+        self,
+        *,
+        channel: int,
+        frequency_mhz: int | None,
+        width_mhz: int,
+        secondary_offset: str | None,
+    ) -> int:
+        base_frequency = frequency_mhz or self._channel_to_frequency_mhz(channel) or 0
+
+        if width_mhz <= 20:
+            return base_frequency
+
+        if width_mhz == 40:
+            if secondary_offset == "above":
+                return base_frequency + 10
+            if secondary_offset == "below":
+                return base_frequency - 10
+            if channel <= 14:
+                return base_frequency + 10 if channel <= 7 else base_frequency - 10
+            block_center = self._channel_block_center(channel, block_size=2)
+            return self._channel_to_frequency_mhz(block_center) or base_frequency
+
+        if width_mhz == 80:
+            block_center = self._channel_block_center(channel, block_size=4)
+            return self._channel_to_frequency_mhz(block_center) or base_frequency
+
+        if width_mhz >= 160:
+            block_center = self._channel_block_center(channel, block_size=8)
+            return self._channel_to_frequency_mhz(block_center) or base_frequency
+
+        return base_frequency
+
+    def _channel_block_center(self, channel: int, *, block_size: int) -> int:
+        if channel <= 14:
+            return channel
+
+        channel_blocks = [
+            [36, 40, 44, 48],
+            [52, 56, 60, 64],
+            [100, 104, 108, 112],
+            [116, 120, 124, 128],
+            [132, 136, 140, 144],
+            [149, 153, 157, 161],
+        ]
+
+        if block_size == 2:
+            for block in channel_blocks:
+                pairs = [block[i : i + 2] for i in range(0, len(block), 2)]
+                for pair in pairs:
+                    if channel in pair:
+                        return round(sum(pair) / len(pair))
+            return channel
+
+        for block in channel_blocks:
+            if channel in block and block_size == 4:
+                return round(sum(block) / len(block))
+
+        if block_size == 8:
+            extended_blocks = [
+                [36, 40, 44, 48, 52, 56, 60, 64],
+                [100, 104, 108, 112, 116, 120, 124, 128],
+            ]
+            for block in extended_blocks:
+                if channel in block:
+                    return round(sum(block) / len(block))
+
+        return channel
+
+    def _channel_to_frequency_mhz(self, channel: int) -> int | None:
+        if 1 <= channel <= 13:
+            return 2407 + channel * 5
+        if channel == 14:
+            return 2484
+        if channel >= 36:
+            return 5000 + channel * 5
+        return None
+
+    def _channels_overlap(
+        self,
+        *,
+        center_frequency_mhz: int,
+        width_mhz: int,
+        candidate_channel: int,
+    ) -> bool:
+        candidate_frequency = self._channel_to_frequency_mhz(candidate_channel)
+        if candidate_frequency is None:
+            return False
+        threshold = (width_mhz / 2) + 10
+        return abs(candidate_frequency - center_frequency_mhz) <= threshold
+
+    def _build_channel_scan_response(
+        self,
+        band: str,
+        channel_data: dict[int, dict[str, Any]],
+        *,
+        recommended_channels: list[int] | None = None,
+        networks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        channels = [channel_data[channel] for channel in sorted(channel_data)]
+        candidate_channels = recommended_channels or list(channel_data.keys())
+        candidate_channels = [
+            channel for channel in candidate_channels if channel in channel_data
+        ]
+        recommended_channel = min(
+            candidate_channels,
+            key=lambda channel: (
+                channel_data[channel]["networkCount"],
+                channel,
+            ),
+        )
+
+        for item in channels:
+            item["isRecommended"] = item["channel"] == recommended_channel
+
+        return {
+            "band": band,
+            "recommendedChannel": recommended_channel,
+            "detectedNetworks": len(networks or []),
+            "channels": channels,
+            "networks": networks or [],
+        }

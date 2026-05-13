@@ -33,6 +33,9 @@ CONTEXT_SETTINGS = {
     "help_option_names": ["-h", "--help"],
 }
 
+# Commands that don't operate on a project — skip auto-validation.
+_SKIP_VALIDATE_COMMANDS = {"validate", "create", "connect", "disconnect", "update", "doctor", "migrate", "web"}
+
 
 def _setup_context(ctx: click.Context) -> None:
     """Ensure console and logging are ready for a command invocation."""
@@ -70,11 +73,32 @@ def _print_summary(ctx: click.Context) -> None:
     ctx.obj["summary_printed"] = True
 
 
+def _run_auto_validate(ctx: click.Context) -> None:
+    """Run project validation before the subcommand if we're inside a project."""
+    if ctx.obj.get("no_validate"):
+        return
+    if ctx.invoked_subcommand in _SKIP_VALIDATE_COMMANDS:
+        return
+
+    from raccoon_cli.project import ProjectError, find_project_root
+    from raccoon_cli.validation import run_validation_or_exit
+
+    try:
+        project_root = find_project_root()
+    except ProjectError:
+        return  # not in a project — let the subcommand handle it
+
+    run_validation_or_exit(ctx.obj["console"], project_root)
+
+
 @click.group(context_settings=CONTEXT_SETTINGS, no_args_is_help=True)
+@click.option("--no-validate", is_flag=True, help="Skip pre-command project validation.")
 @click.pass_context
-def main(ctx: click.Context) -> None:
+def main(ctx: click.Context, no_validate: bool) -> None:
     """Raccoon - Toolchain CLI for raccoon projects."""
     _setup_context(ctx)
+    ctx.obj["no_validate"] = no_validate
+    _run_auto_validate(ctx)
 
 
 main.add_command(calibrate_command)

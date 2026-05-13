@@ -46,23 +46,43 @@ def _create_pyproject(project_root: Path, pyproject: Path) -> None:
         f'\n'
         f'[project.scripts]\n'
         f'start = "src.main:main"\n'
+        f'\n'
+        f'[build-system]\n'
+        f'requires = ["hatchling"]\n'
+        f'build-backend = "hatchling.build"\n'
+        f'\n'
+        f'[tool.hatch.build.targets.wheel]\n'
+        f'packages = ["src"]\n'
     )
 
 
 def _ensure_entry_point(pyproject: Path) -> None:
-    """Add [project.scripts] start entry if missing."""
+    """Add [project.scripts], build-system, and hatch wheel config if missing."""
     content = pyproject.read_text()
-    if "start" in content and "src.main:main" in content:
-        return
-    if "[project.scripts]" not in content:
-        content = content.rstrip() + '\n\n[project.scripts]\nstart = "src.main:main"\n'
-    else:
-        content = re.sub(
-            r"(\[project\.scripts\]\n)",
-            r'\1start = "src.main:main"\n',
-            content,
+    changed = False
+
+    if not ("start" in content and "src.main:main" in content):
+        if "[project.scripts]" not in content:
+            content = content.rstrip() + '\n\n[project.scripts]\nstart = "src.main:main"\n'
+        else:
+            content = re.sub(
+                r"(\[project\.scripts\]\n)",
+                r'\1start = "src.main:main"\n',
+                content,
+            )
+        changed = True
+
+    # Ensure hatchling build system so `uv run start` installs entry points.
+    if "[build-system]" not in content:
+        content = content.rstrip() + (
+            '\n\n[build-system]\nrequires = ["hatchling"]\n'
+            'build-backend = "hatchling.build"\n'
+            '\n[tool.hatch.build.targets.wheel]\npackages = ["src"]\n'
         )
-    pyproject.write_text(content)
+        changed = True
+
+    if changed:
+        pyproject.write_text(content)
 
 
 def _ensure_main_function(main_py: Path) -> None:
