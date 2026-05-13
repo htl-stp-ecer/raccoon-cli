@@ -5,23 +5,26 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
+import subprocess
 import uuid as uuid_module
 from pathlib import Path
 from typing import Dict, Any
 
 import click
-import yaml
 from rich.console import Console
 
 from raccoon_cli.git_history import initialize_project_history
 from raccoon_cli.mission_codegen import (
-    get_templates_dir, copy_template_dir, render_template,
+    get_templates_dir, render_template,
 )
 from raccoon_cli.mission_config import add_mission_to_config
 from raccoon_cli.naming import normalize_name
 from raccoon_cli.project import ProjectError, load_project_config, find_project_root
 
 logger = logging.getLogger("raccoon")
+
+EXAMPLE_REPO_URL = "https://github.com/htl-stp-ecer/raccoon-example"
 
 
 
@@ -54,6 +57,61 @@ def _get_next_mission_number(missions: list) -> int:
 
 
 
+def _clone_example_project(target_dir: Path, cli_version: str, console: Console) -> None:
+    """Clone raccoon-example, preferring the tag matching cli_version."""
+    ref = f"v{cli_version}"
+
+    # Check whether the versioned tag exists on the remote
+    check = subprocess.run(
+        ["git", "ls-remote", "--tags", EXAMPLE_REPO_URL, ref],
+        capture_output=True, text=True,
+    )
+    tag_exists = check.returncode == 0 and check.stdout.strip()
+
+    cmd = ["git", "clone", "--depth", "1"]
+    if tag_exists:
+        cmd += ["--branch", ref]
+        console.print(f"[dim]Cloning example at tag {ref}...[/dim]")
+    else:
+        console.print(f"[dim]Tag {ref} not found — cloning default branch...[/dim]")
+    cmd += [EXAMPLE_REPO_URL, str(target_dir)]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        console.print(f"[red]Failed to clone example repository.[/red]")
+        console.print(f"[red]{stderr}[/red]")
+        console.print("[yellow]Make sure you have an internet connection and git is installed.[/yellow]")
+        raise SystemExit(1)
+
+    # Remove cloned .git — we'll init a fresh history below
+    shutil.rmtree(target_dir / ".git", ignore_errors=True)
+
+
+def _patch_project_files(target_dir: Path, name: str, project_uuid: str) -> None:
+    """Update name/uuid in raccoon.project.yml and pyproject.toml after cloning."""
+    project_yml = target_dir / "raccoon.project.yml"
+    if project_yml.exists():
+        text = project_yml.read_text(encoding="utf-8")
+        # Replace the name and uuid lines (YAML with !include tags — edit as text)
+        text = re.sub(r'^name:.*$', f'name: {name}', text, flags=re.MULTILINE)
+        text = re.sub(r'^uuid:.*$', f'uuid: {project_uuid}', text, flags=re.MULTILINE)
+        project_yml.write_text(text, encoding="utf-8")
+
+    pyproject = target_dir / "pyproject.toml"
+    if pyproject.exists():
+        text = pyproject.read_text(encoding="utf-8")
+        snake_name = normalize_name(name, strip_suffix="").snake
+        # Replace name only inside the [project] section
+        text = re.sub(
+            r'(\[project\][^\[]*?\bname\s*=\s*)"[^"]*"',
+            lambda m: m.group(0).rsplit('"', 2)[0] + f'"{snake_name}"',
+            text,
+            flags=re.DOTALL,
+        )
+        pyproject.write_text(text, encoding="utf-8")
+
+
 @click.group(name="create")
 def create_command() -> None:
     """Create projects and missions."""
@@ -69,6 +127,8 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
     """Create a new raccoon project with the given NAME."""
     console: Console = ctx.obj["console"]
 
+    from raccoon_cli._version import __version__ as cli_version
+
     # Resolve the target directory
     target_dir = Path(path).resolve() / name
 
@@ -78,31 +138,12 @@ def create_project_command(ctx: click.Context, name: str, path: str, no_wizard: 
 
     console.print(f"[cyan]Creating new project '{name}' at {target_dir}...[/cyan]")
 
-    # Create target directory
-    target_dir.mkdir(parents=True, exist_ok=True)
+    # Clone the example repo (creates target_dir)
+    _clone_example_project(target_dir, cli_version, console)
 
-    # Get templates directory
-    templates_dir = get_templates_dir()
-    project_template = templates_dir / "project_scaffold"
-
-    if not project_template.exists():
-        logger.error(f"Project template not found at {project_template}")
-        raise SystemExit(1)
-
-    # Generate UUID for project
+    # Generate UUID and patch name/uuid into project files
     project_uuid = str(uuid_module.uuid4())
-
-    # Prepare template context
-    import datetime
-    context = {
-        'project_id': normalize_name(name, strip_suffix="").snake,
-        'project_name': name,
-        'project_uuid': project_uuid,
-        'generated_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-    }
-
-    # Copy and render templates (includes raccoon.project.yml)
-    copy_template_dir(project_template, target_dir, context)
+    _patch_project_files(target_dir, name, project_uuid)
 
     console.print(f"[green]✓ Project '{name}' scaffolded at {target_dir}[/green]")
     console.print(f"[cyan]Project UUID: {project_uuid}[/cyan]")
