@@ -283,6 +283,15 @@ def _ensure_physical_section(config: dict) -> dict:
 # =============================================================================
 
 
+@router.get("/token")
+async def get_api_token():
+    """Public — returns the server API token so the web IDE can authenticate.
+    No auth required; the server is only reachable on the local network.
+    """
+    from raccoon_cli.server.config import get_or_create_api_token  # noqa: PLC0415
+    return {"token": get_or_create_api_token()}
+
+
 @router.get("/info", response_model=ConnectionInfo)
 async def get_device_info():
     """Get device information including physical configuration."""

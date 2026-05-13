@@ -119,11 +119,16 @@ def main() -> None:
 
     # --- Install systemd service + run all migrations ---
     print("Configuring systemd service and running migrations...")
-    ssh(host, user, "sudo raccoon-server post-install")
+    ssh(host, user, "sudo python3 -m raccoon_cli.server.cli post-install")
 
     # --- Verify ---
     print()
-    ssh(host, user, "systemctl is-active raccoon.service && raccoon-server status", check=False)
+    ssh(
+        host,
+        user,
+        "systemctl is-active raccoon.service && python3 -m raccoon_cli.server.cli status",
+        check=False,
+    )
     print()
     print(f"Deployment to {host} completed.")
 

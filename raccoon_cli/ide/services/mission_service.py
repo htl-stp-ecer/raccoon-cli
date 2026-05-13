@@ -33,6 +33,8 @@ from raccoon_cli.ide.schemas.mission_detail import ParsedMission, ParsedStep, Ve
 from raccoon_cli.ide.schemas.simulation import SimulationDelta, SimulationStepData, MissionSimulationData
 from raccoon_cli.ide.config import Settings
 import asyncio
+import os
+import sys
 from asyncio.subprocess import PIPE
 import re
 import random
@@ -61,6 +63,10 @@ class MissionService:
         self._sim_cancel: dict[UUID, asyncio.Event] = {}
         # Breakpoint wait handles per project (simulation/debug mode only)
         self._breakpoint_waiters: dict[UUID, asyncio.Event] = {}
+
+    def create_mission(self, project_uuid: UUID, mission_name: str) -> None:
+        """Create a mission via the shared CLI-backed repository path."""
+        self._repo.create_mission(project_uuid, mission_name)
 
     @staticmethod
     def build_step_timeline(mission: ParsedMission | None) -> List[Dict[str, Any]]:
@@ -1082,9 +1088,9 @@ class MissionService:
     async def stream_mission_output(
         self,
         project_uuid: UUID,
-        mission_name: str,
+        mission_name: str | None,
         *,
-        simulate: _OptionalBool[bool] = None,
+        simulate: bool | str | None = None,
         debug: _OptionalBool[bool] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Run the mission and yield structured websocket events with live output.
@@ -1102,16 +1108,16 @@ class MissionService:
                 """Return a shallow copy of the event with a unix timestamp."""
                 return {**event, "timestamp": time.time()}
 
-            if not mission_name or not mission_name.strip():
-                logger.warning(f"Empty mission name provided for run in project {project_uuid}")
-                return
-
-            mission_name = mission_name.strip()
+            # mission_name=None means "run all missions" (IntelliJ-style
+            # whole-project run). A non-empty name still selects a single
+            # mission for isolated simulation/preview.
+            if mission_name is not None:
+                mission_name = mission_name.strip() or None
 
             # Only one program may run on the robot at a time.
-            # Stop any previous mission for this project before starting a new one.
+            # Stop any previous run for this project before starting a new one.
             if project_uuid in self._running_procs or project_uuid in self._sim_cancel:
-                logger.info("Stopping previous mission for project %s before starting new one", project_uuid)
+                logger.info("Stopping previous run for project %s before starting new one", project_uuid)
                 await self.stop_mission(project_uuid)
 
             project_path = self._repo.get_project_path(project_uuid)
@@ -1119,19 +1125,36 @@ class MissionService:
                 logger.warning(f"Project path not found/deleted for UUID: {project_uuid}")
                 return
 
-            # Validate mission exists
-            available = {m.name for m in self.get_project_missions(project_uuid)}
-            if mission_name not in available:
-                logger.warning(
-                    f"Requested mission '{mission_name}' not found in project {project_uuid}. Available: {sorted(available)}"
-                )
-                return
+            # Validate mission exists (only when a specific one was requested)
+            if mission_name is not None:
+                available = {m.name for m in self.get_project_missions(project_uuid)}
+                if mission_name not in available:
+                    logger.warning(
+                        f"Requested mission '{mission_name}' not found in project {project_uuid}. Available: {sorted(available)}"
+                    )
+                    return
 
-            # Check if we should simulate
-            do_sim = self._settings.MISSION_SIMULATION_ENABLED if simulate is None else bool(simulate)
+            # Resolve simulation mode: None|False = real hardware, True|"fast" =
+            # fast heuristic sim (fake delays), "real" = libstp sim subprocess.
+            sim_mode: str | None
+            if simulate is None:
+                sim_mode = "fast" if self._settings.MISSION_SIMULATION_ENABLED else None
+            elif isinstance(simulate, str):
+                lowered = simulate.strip().lower()
+                if lowered in {"real", "libstp", "sim"}:
+                    sim_mode = "real"
+                elif lowered in {"fast", "heuristic", "true", "1", "yes", "on"}:
+                    sim_mode = "fast"
+                elif lowered in {"false", "0", "no", "off", ""}:
+                    sim_mode = None
+                else:
+                    sim_mode = "fast" if bool(simulate) else None
+            else:
+                sim_mode = "fast" if bool(simulate) else None
+
             debug_mode = bool(debug) if debug is not None else False
 
-            if not do_sim:
+            if sim_mode is None:
                 # Local execution via run.sh
                 run_script = project_path / "run.sh"
                 if not run_script.exists():
@@ -1139,14 +1162,17 @@ class MissionService:
                     yield _stamped({"type": "error", "message": "run.sh not found"})
                     return
 
-            # Build planned step timeline for enrichment
+            # Build planned step timeline for enrichment (only for single-
+            # mission runs — whole-project runs use the live step events
+            # from raccoon-lib to highlight per-mission).
             flattened_steps: List[Dict[str, Any]] = []
-            try:
-                detailed = self.get_detailed_mission_by_name(project_uuid, mission_name)
-            except Exception:
-                detailed = None
-            if detailed:
-                flattened_steps = self.build_step_timeline(detailed)
+            if mission_name is not None:
+                try:
+                    detailed = self.get_detailed_mission_by_name(project_uuid, mission_name)
+                except Exception:
+                    detailed = None
+                if detailed:
+                    flattened_steps = self.build_step_timeline(detailed)
 
             # Send historical timings from step_timing.db before the run
             try:
@@ -1163,9 +1189,19 @@ class MissionService:
 
             run_start_unix = time.time()
 
-            if do_sim:
-                # Simulation mode - yield fake events
+            if sim_mode == "fast":
+                if mission_name is None:
+                    yield _stamped({
+                        "type": "error",
+                        "message": "Fast simulation requires a specific mission name.",
+                    })
+                    return
+                # Fast heuristic simulation - yield fake events with delays
                 async for event in self._simulate_mission(project_uuid, mission_name, flattened_steps, debug_mode):
+                    yield event
+            elif sim_mode == "real":
+                # Real libstp sim — spawn runner subprocess, stream pose + stdout
+                async for event in self._simulate_mission_real(project_uuid, project_path, mission_name, flattened_steps):
                     yield event
             else:
                 # Real execution - run run.sh and stream output
@@ -1266,6 +1302,327 @@ class MissionService:
             self._sim_cancel.pop(project_uuid, None)
             self._breakpoint_waiters.pop(project_uuid, None)
 
+    # Cache the chosen sim interpreter so we don't probe on every run.
+    _sim_python_cache: str | None = None
+
+    @classmethod
+    def _pick_sim_python(cls) -> str | None:
+        """Find a Python interpreter that can import ``raccoon.testing.sim``.
+
+        Order of preference:
+          1. ``RACCOON_SIM_PYTHON`` env var (explicit override)
+          2. The interpreter running the IDE backend
+          3. The system ``python3``
+
+        Returns ``None`` if none work. Result is cached for the process
+        lifetime so the probe runs at most three times.
+        """
+        if cls._sim_python_cache:
+            return cls._sim_python_cache
+
+        candidates: List[str] = []
+        explicit = os.environ.get("RACCOON_SIM_PYTHON")
+        if explicit:
+            candidates.append(explicit)
+        candidates.append(sys.executable)
+        sys_py = "/usr/bin/python3"
+        if sys_py not in candidates:
+            candidates.append(sys_py)
+
+        # NOTE: raccoon-lib's MockPlatform crashes during interpreter shutdown
+        # ("pure virtual method called") even on a clean import. Use os._exit
+        # to skip Python's normal teardown and report success via exit code 0.
+        probe = (
+            "import os, raccoon.testing.sim as _s; "
+            "assert hasattr(_s, 'SimRobotConfig'); "
+            "os._exit(0)"
+        )
+        import subprocess as _subprocess
+        for cand in candidates:
+            if not cand:
+                continue
+            try:
+                result = _subprocess.run(
+                    [cand, "-c", probe],
+                    stdout=_subprocess.DEVNULL,
+                    stderr=_subprocess.DEVNULL,
+                    timeout=10,
+                )
+            except (OSError, _subprocess.TimeoutExpired):
+                continue
+            if result.returncode == 0:
+                cls._sim_python_cache = cand
+                logger.info("Real-sim interpreter resolved: %s", cand)
+                return cand
+
+        logger.warning("Could not find a python interpreter with raccoon.testing.sim installed")
+        return None
+
+    def _resolve_simulation_settings(self, project_path: Path) -> Dict[str, Any]:
+        """Pick scene + start pose for a real-sim run.
+
+        Resolution order for the *scene* (first match wins):
+
+          1. ``simulation.scene`` in ``raccoon.project.yml`` (explicit override).
+          2. ``robot.physical.table_map`` — the same map the Web-IDE renders
+             in the Table panel. Two sub-cases:
+              a. A string → treat as a project-relative ``.ftmap`` path.
+              b. An inline dict (``format/table/lines``) → materialize it to
+                 a temp ``.ftmap`` under ``.raccoon/sim/`` so the runner can
+                 hand a real path to ``WorldMap.load_ftmap``.
+          3. Built-in ``SIMULATION_DEFAULT_SCENE`` (currently ``empty_table``).
+
+        Start pose order: ``simulation.start_pose`` → ``robot.physical.start_pose`` → (0,0,0).
+        """
+        scene: str = self._settings.SIMULATION_DEFAULT_SCENE
+        start: Dict[str, float] | None = None
+        scene_source = "default"
+
+        try:
+            from raccoon_cli.project import load_project_config
+            cfg = load_project_config(project_path)
+        except Exception as exc:
+            logger.debug("Could not load project config for sim settings: %s", exc)
+            return {"scene": scene, "start": None, "scene_source": scene_source}
+
+        sim_section = cfg.get("simulation") if isinstance(cfg, dict) else None
+        explicit_scene = None
+        if isinstance(sim_section, dict):
+            raw = sim_section.get("scene")
+            if isinstance(raw, str) and raw.strip():
+                explicit_scene = raw.strip()
+            sp = sim_section.get("start_pose")
+            if isinstance(sp, dict):
+                start = {
+                    "x_cm": float(sp.get("x_cm", 0.0)),
+                    "y_cm": float(sp.get("y_cm", 0.0)),
+                    "theta_deg": float(sp.get("theta_deg", 0.0)),
+                }
+
+        if explicit_scene:
+            scene = explicit_scene
+            scene_source = "simulation.scene"
+        else:
+            physical = ((cfg.get("robot") or {}).get("physical") or {}) if isinstance(cfg, dict) else {}
+            table_map = physical.get("table_map")
+            if isinstance(table_map, str) and table_map.strip():
+                scene = table_map.strip()
+                scene_source = "robot.physical.table_map (path)"
+            elif isinstance(table_map, dict) and table_map.get("lines") is not None:
+                materialized = self._materialize_inline_ftmap(project_path, table_map)
+                if materialized is not None:
+                    scene = str(materialized)
+                    scene_source = "robot.physical.table_map (inline)"
+
+        return {"scene": scene, "start": start, "scene_source": scene_source}
+
+    @staticmethod
+    def _materialize_inline_ftmap(project_path: Path, table_map: Dict[str, Any]) -> Path | None:
+        """Write an inline table_map dict to a temp ``.ftmap`` for the runner.
+
+        Lives under ``.raccoon/sim/scene.ftmap`` inside the project so each
+        run picks up the latest map without leaking files outside the
+        project tree. We always rewrite — the file is cheap and stale data
+        would silently desync from the Web-IDE's table editor.
+        """
+        try:
+            sim_dir = project_path / ".raccoon" / "sim"
+            sim_dir.mkdir(parents=True, exist_ok=True)
+            target = sim_dir / "scene.ftmap"
+            payload = {
+                "format": table_map.get("format", "flowchart-table-map"),
+                "version": table_map.get("version", 1),
+                "table": table_map.get("table") or {"widthCm": 200, "heightCm": 100},
+                "lines": table_map.get("lines") or [],
+            }
+            target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            return target
+        except Exception as exc:
+            logger.warning("Could not materialize inline table_map: %s", exc)
+            return None
+
+    async def _simulate_mission_real(
+        self,
+        project_uuid: UUID,
+        project_path: Path,
+        mission_name: str | None,
+        flattened_steps: List[Dict[str, Any]],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Run the project under the libstp simulator and stream pose + stdout.
+
+        Spawns ``raccoon_cli.ide.sim.runner`` as a subprocess. Lines on its
+        stdout are JSON-decoded — recognized event types (``sim_started``,
+        ``sim_pose``, ``sim_error``, ``sim_finished``) flow straight through
+        to the websocket; everything else (including the user program's own
+        ``print`` output) is wrapped as a regular ``stdout`` line event.
+        """
+        def _stamped(event: Dict[str, Any]) -> Dict[str, Any]:
+            return {**event, "timestamp": time.time()}
+
+        cancel_event = asyncio.Event()
+        self._sim_cancel[project_uuid] = cancel_event
+
+        sim_settings = self._resolve_simulation_settings(project_path)
+        python_exe = self._pick_sim_python()
+        if python_exe is None:
+            yield _stamped({
+                "type": "sim_error",
+                "message": (
+                    "Konnte keinen Python-Interpreter finden, der raccoon.testing.sim "
+                    "importieren kann. Setze RACCOON_SIM_PYTHON oder installiere die "
+                    "raccoon-lib mit DRIVER_BUNDLE=mock im selben venv."
+                ),
+            })
+            yield _stamped({"type": "exit", "returncode": 1})
+            return
+        cmd = [
+            python_exe,
+            "-m",
+            "raccoon_cli.ide.sim.runner",
+            "--project", str(project_path),
+            "--scene", sim_settings["scene"],
+            "--pose-hz", str(self._settings.SIMULATION_POSE_HZ),
+        ]
+        if mission_name:
+            cmd += ["--mission", mission_name]
+        if sim_settings["start"]:
+            sp = sim_settings["start"]
+            cmd += ["--start", f"{sp['x_cm']},{sp['y_cm']},{sp['theta_deg']}"]
+
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        # Skip dev-mode button gating so the sim actually executes the mission
+        # body. Otherwise GenericRobot blocks on WaitForButton and the pose
+        # never changes.
+        env["LIBSTP_DEV_MODE"] = "0"
+        env["LIBSTP_NO_CALIBRATE"] = "1"
+        env["LIBSTP_NO_CHECKPOINTS"] = "1"
+        # Ensure the chosen interpreter sees *this* checkout of raccoon_cli —
+        # the system Python may have an older copy on site-packages that
+        # predates raccoon_cli.ide.sim. Prepending wins over site-packages.
+        toolchain_root = str(Path(__file__).resolve().parents[3])
+        existing_pp = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            toolchain_root + (os.pathsep + existing_pp if existing_pp else "")
+        )
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(project_path),
+            stdout=PIPE,
+            stderr=PIPE,
+            env=env,
+        )
+        self._running_procs[project_uuid] = proc
+
+        yield _stamped({
+            "type": "started",
+            "pid": proc.pid,
+            "sim_mode": "real",
+            "scene": sim_settings["scene"],
+            "scene_source": sim_settings.get("scene_source"),
+        })
+        # Surface the resolved scene in the log stream too — easier to spot
+        # than the JSON ``started`` event when debugging "why empty table?".
+        yield _stamped({
+            "type": "stdout",
+            "line": f"[sim] scene = {sim_settings['scene']}  (source: {sim_settings.get('scene_source')})",
+        })
+
+        sim_event_types = {
+            "sim_started", "sim_pose", "sim_pose_error",
+            "sim_error", "sim_finished",
+            # Step / mission progress events from the runner's step emitter.
+            "step", "mission_started", "mission_finished",
+        }
+
+        async def _drain_stdout() -> AsyncIterator[Dict[str, Any]]:
+            assert proc.stdout is not None
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not text:
+                    continue
+                # Try to parse as a structured sim event. If parsing fails or
+                # the type is unknown, treat the line as plain stdout.
+                if text.startswith("{") and text.endswith("}"):
+                    try:
+                        payload = json.loads(text)
+                        if isinstance(payload, dict) and payload.get("type") in sim_event_types:
+                            yield payload
+                            continue
+                    except json.JSONDecodeError:
+                        pass
+                yield {"type": "stdout", "line": text}
+
+        async def _drain_stderr() -> AsyncIterator[Dict[str, Any]]:
+            assert proc.stderr is not None
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not text:
+                    continue
+                yield {"type": "stderr", "line": text}
+
+        # Multiplex stdout + stderr + cancel into a single async stream.
+        stdout_iter = _drain_stdout()
+        stderr_iter = _drain_stderr()
+        stdout_task = asyncio.create_task(stdout_iter.__anext__())
+        stderr_task = asyncio.create_task(stderr_iter.__anext__())
+        cancel_task = asyncio.create_task(cancel_event.wait())
+
+        try:
+            while True:
+                pending = [t for t in (stdout_task, stderr_task, cancel_task) if t is not None]
+                if not pending or (stdout_task is None and stderr_task is None):
+                    break
+                done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+
+                if cancel_task in done:
+                    proc.terminate()
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                    break
+
+                if stdout_task in done:
+                    try:
+                        event = stdout_task.result()
+                        yield _stamped(event)
+                        stdout_task = asyncio.create_task(stdout_iter.__anext__())
+                    except StopAsyncIteration:
+                        stdout_task = None
+
+                if stderr_task in done:
+                    try:
+                        event = stderr_task.result()
+                        yield _stamped(event)
+                        stderr_task = asyncio.create_task(stderr_iter.__anext__())
+                    except StopAsyncIteration:
+                        stderr_task = None
+        finally:
+            for t in (stdout_task, stderr_task, cancel_task):
+                if not t:
+                    continue
+                if not t.done():
+                    t.cancel()
+                # Always observe the result/exception so asyncio doesn't log
+                # "Task exception was never retrieved" for the natural
+                # StopAsyncIteration that ends a drained stream.
+                with suppress(BaseException):
+                    await t
+
+            self._running_procs.pop(project_uuid, None)
+            self._sim_cancel.pop(project_uuid, None)
+
+        await proc.wait()
+        yield _stamped({"type": "exit", "returncode": proc.returncode})
+
     async def _read_step_timings(
         self,
         project_path: Path,
@@ -1324,16 +1681,29 @@ class MissionService:
         self,
         project_uuid: UUID,
         project_path: Path,
-        mission_name: str,
+        mission_name: str | None,
         flattened_steps: List[Dict[str, Any]],
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Execute the mission via run.sh and stream output."""
+        """Execute the mission(s) via run.sh and stream output.
+
+        When ``mission_name`` is None, runs the whole project (``raccoon run``
+        with no filter). When a name is given, it is passed as an extra arg
+        to ``run.sh`` — today ignored by ``src.main`` but preserved for
+        forward-compat with mission filtering.
+        """
         def _stamped(event: Dict[str, Any]) -> Dict[str, Any]:
             return {**event, "timestamp": time.time()}
 
+        argv = ["bash", "run.sh"]
+        if mission_name:
+            argv.append(mission_name)
+        # Fix terminal width so Rich boxes render at a consistent 120-col width
+        # regardless of the parent process's TTY state.
+        run_env = {**os.environ, "COLUMNS": "120", "PYTHONUNBUFFERED": "1"}
         proc = await asyncio.create_subprocess_exec(
-            "bash", "run.sh", mission_name,
+            *argv,
             cwd=str(project_path),
+            env=run_env,
             stdout=PIPE,
             stderr=PIPE,
         )

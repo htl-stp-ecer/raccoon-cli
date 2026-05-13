@@ -19,6 +19,7 @@ from raccoon_cli.ide.routes import steps as steps_router
 from raccoon_cli.ide.routes import type_definitions as type_definitions_router
 from raccoon_cli.ide.routes import device as device_router
 from raccoon_cli.ide.routes import files as files_router
+from raccoon_cli.ide.routes import arm as arm_router
 
 
 def create_app(project_root: Path | str = None, settings: Settings = None) -> FastAPI:
@@ -88,17 +89,14 @@ def create_app(project_root: Path | str = None, settings: Settings = None) -> Fa
     def get_step_discovery_service() -> StepDiscoveryService:
         return step_discovery_service
 
-    def get_project_codegen() -> ProjectCodeGen:
-        return project_codegen
-
     # Override route dependencies
     app.dependency_overrides[projects_router.get_project_service] = get_project_service
     app.dependency_overrides[missions_router.get_mission_service] = get_mission_service
-    app.dependency_overrides[missions_router.get_project_codegen] = get_project_codegen
     app.dependency_overrides[steps_router.get_step_discovery_service] = get_step_discovery_service
     app.dependency_overrides[type_definitions_router.get_project_service] = get_project_service
     app.dependency_overrides[device_router.get_project_service] = get_project_service
     app.dependency_overrides[files_router.get_project_service] = get_project_service
+    app.dependency_overrides[arm_router.get_project_repository] = lambda: project_repository
 
     # Include API routes
     app.include_router(projects_router.router, prefix="/api/v1/projects", tags=["projects"])
@@ -107,6 +105,7 @@ def create_app(project_root: Path | str = None, settings: Settings = None) -> Fa
     app.include_router(type_definitions_router.router, prefix="/api/v1/type-definitions", tags=["type-definitions"])
     app.include_router(device_router.router, prefix="/api/v1/device", tags=["device"])
     app.include_router(files_router.router, prefix="/api/v1/files", tags=["files"])
+    app.include_router(arm_router.router, prefix="/api/v1/projects", tags=["arm"])
 
     # Health check endpoint
     @app.get("/api/v1/health")

@@ -383,6 +383,9 @@ class RobotGenerator(BaseGenerator):
             return
 
         definitions = self._full_config.get("definitions", {})
+        if not isinstance(definitions, dict):
+            definitions = {}
+
         if not definitions:
             raise ValueError(
                 "No hardware definitions found in config, but kinematics references hardware: "

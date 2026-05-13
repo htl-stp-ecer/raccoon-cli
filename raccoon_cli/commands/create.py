@@ -16,7 +16,6 @@ from rich.console import Console
 from raccoon_cli.git_history import initialize_project_history
 from raccoon_cli.mission_codegen import (
     get_templates_dir, copy_template_dir, render_template,
-    add_mission_import_to_main,
 )
 from raccoon_cli.mission_config import add_mission_to_config
 from raccoon_cli.naming import normalize_name
@@ -29,15 +28,20 @@ logger = logging.getLogger("raccoon")
 _MISSION_NUMBER_RE = re.compile(r'^[Mm](\d{3})')
 
 
+_RESERVED_MISSION_NUMBERS = {0, 999}  # M000 = setup (always first), M999 = shutdown (always last)
+
+
 def _get_next_mission_number(missions: list) -> int:
-    """Return the next mission number (highest existing M-prefix + 10, or 0 if none)."""
-    max_num = -10
+    """Return the next mission number (highest non-reserved M-prefix + 10, min M010)."""
+    highest = 0  # produces 10 when no non-reserved missions exist
     for entry in missions:
         name = list(entry.keys())[0] if isinstance(entry, dict) else str(entry)
         m = _MISSION_NUMBER_RE.match(name)
         if m:
-            max_num = max(max_num, int(m.group(1)))
-    return max(0, max_num + 10)
+            num = int(m.group(1))
+            if num not in _RESERVED_MISSION_NUMBERS:
+                highest = max(highest, num)
+    return highest + 10
 
 
 
@@ -213,9 +217,6 @@ def create_mission_command(ctx: click.Context, name: str) -> None:
 
     # Add mission to project config
     add_mission_to_config(project_root, mission_class)
-
-    # Add import to main.py
-    add_mission_import_to_main(project_root, mission_snake, mission_pascal)
 
     console.print(f"[green]✓ Mission '{mission_class}' created successfully[/green]")
     console.print(f"[cyan]  File: {mission_file.relative_to(project_root)}[/cyan]")

@@ -25,8 +25,21 @@ from textwrap import dedent
 import pytest
 
 raccoon_installed = importlib.util.find_spec("raccoon") is not None
-requires_raccoon = pytest.mark.skip(
-    reason="raccoon-stubs not yet deployed with DigitalSensor — re-enable once stubs are updated",
+
+
+def _raccoon_runtime_available() -> bool:
+    """True when the real raccoon runtime (not just stubs) is installed."""
+    try:
+        import raccoon
+        return hasattr(raccoon, "Motor")
+    except ImportError:
+        return False
+
+
+raccoon_runtime_available = _raccoon_runtime_available()
+requires_raccoon = pytest.mark.skipif(
+    not raccoon_runtime_available,
+    reason="raccoon runtime not installed (only stubs present)",
 )
 
 
@@ -170,6 +183,58 @@ class TestParseParamTypeFromPyi:
         # int is a builtin — resolve_class won't find it, returns None; that's fine
         # This test just verifies no exception is raised
         _parse_param_type_from_pyi(cls, "port")  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Stub-fallback tests — require raccoon-stubs but NOT the runtime
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(not raccoon_installed, reason="raccoon-stubs not installed")
+class TestStubFallback:
+    """Verify stub-based class resolution works with only raccoon-stubs installed."""
+
+    def test_find_pyi_for_namespace_package(self, tmp_path, monkeypatch):
+        import importlib.util as ilu
+        from raccoon_cli.codegen.introspection import _find_pyi_for_module
+
+        fake_spec = type("FakeSpec", (), {
+            "origin": None,
+            "submodule_search_locations": [str(tmp_path)],
+        })()
+        pyi = tmp_path / "__init__.pyi"
+        pyi.write_text("class Foo: ...")
+        monkeypatch.setattr(ilu, "find_spec", lambda n: fake_spec if n == "mypkg" else None)
+
+        result = _find_pyi_for_module("mypkg")
+        assert result == pyi
+
+    def test_resolve_class_falls_back_to_pyi(self):
+        from raccoon_cli.codegen.introspection import _stub_class_registry, resolve_class
+        _stub_class_registry.clear()
+        cls = resolve_class("raccoon.IMU")
+        assert cls.__name__ == "IMU"
+
+    def test_analog_sensor_issubclass_preserved(self):
+        from raccoon_cli.codegen.introspection import _stub_class_registry, resolve_class
+        _stub_class_registry.clear()
+        a = resolve_class("raccoon.AnalogSensor")
+        b = resolve_class("raccoon.AnalogSensor")
+        assert issubclass(a, b)
+
+    def test_ir_sensor_issubclass_analog_sensor(self):
+        from raccoon_cli.codegen.introspection import _stub_class_registry, resolve_class
+        _stub_class_registry.clear()
+        ir = resolve_class("raccoon.IRSensor")
+        analog = resolve_class("raccoon.AnalogSensor")
+        assert issubclass(ir, analog)
+
+    def test_defs_generator_init_does_not_crash(self):
+        from raccoon_cli.codegen.introspection import _stub_class_registry
+        _stub_class_registry.clear()
+        from raccoon_cli.codegen.generators.defs_generator import DefsGenerator
+        gen = DefsGenerator()
+        assert gen._imu_class.__name__ == "IMU"
+        assert gen._analog_sensor_class.__name__ == "AnalogSensor"
 
 
 # ---------------------------------------------------------------------------

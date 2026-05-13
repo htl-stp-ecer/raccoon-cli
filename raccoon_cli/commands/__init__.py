@@ -16,6 +16,7 @@ from .checkpoint import checkpoint_group
 from .reorder_cmd import reorder_command
 from .logs import logs_group
 from .migrate import migrate_command
+from .validate import validate_command
 from .shell import shell_command
 from .doctor import doctor_command
 
@@ -37,6 +38,7 @@ __all__ = [
     "reorder_command",
     "logs_group",
     "migrate_command",
+    "validate_command",
     "shell_command",
     "doctor_command",
 ]
