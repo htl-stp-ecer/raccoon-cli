@@ -298,45 +298,42 @@ async def rename_mission(
         raise HTTPException(status_code=500, detail="Internal server error while renaming mission")
 
 
-@router.websocket("/{project_uuid}/run/{mission_name}")
-async def run_mission_ws(
-        websocket: WebSocket,
-        project_uuid: UUID,
-        mission_name: str,
-):
-    """WebSocket that streams mission run output and step updates.
-
-    Sends JSON messages:
-      - {type: 'started', pid}
-      - {type: 'stdout'|'stderr', line}
-      - {type: 'step', index, timeline_index, name?, path?, parent_index?}
-      - {type: 'planned_steps', steps}
-      - {type: 'exit', returncode}
-      - {type: 'error', message}
-    """
-    # Get service from app state
+async def _run_ws_handler(
+    websocket: WebSocket,
+    project_uuid: UUID,
+    mission_name: str | None,
+) -> None:
+    """Shared websocket handler for `/run/{name}` and `/run` (all missions)."""
     svc: MissionService = websocket.app.state.mission_service
 
     await websocket.accept()
     try:
-        # Optionally send the planned steps first (if available) to help clients
-        try:
-            detailed = svc.get_detailed_mission_by_name(project_uuid, mission_name)
-            if detailed:
-                steps_payload = svc.build_step_timeline(detailed)
-                if steps_payload:
-                    public_steps = [{k: v for k, v in step.items() if not str(k).startswith("_")} for step in steps_payload]
-                    await websocket.send_json({"type": "planned_steps", "steps": public_steps})
-        except Exception:
-            # Non-fatal if analysis fails
-            pass
+        # Send the planned steps only for single-mission runs — they're used
+        # to enrich step highlighting in the IDE flowchart view.
+        if mission_name is not None:
+            try:
+                detailed = svc.get_detailed_mission_by_name(project_uuid, mission_name)
+                if detailed:
+                    steps_payload = svc.build_step_timeline(detailed)
+                    if steps_payload:
+                        public_steps = [{k: v for k, v in step.items() if not str(k).startswith("_")} for step in steps_payload]
+                        await websocket.send_json({"type": "planned_steps", "steps": public_steps})
+            except Exception:
+                # Non-fatal if analysis fails
+                pass
 
         # Optional per-request simulation toggle via query param
         qp = websocket.query_params
         sim_param = qp.get("simulate") if qp is not None else None
-        simulate = None
+        simulate: bool | str | None = None
         if sim_param is not None:
-            simulate = str(sim_param).lower() in {"1", "true", "yes", "on"}
+            lowered = str(sim_param).strip().lower()
+            if lowered in {"real", "libstp", "sim"}:
+                simulate = "real"
+            elif lowered in {"fast", "heuristic"}:
+                simulate = "fast"
+            else:
+                simulate = lowered in {"1", "true", "yes", "on"}
 
         debug_param = qp.get("debug") if qp is not None else None
         debug_mode = None
@@ -405,6 +402,30 @@ async def run_mission_ws(
             await websocket.close()
         except Exception:
             pass
+
+
+@router.websocket("/{project_uuid}/run/{mission_name}")
+async def run_mission_ws(
+        websocket: WebSocket,
+        project_uuid: UUID,
+        mission_name: str,
+):
+    """Run a single mission, streaming step + pose events over WebSocket."""
+    await _run_ws_handler(websocket, project_uuid, mission_name)
+
+
+@router.websocket("/{project_uuid}/run")
+async def run_project_ws(
+        websocket: WebSocket,
+        project_uuid: UUID,
+):
+    """Run *all* missions of the project, IntelliJ-run-config style.
+
+    Same wire protocol as the per-mission endpoint; the client decides
+    which mission's nodes to highlight using the ``mission_name`` field on
+    each ``step`` event.
+    """
+    await _run_ws_handler(websocket, project_uuid, None)
 
 
 @router.post("/{project_uuid}/stop")

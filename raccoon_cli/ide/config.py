@@ -19,3 +19,7 @@ class Settings:
     MISSION_SIMULATION_MIN_DELAY_MS: int = 50
     MISSION_SIMULATION_MAX_DELAY_MS: int = 200
     MISSION_SIMULATION_INCLUDE_STDOUT: bool = False
+
+    # Real-sim (raccoon.testing.sim) settings — used by simulate=real
+    SIMULATION_DEFAULT_SCENE: str = "empty_table.ftmap"
+    SIMULATION_POSE_HZ: float = 20.0

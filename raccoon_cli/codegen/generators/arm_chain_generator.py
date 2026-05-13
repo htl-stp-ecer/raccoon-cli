@@ -119,7 +119,10 @@ class ArmChainGenerator:
         positions: dict[str, Any] = self.hw_cfg.get("positions", {})
 
         chain, joint_mappings = build_chain(
-            joints_cfg, self.all_definitions, field_name=self.field_name
+            joints_cfg,
+            self.all_definitions,
+            field_name=self.field_name,
+            tip_offset_cm=self.hw_cfg.get("tip_offset_cm"),
         )
 
         # --- Solve IK for each named position ---

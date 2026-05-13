@@ -256,6 +256,12 @@ def _parse_param_type_from_pyi(cls: type, param_name: str) -> Optional[type]:
                 pass
             # Try just the class name (strips module prefix)
             short = type_str.split(".")[-1]
+            # Same module as the parent class (most likely for co-located types)
+            try:
+                return resolve_class(f"{cls.__module__}.{short}")
+            except ImportError:
+                pass
+            # Fallback: top-level raccoon namespace
             if short != type_str:
                 try:
                     return resolve_class(f"raccoon.{short}")
@@ -273,7 +279,12 @@ def get_init_params(cls: type) -> Dict[str, Any]:
     """
     try:
         sig = inspect.signature(cls.__init__)
-        params = {name: p for name, p in sig.parameters.items() if name != "self"}
+        params = {
+            name: p
+            for name, p in sig.parameters.items()
+            if name != "self"
+            and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        }
         if params:
             return params
     except (ValueError, TypeError):

@@ -10,7 +10,10 @@ extra installed; ImportError surfaces as HTTP 503 with a clear hint.
 
 from __future__ import annotations
 
+import asyncio
 import math
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID
@@ -23,6 +26,23 @@ from raccoon_cli.project import resolve_config_file
 from raccoon_cli.yaml_utils import load_yaml_raw, save_yaml_raw
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Live-command cache — avoids re-reading YAML and re-fetching token on every
+# call during live preview, keeping latency down to just angle math + one
+# fire-and-forget network write.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _LiveCache:
+    pi_base: str
+    token: str
+    token_ts: float  # monotonic timestamp of last token fetch
+    mappings: list[dict]  # [{port, joint_range, servo_range}] per joint
+
+_live_cache: dict[str, _LiveCache] = {}   # str(project_uuid) → cache
+_pending_tasks: dict[str, asyncio.Task] = {}  # str(project_uuid) → in-flight task
+_TOKEN_TTL = 300.0  # seconds before re-fetching the token
 
 
 def get_project_repository() -> ProjectRepository:
@@ -41,6 +61,8 @@ class JointSpec(BaseModel):
     port: int
     length_cm: float
     axis: list[float]
+    mount_rpy_deg: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+    offset_cm: Optional[list[float]] = None
     joint_range_deg: list[float]
     servo_range_deg: list[float]
 
@@ -56,26 +78,46 @@ class ArmChainSpec(BaseModel):
     positions: dict[str, PositionSpec]
     workspace: dict[str, Any] = Field(default_factory=dict)
     forbidden_zones: list[dict[str, Any]] = Field(default_factory=list)
+    tip_offset_cm: Optional[list[float]] = None
 
 
 class FKRequest(BaseModel):
     joint_angles_deg: list[float]
 
 
+class JointAxisSpec(BaseModel):
+    origin_cm: list[float]
+    axis: list[float]
+
+
 class FKResponse(BaseModel):
     frames: list[list[float]]
     end_effector_cm: list[float]
+    joint_axes: list[JointAxisSpec] = Field(default_factory=list)
 
 
 class IKRequest(BaseModel):
     target_cm: list[float]
     initial_angles_deg: Optional[list[float]] = None
+    # 0-based index of the last joint allowed to move. Lets the UI drag an
+    # intermediate joint pivot and solve only the joints before it, keeping
+    # the rest pinned at initial_angles_deg. Omit / null → full chain.
+    end_joint_index: Optional[int] = None
 
 
 class IKResponse(BaseModel):
     joint_angles_deg: list[float]
     end_effector_cm: list[float]
     reachable: bool
+
+
+class CommandRequest(BaseModel):
+    joint_angles_deg: list[float]
+
+
+class CommandResponse(BaseModel):
+    success: bool
+    count: int
 
 
 class PositionUpdateRequest(BaseModel):
@@ -127,7 +169,12 @@ def _build_chain(hw_cfg: dict[str, Any], definitions: dict[str, Any], field_name
     try:
         from raccoon_cli.codegen.arm.kinematics import build_chain  # noqa: PLC0415
 
-        return build_chain(hw_cfg.get("joints", []), definitions, field_name=field_name)
+        return build_chain(
+            hw_cfg.get("joints", []),
+            definitions,
+            field_name=field_name,
+            tip_offset_cm=hw_cfg.get("tip_offset_cm"),
+        )
     except ImportError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -191,6 +238,12 @@ async def get_arm_chain(
                 port=port,
                 length_cm=m["length_cm"],
                 axis=[float(a) for a in m["axis"]],
+                mount_rpy_deg=[float(v) for v in m.get("mount_rpy_deg", [0, 0, 0])],
+                offset_cm=(
+                    [float(v) for v in m["offset_cm"]]
+                    if m.get("offset_cm") is not None
+                    else None
+                ),
                 joint_range_deg=[float(v) for v in m["joint_range"]],
                 servo_range_deg=[float(v) for v in m["servo_range"]],
             )
@@ -213,12 +266,14 @@ async def get_arm_chain(
             xyz_cm=[x_cm, y_cm, z_cm],
         )
 
+    tip = hw_cfg.get("tip_offset_cm")
     return ArmChainSpec(
         name=field_name,
         joints=joints,
         positions=positions_out,
         workspace=dict(hw_cfg.get("workspace", {}) or {}),
         forbidden_zones=list(hw_cfg.get("forbidden_zones", []) or []),
+        tip_offset_cm=[float(v) for v in tip] if tip is not None else None,
     )
 
 
@@ -234,11 +289,17 @@ async def compute_fk(
     from raccoon_cli.codegen.arm.kinematics import (  # noqa: PLC0415
         end_effector_cm,
         forward_kinematics,
+        joint_world_axes,
     )
 
     frames = forward_kinematics(chain, request.joint_angles_deg)
     ee = end_effector_cm(chain, request.joint_angles_deg)
-    return FKResponse(frames=frames, end_effector_cm=ee)
+    axes = joint_world_axes(chain, request.joint_angles_deg)
+    return FKResponse(
+        frames=frames,
+        end_effector_cm=ee,
+        joint_axes=[JointAxisSpec(**a) for a in axes],
+    )
 
 
 @router.post("/{project_uuid}/arm/ik", response_model=IKResponse)
@@ -248,27 +309,177 @@ async def compute_ik(
     repo: ProjectRepository = Depends(get_project_repository),
 ):
     _, definitions, field_name, hw_cfg = _load_arm(repo, project_uuid)
-    chain, _ = _build_chain(hw_cfg, definitions, field_name)
 
     from raccoon_cli.codegen.arm.kinematics import (  # noqa: PLC0415
+        build_chain,
         end_effector_cm,
         inverse_kinematics,
     )
 
+    joints_cfg = hw_cfg.get("joints", []) or []
+    n_total = len(joints_cfg)
+    initial = list(request.initial_angles_deg or [0.0] * n_total)
+    if len(initial) < n_total:
+        initial = initial + [0.0] * (n_total - len(initial))
+
+    # Decide whether to solve the full chain or a prefix (sub-chain IK for
+    # dragging an intermediate joint pivot). end_joint_index is the *index of
+    # the last joint that may move*, so the sub-chain runs joints[0..end].
+    end_idx = request.end_joint_index
+    if end_idx is None or end_idx >= n_total - 1:
+        chain, _ = _build_chain(hw_cfg, definitions, field_name)
+        solve_initial: Optional[list[float]] = request.initial_angles_deg
+        n_active = n_total
+    else:
+        if end_idx < 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"end_joint_index must be >= 0, got {end_idx}",
+            )
+        try:
+            # The sub-chain ends at joint end_idx's frame; the user is dragging
+            # joint end_idx+1's pivot. If the next joint declares offset_cm we
+            # use it as the tip offset so the IK target lines up with the
+            # actual rendered pivot; otherwise build_chain applies its legacy
+            # length-of-end_idx-along-X fallback automatically.
+            next_joint = joints_cfg[end_idx + 1] if end_idx + 1 < n_total else {}
+            sub_tip = next_joint.get("offset_cm")
+            chain, _ = build_chain(
+                joints_cfg[: end_idx + 1],
+                definitions,
+                field_name=field_name,
+                tip_offset_cm=[float(v) for v in sub_tip] if sub_tip else None,
+            )
+        except ImportError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        solve_initial = initial[: end_idx + 1]
+        n_active = end_idx + 1
+
     try:
-        angles = inverse_kinematics(
-            chain, request.target_cm, initial_angles_deg=request.initial_angles_deg
+        solved = inverse_kinematics(
+            chain, request.target_cm, initial_angles_deg=solve_initial
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"IK failed: {exc}") from exc
 
-    ee = end_effector_cm(chain, angles)
-    dist = math.sqrt(sum((ee[i] - request.target_cm[i]) ** 2 for i in range(3)))
+    full_angles = list(solved) + list(initial[n_active:])
+
+    ee_xyz = end_effector_cm(chain, solved)
+    dist = math.sqrt(sum((ee_xyz[i] - request.target_cm[i]) ** 2 for i in range(3)))
+
+    # The "end_effector" reported to the client should be the *full* arm's tip
+    # so the visualizer can update consistently. Rebuild the full chain only
+    # when we actually solved a sub-chain.
+    if n_active < n_total:
+        full_chain, _ = _build_chain(hw_cfg, definitions, field_name)
+        ee_full = end_effector_cm(full_chain, full_angles)
+    else:
+        ee_full = ee_xyz
+
     return IKResponse(
-        joint_angles_deg=[round(a, 4) for a in angles],
-        end_effector_cm=ee,
+        joint_angles_deg=[round(a, 4) for a in full_angles],
+        end_effector_cm=ee_full,
         reachable=dist <= 1.0,
     )
+
+
+async def _send_servo_positions(pi_base: str, token: str, positions: list[dict]) -> None:
+    """Fire-and-forget: send servo positions to the Pi. Errors are swallowed."""
+    import httpx  # noqa: PLC0415
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(
+                f"{pi_base}/api/v1/servo/set",
+                json={"positions": positions},
+                headers={"X-API-Token": token} if token else {},
+            )
+    except Exception:
+        pass
+
+
+async def _refresh_token(pi_base: str) -> str:
+    import httpx  # noqa: PLC0415
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{pi_base}/api/v1/device/token")
+            return resp.json().get("token", "")
+    except Exception:
+        return ""
+
+
+@router.post("/{project_uuid}/arm/command", response_model=CommandResponse, status_code=202)
+async def command_arm(
+    project_uuid: UUID,
+    request: CommandRequest,
+    repo: ProjectRepository = Depends(get_project_repository),
+):
+    """Convert joint angles → servo angles and forward to the Pi — non-blocking.
+
+    Returns 202 immediately. The Pi network call happens in a background task
+    so live-preview dragging stays responsive. Only the latest in-flight command
+    is kept; a superseded one is cancelled to avoid servo command queuing.
+    """
+    import httpx  # noqa: PLC0415
+    from raccoon_cli.codegen.arm.kinematics import joint_to_servo_deg  # noqa: PLC0415
+
+    cache_key = str(project_uuid)
+    cache = _live_cache.get(cache_key)
+
+    # (Re)build cache on first call or when YAML might have changed
+    if cache is None:
+        _, definitions, field_name, hw_cfg = _load_arm(repo, project_uuid)
+        joints_cfg = hw_cfg.get("joints", []) or []
+
+        config = repo.read_project_config(project_uuid)
+        conn = config.get("connection") or {}
+        pi_address = conn.get("pi_address")
+        pi_port = int(conn.get("pi_port") or 8421)
+        if not pi_address:
+            raise HTTPException(status_code=424, detail="No pi_address configured for this project.")
+        pi_base = f"http://{pi_address}:{pi_port}"
+
+        mappings = []
+        for jcfg in joints_cfg:
+            servo_ref = jcfg.get("servo_ref") or jcfg.get("servo", "")
+            servo_def = definitions.get(servo_ref, {})
+            if not isinstance(servo_def, dict) or "port" not in servo_def:
+                raise HTTPException(status_code=400, detail=f"Servo '{servo_ref}' has no 'port'")
+            mappings.append({
+                "port": int(servo_def["port"]),
+                "joint_range": jcfg.get("joint_range", [-90, 90]),
+                "servo_range": jcfg.get("servo_range", [0, 180]),
+            })
+
+        token = await _refresh_token(pi_base)
+        cache = _LiveCache(pi_base=pi_base, token=token, token_ts=time.monotonic(), mappings=mappings)
+        _live_cache[cache_key] = cache
+    else:
+        # Refresh token if stale
+        if time.monotonic() - cache.token_ts > _TOKEN_TTL:
+            cache.token = await _refresh_token(cache.pi_base)
+            cache.token_ts = time.monotonic()
+
+    if len(request.joint_angles_deg) != len(cache.mappings):
+        # Config changed — invalidate cache and let next call rebuild
+        _live_cache.pop(cache_key, None)
+        raise HTTPException(status_code=400, detail="Joint count mismatch — retrying will rebuild cache.")
+
+    positions = [
+        {"port": m["port"], "angle_deg": joint_to_servo_deg(float(a), m["joint_range"], m["servo_range"])}
+        for a, m in zip(request.joint_angles_deg, cache.mappings)
+    ]
+
+    # Cancel the previous in-flight task so we never queue up stale positions
+    prev = _pending_tasks.get(cache_key)
+    if prev and not prev.done():
+        prev.cancel()
+    _pending_tasks[cache_key] = asyncio.create_task(
+        _send_servo_positions(cache.pi_base, cache.token, positions)
+    )
+
+    return CommandResponse(success=True, count=len(positions))
 
 
 @router.put("/{project_uuid}/arm/positions/{name}", response_model=PositionUpdateResponse)
@@ -299,6 +510,7 @@ async def upsert_position(
         positions[name] = {"x": x_cm, "y": y_cm, "z": z_cm}
 
     _write_position(project_path, field_name, _set)
+    _live_cache.pop(str(project_uuid), None)  # force re-read on next command
 
     return PositionUpdateResponse(
         name=name,

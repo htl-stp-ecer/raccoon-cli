@@ -23,7 +23,6 @@ from raccoon_cli.codegen import create_pipeline
 from raccoon_cli.project import ProjectError, load_project_config, require_project
 from raccoon_cli.commands.codegen import _resolve_ftmap_paths
 from raccoon_cli.commands.migrate import _get_format_version, _load_migrations
-from raccoon_cli.validation import run_validation_or_exit
 
 logger = logging.getLogger("raccoon")
 
@@ -113,18 +112,31 @@ def _run_local(
             _resolve_ftmap_paths(config, project_root), output_dir, format_code=True
         )
 
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    # Ensure ~/.local/bin is in PATH so uv and other user-installed tools are found
+    local_bin = str(Path.home() / ".local" / "bin")
+    path_dirs = env.get("PATH", "").split(os.pathsep)
+    if local_bin not in path_dirs:
+        env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
+
     if (project_root / "pyproject.toml").exists():
+        import platform
         import shutil
 
-        uv = shutil.which("uv") or "uv"
-        cmd_parts = [uv, "run", "start", *args]
-        logger.info("pyproject.toml found — using uv run start")
+        uv = shutil.which("uv", path=env["PATH"])
+        # On ARM (Pi), raccoon is pre-installed in the server's Python env.
+        # uv would try to create a fresh venv using pyproject.toml sources
+        # that contain laptop-specific absolute paths → always fails.
+        if uv and platform.machine() not in ("aarch64", "arm64", "armv7l"):
+            cmd_parts = [uv, "run", "start", *args]
+            logger.info("pyproject.toml found — using uv run start")
+        else:
+            cmd_parts = [sys.executable, "-m", "src.main", *args]
+            logger.info("pyproject.toml found — using sys.executable -m src.main (ARM/no-uv path)")
     else:
         cmd_parts = [sys.executable, "-m", "src.main", *args]
     logger.info(f"Executing: {' '.join(cmd_parts)}")
-
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
     if dev:
         env["LIBSTP_DEV_MODE"] = "1"
     if no_calibrate:
@@ -434,11 +446,6 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
     is_flag=True,
     help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)",
 )
-@click.option(
-    "--no-validate",
-    is_flag=True,
-    help="Skip pre-run validation checks.",
-)
 @click.pass_context
 def run_command(
     ctx: click.Context,
@@ -449,7 +456,6 @@ def run_command(
     no_calibrate: bool,
     no_codegen: bool,
     no_checkpoints: bool,
-    no_validate: bool,
 ) -> None:
     """Run codegen and then execute src.main.
 
@@ -475,9 +481,6 @@ def run_command(
         config = load_project_config(project_root)
         if not isinstance(config, dict):
             raise ProjectError("raccoon.project.yml must be a mapping")
-
-        if not no_validate:
-            run_validation_or_exit(console, project_root, config=config)
 
         _warn_if_migrations_pending(console, project_root)
 

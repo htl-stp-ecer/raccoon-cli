@@ -7,8 +7,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from raccoon_cli.server.config import ServerConfig, load_config
-from raccoon_cli.server.routes import health_router, commands_router, projects_router, hardware_router, device_router, network_router, steps_router, logs_router, version_router, arm_router
+from raccoon_cli.server.routes import health_router, commands_router, projects_router, hardware_router, device_router, network_router, steps_router, logs_router, version_router, arm_router, servo_router
 from raccoon_cli.server.routes.lcm import router as lcm_router
+from raccoon_cli.server.services.network_manager import NetworkManager
 from raccoon_cli.server.websocket import setup_websocket_routes
 from raccoon_cli.server.websocket.lcm_stream import setup_lcm_websocket
 
@@ -35,6 +36,10 @@ async def lifespan(app: FastAPI):
     print(f"Raccoon Server v{config.version} starting...")
     print(f"Projects directory: {config.projects_dir}")
     print(f"Listening on http://{config.host}:{config.port}")
+    try:
+        NetworkManager().restore_persisted_network_mode()
+    except Exception as exc:
+        print(f"Failed to restore persisted network mode: {exc}")
 
     yield
 
@@ -84,6 +89,7 @@ def create_app(config: Optional[ServerConfig] = None) -> FastAPI:
     app.include_router(logs_router)
     app.include_router(version_router)
     app.include_router(arm_router)
+    app.include_router(servo_router)
 
     # Setup WebSocket routes
     setup_websocket_routes(app)
