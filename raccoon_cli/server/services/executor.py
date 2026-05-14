@@ -81,6 +81,12 @@ class CommandExecutor:
         if env:
             cmd_env.update(env)
 
+        # Force color output even though stdout is a pipe, not a TTY.
+        # Libraries like Rich, loguru, and colorama disable ANSI codes when they
+        # detect a non-TTY stdout; these env vars override that detection.
+        cmd_env.setdefault("FORCE_COLOR", "1")
+        cmd_env.setdefault("TERM", "xterm-256color")
+
         try:
             # Create subprocess with pipes for stdout/stderr
             # Use start_new_session to create a new process group for clean termination
