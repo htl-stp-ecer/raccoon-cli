@@ -9,7 +9,6 @@ import signal
 import os
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
 import click
@@ -146,31 +145,15 @@ def _run_local(
     if skip_missions:
         env["LIBSTP_SKIP_MISSIONS"] = ",".join(str(i) for i in sorted(skip_missions))
 
-    collected: list[str] = []
-
     # On Windows, Ctrl+C doesn't reliably propagate to child processes.
     # Use Popen so we can catch SIGINT ourselves and terminate the child.
-    # Pipe stdout+stderr so we can collect warnings/errors for the summary.
+    # stdout/stderr are inherited so the process writes directly to the terminal
+    # (or the executor's pipe when running on the Pi), preserving 1:1 output.
     proc = subprocess.Popen(
         cmd_parts,
         cwd=project_root,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,
-        text=True,
     )
-
-    def _stream_output() -> None:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            print(line)
-            if _is_warn_or_error(line):
-                collected.append(line)
-
-    reader = threading.Thread(target=_stream_output, daemon=True)
-    reader.start()
 
     try:
         returncode = proc.wait()
@@ -183,10 +166,6 @@ def _run_local(
             proc.kill()
             returncode = proc.wait()
 
-    reader.join()
-
-    _print_output_summary(console, collected)
-
     exit_style = "bold green" if returncode == 0 else "bold red"
     console.print(
         Panel.fit(
@@ -194,13 +173,6 @@ def _run_local(
             border_style="green" if returncode == 0 else "red",
         )
     )
-
-    if returncode != 0 and collected and not _has_error_lines(collected):
-        console.print(
-            "[yellow]Non-zero exit code returned, but output contained only warnings; "
-            "treating run as successful.[/yellow]"
-        )
-        returncode = 0
 
     if returncode != 0:
         raise SystemExit(returncode)
