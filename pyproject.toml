@@ -7,7 +7,7 @@ name = "raccoon-cli"
 dynamic = ["version"]
 description = "Toolchain CLI for Botball robot development on Raspberry Pi (Wombat)"
 readme = "README.md"
-license = { text = "GPL-3.0-only" }
+license = "GPL-3.0-only"
 authors = [{ name = "Tobias Madlberger" }]
 keywords = ["botball", "robotics", "raspberry-pi", "cli", "codegen"]
 classifiers = [
@@ -15,7 +15,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: Education",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
