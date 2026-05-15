@@ -32,6 +32,7 @@ class ServoSetResponse(BaseModel):
 async def set_servo_positions(request: ServoSetRequest):
     """Set one or more servos by port and angle. No project config required."""
     try:
+        from raccoon.hal import Motor  # type: ignore  # noqa: PLC0415
         from raccoon.hal import Servo  # type: ignore  # noqa: PLC0415
     except ImportError as exc:
         raise HTTPException(
@@ -39,7 +40,14 @@ async def set_servo_positions(request: ServoSetRequest):
             detail="raccoon.hal not available — hardware access requires running on the Pi.",
         ) from exc
 
+    # GenericRobot startup clears the STM32 shutdown latch before any
+    # actuator command. Servo calibration runs outside that lifecycle, so
+    # do the equivalent here.
+    Motor.enable_all()
+
     for pos in request.positions:
-        Servo(port=pos.port).set_position(float(pos.angle_deg))
+        servo = Servo(port=pos.port)
+        servo.enable()
+        servo.set_position(float(pos.angle_deg))
 
     return ServoSetResponse(success=True, count=len(request.positions))

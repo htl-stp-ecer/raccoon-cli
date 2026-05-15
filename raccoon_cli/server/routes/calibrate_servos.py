@@ -10,7 +10,7 @@ from raccoon_cli.server.auth import require_auth
 logger = logging.getLogger("raccoon")
 router = APIRouter(prefix="/api/v1/calibrate-servos", tags=["servo-calibration"], dependencies=[Depends(require_auth)])
 
-_session: Optional[dict] = None  # { servo, servo_port, current_angle, initial_angle, transport, ui_task }
+_session: Optional[dict] = None  # { servo, servo_port, current_angle, initial_angle }
 _session_lock = asyncio.Lock()
 
 
@@ -43,23 +43,20 @@ async def calibrate_servo_start(request: ServoCalibrationStartRequest):
             )
 
         try:
-            global transport, servo
-
+            from raccoon.hal import Motor
             from raccoon.hal import Servo
-            from raccoon_transport import Transport
-            transport = Transport()
+            Motor.enable_all()
             servo = Servo(port=request.servo_port)
             servo.enable()
-            servo.set_position(request.initial_angle)
+            servo.set_position(float(request.initial_angle))
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Cancelling, failed to initialize servo: {e}")
 
         _session = {
             "servo": servo,
-            "transport": transport,
+            "servo_port": request.servo_port,
             "current_angle": request.initial_angle,
             "initial_angle": request.initial_angle,
-            "ui_task": asyncio.create_task(_servo_calibration_ui(request.servo_id, request.servo_port))
         }
 
     return {"status": "ok"}
@@ -79,7 +76,11 @@ async def calibrate_servo_move(request: ServoCalibrationMoveRequest):
         _session["current_angle"] += request.delta_to_move
 
         try:
-            _session["servo"].set_position(_session["current_angle"])
+            from raccoon.hal import Motor
+
+            Motor.enable_all()
+            _session["servo"].enable()
+            _session["servo"].set_position(float(_session["current_angle"]))
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to move servo: {e}")
 
@@ -97,15 +98,10 @@ async def calibrate_servo_end():
                 detail=f"No active calibration session, call /start first"
             )
 
-        ui_task = _session["ui_task"]
-        if not ui_task.done():
-            ui_task.cancel()
-            try:
-                await ui_task
-            except (asyncio.CancelledError, Exception):
-                pass
-
-        _session["servo"].fully_disable_all()
+        try:
+            _session["servo"].fully_disable_all()
+        except Exception as exc:
+            logger.warning("Failed to fully disable servo after calibration: %s", exc)
 
         response = ServoCalibrationEndResponse(
             initial_angle=_session["initial_angle"],
@@ -114,35 +110,3 @@ async def calibrate_servo_end():
         )
         _session = None
         return response
-
-
-async def _servo_calibration_ui(servo_id: str, servo_port: int):
-    from raccoon.ui.step import UIStep
-    from raccoon.ui.screen import UIScreen
-    from raccoon.ui.widgets import Center, Text
-    from raccoon_transport import Transport
-
-    class ServoCalibrationScreen(UIScreen):
-        title = "Servo Calibration"
-
-        def build(self):
-            return Center(children=[
-                Text(f"Calibrating {servo_id} on port {servo_port}", size="large"),
-                Text("Use your laptop to calibrate", size="medium"),
-            ])
-
-    step = UIStep.__new__(UIStep)
-    step._transport = Transport()
-    step._current_screen = None
-    step._ui_active = False
-    step._pump_queue = None
-    step._pump_sub = None
-
-    await step.display(ServoCalibrationScreen())
-
-    try:
-        while True:
-            await step.pump_events()
-            await asyncio.sleep(0.05)
-    except asyncio.CancelledError:
-        await step.close_ui()

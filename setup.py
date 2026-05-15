@@ -47,15 +47,22 @@ class BuildWithExtras(build_py):
 
         root_dir = ROOT_DIR
         web_ide_dir = root_dir / "web-ide"
+        package_json = web_ide_dir / "package.json"
         dist_src = web_ide_dir / "dist" / "WebIDE" / "browser"
         dist_dest = root_dir / "raccoon_cli" / "web-ide-dist"
 
         # Check if web-ide directory exists
         if not web_ide_dir.exists():
-            raise WebIDEBuildError(
-                f"web-ide directory not found at {web_ide_dir}\n"
-                "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
-            )
+            print(f"web-ide directory not found at {web_ide_dir}, skipping web IDE build")
+            super().run()
+            return
+
+        # Some source distributions do not include the web IDE source tree.
+        # In that case, allow packaging to continue without rebuilding it.
+        if not package_json.exists():
+            print(f"{package_json} not found, skipping web IDE build")
+            super().run()
+            return
 
         # Check for npm
         npm_cmd = shutil.which("npm")
@@ -82,6 +89,11 @@ class BuildWithExtras(build_py):
         # Build Angular app
         print("Building web IDE...")
         npx_cmd = shutil.which("npx")
+        if not npx_cmd:
+            raise WebIDEBuildError(
+                "npx not found. Install Node.js to build web-ide.\n"
+                "Set RACCOON_SKIP_WEBIDE=1 to skip web-ide build."
+            )
         result = subprocess.run(
             [npx_cmd, "ng", "build", "--configuration=production"],
             cwd=web_ide_dir,

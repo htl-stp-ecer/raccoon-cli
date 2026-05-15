@@ -19,7 +19,14 @@ import questionary
 from questionary import Style as QStyle
 
 from raccoon_cli.codegen import create_pipeline
-from raccoon_cli.project import ProjectError, load_project_config, require_project, save_project_keys
+from raccoon_cli.project import (
+    ProjectError,
+    load_project_config,
+    require_project,
+    resolve_config_file,
+    save_project_keys,
+)
+from raccoon_cli.yaml_utils import load_yaml_raw, save_yaml_raw
 
 logger = logging.getLogger("raccoon")
 
@@ -244,8 +251,7 @@ async def _autotune_remote(ctx: click.Context, project_root: Path, config: dict)
 
     async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
         try:
-            # Pi will run: raccoon calibrate --skip-ticks --local
-            result = await client.calibrate_project(project_uuid, args=["--skip-ticks"])
+            result = await client.calibrate_project(project_uuid, args=["autotune"])
         except Exception as exc:
             console.print(f"[red]Failed to start autotune on Pi: {exc}[/red]")
             raise SystemExit(1)
@@ -378,20 +384,19 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
         pos_pick = _pick_position(servo_name, defn)
         if pos_pick is None:
             continue
-        pos_name, start_deg = pos_pick
+        pos_name, nominal_deg = pos_pick
 
         port = int(defn.get("port", 0))
+        current_offset = float(defn.get("offset", 0.0))
+        start_deg = nominal_deg + current_offset
 
         try:
             r = httpx.post(
-                f"{base_url}/calibrate-servos/start",
-                json={"servo_id": servo_name, "servo_port": port, "initial_angle": start_deg},
+                f"{base_url}/servo/set",
+                json={"positions": [{"port": port, "angle_deg": start_deg}]},
                 headers=request_headers,
                 timeout=5.0,
             )
-            if r.status_code == 409:
-                console.print("[red]A calibration session is already active on the Pi.[/red]")
-                continue
             r.raise_for_status()
         except httpx.HTTPStatusError as exc:
             console.print(f"[red]Could not start session ({exc.response.status_code}): {exc.response.text}[/red]")
@@ -404,7 +409,10 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
         _steps = [0.5, 1.0, 2.0]
         _current_angle = [start_deg]  # mutable so worker can update it
 
-        console.print(f"\n[bold cyan]Jogging {servo_name} · {pos_name}[/bold cyan]  [dim](starting at {start_deg:.1f}°)[/dim]")
+        console.print(
+            f"\n[bold cyan]Jogging {servo_name} · {pos_name}[/bold cyan]  "
+            f"[dim](nominal {nominal_deg:.1f}°, offset {current_offset:+.1f}°, starting at {start_deg:.1f}°)[/dim]"
+        )
         console.print("  [dim]↑ / ↓  move    ← / →  change step    Enter  confirm    Esc/Ctrl+C  quit[/dim]")
         sys.stdout.write(f"\n  [{_step:g}°]  Offset: +0.0°  (current: {start_deg:.1f}°)  ")
         sys.stdout.flush()
@@ -419,19 +427,18 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
                     break
                 try:
                     r = httpx.post(
-                        f"{base_url}/calibrate-servos/move",
-                        json={"delta_to_move": delta},
+                        f"{base_url}/servo/set",
+                        json={"positions": [{"port": port, "angle_deg": _current_angle[0] + delta}]},
                         headers=request_headers,
                         timeout=2.0,
                     )
-                    current_angle = r.json().get("current_angle")
-                    if current_angle is not None:
-                        _current_angle[0] = current_angle
-                        offset = current_angle - start_deg
-                        sys.stdout.write(f"\r  [{_step:g}°]  Offset: {offset:+.1f}°  (current: {current_angle:.1f}°)  ")
-                        sys.stdout.flush()
-                except Exception:
-                    pass
+                    r.raise_for_status()
+                    _current_angle[0] += delta
+                    offset = _current_angle[0] - start_deg
+                    sys.stdout.write(f"\r  [{_step:g}°]  Offset: {offset:+.1f}°  (current: {_current_angle[0]:.1f}°)  ")
+                    sys.stdout.flush()
+                except Exception as exc:
+                    console.print(f"\n[red]Servo move failed: {exc}[/red]")
 
         worker = threading.Thread(target=_move_worker, daemon=True)
         worker.start()
@@ -486,14 +493,18 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
             sys.stdout.write("\n")
             sys.stdout.flush()
 
-        # Always call /end to clean up the session
         try:
-            r = httpx.post(f"{base_url}/calibrate-servos/end", headers=request_headers, timeout=5.0)
-            if r.status_code == 200 and not skipped:
-                data = r.json()
-                console.print(f"  delta: {data['delta']:+.1f}°  final: {data['final_angle']:.1f}°")
+            if not skipped:
+                delta = _current_angle[0] - start_deg
+                new_offset = current_offset + delta
+                saved_path = _save_servo_offset(project_root, config, servo_name, new_offset)
+                defn["offset"] = new_offset
+                console.print(
+                    f"  delta: {delta:+.1f}°  final: {_current_angle[0]:.1f}°  "
+                    f"[green]saved offset {new_offset:+.1f}°[/green] [dim]({saved_path})[/dim]"
+                )
         except Exception as exc:
-            console.print(f"[yellow]Could not cleanly end session: {exc}[/yellow]")
+            console.print(f"[yellow]Could not persist servo offset: {exc}[/yellow]")
 
         if skipped and not quit_all:
             console.print(f"[dim]Skipped {servo_name} · {pos_name}[/dim]")
@@ -536,29 +547,75 @@ def _pick_position(servo_name: str, defn: dict) -> Optional[tuple[str, float]]:
     return result, float(positions[result])
 
 
+def _save_servo_offset(project_root: Path, config: dict, servo_name: str, offset: float) -> Path:
+    def _is_include_tag(value: object, *, tag: str | None = None) -> bool:
+        value_tag = getattr(value, "tag", None)
+        if value_tag is None or not hasattr(value, "path"):
+            return False
+        return tag is None or value_tag == tag
+
+    def _update_servo_in_mapping(data: dict, base_dir: Path) -> Path | None:
+        if servo_name in data and isinstance(data[servo_name], dict):
+            data[servo_name]["offset"] = rounded_offset
+            return None
+
+        for value in data.values():
+            if not _is_include_tag(value, tag="!include-merge"):
+                continue
+
+            inc_path = (base_dir / value.path).resolve()
+            inc_data = load_yaml_raw(inc_path)
+            if not isinstance(inc_data, dict):
+                continue
+
+            result = _update_servo_in_mapping(inc_data, inc_path.parent)
+            if result is not None or (servo_name in inc_data and isinstance(inc_data[servo_name], dict)):
+                save_yaml_raw(inc_data, inc_path)
+                return inc_path
+
+        return None
+
+    rounded_offset = round(offset, 3)
+
+    definitions = config.get("definitions", {})
+    if servo_name in definitions:
+        target = resolve_config_file(project_root, "definitions")
+        data = load_yaml_raw(target)
+
+        container = data
+        if isinstance(container, dict) and "definitions" in container and servo_name not in container:
+            container = container["definitions"]
+
+        if not isinstance(container, dict):
+            raise KeyError(f"Servo '{servo_name}' not found in {target}")
+
+        updated_path = _update_servo_in_mapping(container, target.parent)
+        if updated_path is not None:
+            return updated_path
+        if servo_name in container and isinstance(container[servo_name], dict):
+            save_yaml_raw(data, target)
+            return target
+        raise KeyError(f"Servo '{servo_name}' not found in {target}")
+
+    servos_yml = project_root / "config" / "servos.yml"
+    if not servos_yml.exists():
+        raise FileNotFoundError(f"Could not find a persisted servo definition for '{servo_name}'")
+
+    data = load_yaml_raw(servos_yml)
+    if servo_name not in data or not isinstance(data[servo_name], dict):
+        raise KeyError(f"Servo '{servo_name}' not found in {servos_yml}")
+
+    data[servo_name]["offset"] = rounded_offset
+    save_yaml_raw(data, servos_yml)
+    return servos_yml
+
+
 # ---------------------------------------------------------------------------
 # Command
 # ---------------------------------------------------------------------------
 
-@click.group(name="calibrate", invoke_without_command=True)
-@click.option("--local", "-l", is_flag=True, help="Run locally on this machine (requires hardware)")
-@click.pass_context
-def calibrate_group(
-        ctx: click.Context, local: bool
-) -> None:
-    """Robot calibration.
-
-    \b
-    Runs all phases by default:
-      Phase 1 (ticks)    — rotate each wheel to measure ticks/revolution.
-      Phase 2 (autotune) — runs auto_tune() as a mission step.
-      Phase 3 (servos)   — sweeps servos to find min/max/center.
-
-    Or run a single phase with a subcommand:
-      calibrate ticks
-      calibrate autotune
-      calibrate servos
-    """
+def _prepare_calibration_context(ctx: click.Context, local: bool) -> None:
+    """Load project state and resolve local vs remote execution once per invocation."""
     console: Console = ctx.obj["console"]
 
     try:
@@ -570,11 +627,7 @@ def calibrate_group(
 
     if not local:
         try:
-            from raccoon_cli.client.connection import (
-                get_connection_manager,
-                ParamikoVersionError,
-                print_paramiko_version_error,
-            )
+            from raccoon_cli.client.connection import get_connection_manager
 
             manager = get_connection_manager()
             if not manager.is_connected:
@@ -594,21 +647,43 @@ def calibrate_group(
     ctx.obj["project_root"] = project_root
     ctx.obj["config"] = config
 
-    if ctx.invoked_subcommand is not None:
-        return
 
-    _calibrate_ticks(console, project_root, config, local)
-    if local:
-        _autotune_local(console, project_root, config)
+def _prepare_calibration_subcommand_context(ctx: click.Context) -> None:
+    parent = ctx.parent
+    local = bool(parent.params.get("local", False)) if parent is not None else False
+    _prepare_calibration_context(ctx, local)
+
+
+def _run_autotune(ctx: click.Context) -> None:
+    console: Console = ctx.obj["console"]
+    if ctx.obj["local"]:
+        _autotune_local(console, ctx.obj["project_root"], ctx.obj["config"])
     else:
-        asyncio.run(_autotune_remote(ctx, project_root, config))
-    _calibrate_servos(ctx, project_root, config)
+        asyncio.run(_autotune_remote(ctx, ctx.obj["project_root"], ctx.obj["config"]))
+
+
+@click.group(name="calibrate", no_args_is_help=True)
+@click.option("--local", "-l", is_flag=True, help="Run locally on this machine (requires hardware)")
+@click.pass_context
+def calibrate_group(
+        ctx: click.Context, local: bool
+) -> None:
+    """Robot calibration.
+
+    \b
+    Run one calibration phase at a time:
+      calibrate ticks
+      calibrate autotune
+      calibrate servos
+    """
+    return
 
 
 @calibrate_group.command(name="ticks")
 @click.pass_context
 def calibrate_ticks_cmd(ctx: click.Context) -> None:
     """Phase 1: measure encoder ticks/revolution."""
+    _prepare_calibration_subcommand_context(ctx)
     console = ctx.obj["console"]
     _calibrate_ticks(console, ctx.obj["project_root"], ctx.obj["config"], ctx.obj["local"])
 
@@ -617,15 +692,13 @@ def calibrate_ticks_cmd(ctx: click.Context) -> None:
 @click.pass_context
 def calibrate_autotune_cmd(ctx: click.Context) -> None:
     """Phase 2: run auto_tune() as a mission step."""
-    console = ctx.obj["console"]
-    if ctx.obj["local"]:
-        _autotune_local(console, ctx.obj["project_root"], ctx.obj["config"])
-    else:
-        asyncio.run(_autotune_remote(ctx, ctx.obj["project_root"], ctx.obj["config"]))
+    _prepare_calibration_subcommand_context(ctx)
+    _run_autotune(ctx)
 
 
 @calibrate_group.command(name="servos")
 @click.pass_context
 def calibrate_servos_cmd(ctx: click.Context) -> None:
     """Phase 3: jog servos to find named positions."""
+    _prepare_calibration_subcommand_context(ctx)
     _calibrate_servos(ctx, ctx.obj["project_root"], ctx.obj["config"])
