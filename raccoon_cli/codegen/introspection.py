@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import inspect
 import logging
+import sys
 import types
 import typing
 from pathlib import Path
@@ -46,11 +47,13 @@ def qualname_of(cls: type) -> str:
 def _find_pyi_for_module(module_name: str) -> Optional[Path]:
     """Find the installed .pyi stub file for a module.
 
-    Handles three cases:
+    Handles several cases:
     - Regular .py/.so module: sibling .pyi next to the origin file.
     - Namespace package (origin=None, has search locations): __init__.pyi in the
       first matching search location (covers raccoon, raccoon.hal, etc.).
     - .pyi-only leaf module (no .py file): located via parent's search locations.
+    - Package with transitive import errors (e.g. raccoon._core missing on laptop):
+      falls back to a file-system walk over sys.path entries.
     """
     try:
         spec = importlib.util.find_spec(module_name)
@@ -78,13 +81,31 @@ def _find_pyi_for_module(module_name: str) -> Optional[Path]:
     try:
         parent_spec = importlib.util.find_spec(parent_name)
     except (ModuleNotFoundError, ValueError):
+        parent_spec = None
+
+    if parent_spec is not None:
+        search_dirs = list(parent_spec.submodule_search_locations or [])
+        if not search_dirs and parent_spec.origin:
+            search_dirs = [str(Path(parent_spec.origin).parent)]
+        for search_path in search_dirs:
+            pyi = Path(search_path) / f"{stem}.pyi"
+            if pyi.exists():
+                return pyi
         return None
-    if parent_spec is None or not parent_spec.submodule_search_locations:
-        return None
-    for search_path in parent_spec.submodule_search_locations:
-        pyi = Path(search_path) / f"{stem}.pyi"
-        if pyi.exists():
-            return pyi
+
+    # Last resort: find_spec failed for the parent (e.g. because importing the
+    # top-level package raises an ImportError for an unrelated submodule that is
+    # absent on this platform). Walk sys.path entries and look for the .pyi by
+    # reconstructing the file path from the dotted module name.
+    path_parts = module_name.split(".")
+    for entry in sys.path:
+        base = Path(entry)
+        candidate = base.joinpath(*path_parts[:-1]) / f"{path_parts[-1]}.pyi"
+        if candidate.exists():
+            return candidate
+        candidate = base.joinpath(*path_parts) / "__init__.pyi"
+        if candidate.exists():
+            return candidate
     return None
 
 
@@ -171,7 +192,7 @@ def _resolve_class_from_stub(qualname: str) -> type:
                 source_qualname = f"{source_module}.{alias.name}"
             else:
                 continue
-            cls = resolve_class(source_qualname)
+            cls = _resolve_class_from_stub(source_qualname)
             _stub_class_registry[qualname] = cls
             return cls
 

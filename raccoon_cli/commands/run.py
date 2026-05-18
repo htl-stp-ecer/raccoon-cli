@@ -82,6 +82,17 @@ def _print_output_summary(console: Console, collected: list[str]) -> None:
     )
 
 
+def _terminate_process_on_interrupt(proc: subprocess.Popen, console: Console) -> int:
+    """Stop a child process after Ctrl+C and return its exit code."""
+    console.print("\n[yellow]Ctrl+C — stopping program...[/yellow]")
+    proc.terminate()
+    try:
+        return proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return proc.wait()
+
+
 def _run_via_pty(
     cmd_parts: list[str],
     project_root: Path,
@@ -148,20 +159,16 @@ def _run_via_pty(
                 except OSError:
                     pass
                 break
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Ctrl+C — stopping program...[/yellow]")
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
     finally:
         try:
             os.close(master_fd)
         except OSError:
             pass
 
-    return proc.wait()
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        return _terminate_process_on_interrupt(proc, console)
 
 
 def _run_local(
@@ -245,13 +252,7 @@ def _run_local(
         try:
             returncode = proc.wait()
         except KeyboardInterrupt:
-            console.print("\n[yellow]Ctrl+C — stopping program...[/yellow]")
-            proc.terminate()
-            try:
-                returncode = proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                returncode = proc.wait()
+            returncode = _terminate_process_on_interrupt(proc, console)
     else:
         returncode = _run_via_pty(cmd_parts, project_root, env, console)
 
