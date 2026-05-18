@@ -10,7 +10,7 @@ from .base import BaseGenerator
 from ..builder import build_constructor_expr, build_literal_expr
 from ..class_builder import ClassBuilder
 from ..introspection import resolve_class
-from ..yaml_resolver import create_kinematics_resolver, create_odometry_resolver
+from ..yaml_resolver import create_kinematics_resolver
 
 logger = logging.getLogger("raccoon")
 
@@ -21,7 +21,6 @@ class RobotGenerator(BaseGenerator):
     def __init__(self, class_name: str = "Robot"):
         super().__init__(class_name)
         self.kinematics_resolver = create_kinematics_resolver()
-        self.odometry_resolver = create_odometry_resolver()
         self.mission_imports = []
 
     def get_output_filename(self) -> str:
@@ -75,11 +74,10 @@ class RobotGenerator(BaseGenerator):
                 raise ValueError("robot.kinematics.type is required")
 
         if "odometry" in data:
-            odometry_cfg = data["odometry"]
-            if not isinstance(odometry_cfg, (str, dict)):
-                raise ValueError("robot.odometry must be a string or a mapping")
-            if isinstance(odometry_cfg, dict) and "type" not in odometry_cfg:
-                raise ValueError("robot.odometry.type is required when using mapping form")
+            logger.info(
+                "Ignoring 'robot.odometry' in config: odometry is now platform-managed "
+                "and no longer codegen-emitted. You can remove this section from robot.yml."
+            )
 
     def generate(self, config: Dict[str, Any]) -> str:
         self._full_config = config
@@ -116,14 +114,6 @@ class RobotGenerator(BaseGenerator):
 
         if drive_expr:
             builder.add_class_attribute("drive", drive_expr)
-
-        odometry_expr = self._build_odometry(
-            data.get("odometry"),
-            has_kinematics=bool(kinematics_expr),
-            has_drive=bool(drive_expr),
-        )
-        if odometry_expr:
-            builder.add_class_attribute("odometry", odometry_expr)
 
         motion_pid_cfg = data.get("motion_pid")
         if motion_pid_cfg is not None:
@@ -268,8 +258,7 @@ class RobotGenerator(BaseGenerator):
         return (round(forward_cm, 4), round(strafe_cm, 4))
 
     def _build_table_map_expr(self, data: Dict[str, Any]) -> str:
-        table_map_cls = resolve_class("raccoon.TableMap")
-        self.imports.add(table_map_cls)
+        self.imports.add_qualname("raccoon.TableMap")
         return f"TableMap.from_ftmap({data!r})"
 
     def _build_sensor_positions_expr(
@@ -574,147 +563,6 @@ class RobotGenerator(BaseGenerator):
             "        cfg.wz = wz\n"
             "    return cfg\n"
         )
-
-    def _build_odometry(
-        self,
-        odometry_cfg: Any,
-        *,
-        has_kinematics: bool,
-        has_drive: bool,
-    ) -> str:
-        if odometry_cfg is None:
-            return ""
-
-        if isinstance(odometry_cfg, str):
-            odometry_type = odometry_cfg
-            params_cfg: Dict[str, Any] = {}
-        elif isinstance(odometry_cfg, dict):
-            odometry_type = odometry_cfg.get("type", "")
-            params_cfg = {k: v for k, v in odometry_cfg.items() if k != "type"}
-        else:
-            raise ValueError("robot.odometry must be a string or mapping")
-
-        if not odometry_type:
-            logger.error("robot.odometry.type is required to generate odometry")
-            return ""
-
-        odometry_class = self.odometry_resolver.resolve_type(odometry_type)
-        logger.info(f"Resolved odometry type '{odometry_type}' to {odometry_class.__name__}")
-        init_params = self._introspect_odometry_params(odometry_class)
-
-        self.imports.add(odometry_class)
-
-        import inspect
-
-        definitions = {}
-        if hasattr(self, "_full_config"):
-            definitions = self._full_config.get("definitions", {}) or {}
-
-        reference_map = {
-            "imu": "defs.imu",
-            "defs": "defs",
-        }
-        if has_kinematics:
-            reference_map["kinematics"] = "kinematics"
-        if has_drive:
-            reference_map["drive"] = "drive"
-        for name in definitions:
-            reference_map[name] = f"defs.{name}"
-
-        param_exprs: Dict[str, str] = {}
-        used_config_keys: set[str] = set()
-
-        for name, param in init_params.items():
-            if name in params_cfg:
-                param_exprs[name] = self._render_odometry_param_value(
-                    params_cfg[name],
-                    reference_map,
-                    odometry_class=odometry_class,
-                    param_name=name,
-                )
-                used_config_keys.add(name)
-            elif name in reference_map:
-                ref_expr = reference_map[name]
-                if ref_expr == "kinematics" and not has_kinematics:
-                    raise ValueError(
-                        f"robot.odometry: '{odometry_class.__name__}' requires a kinematics attribute"
-                    )
-                if ref_expr == "drive" and not has_drive:
-                    raise ValueError(
-                        f"robot.odometry: '{odometry_class.__name__}' requires a drive attribute"
-                    )
-                param_exprs[name] = ref_expr
-            elif param.default == inspect.Parameter.empty:
-                raise ValueError(
-                    f"robot.odometry: Missing required parameter '{name}' for {odometry_class.__name__}"
-                )
-
-        for key in sorted(set(params_cfg.keys()) - used_config_keys):
-            if key not in init_params:
-                logger.warning(
-                    f"robot.odometry: Unknown parameter '{key}' for {odometry_class.__name__}"
-                )
-
-        args = [
-            f"{name}={param_exprs[name]}"
-            for name in init_params
-            if name in param_exprs
-        ]
-
-        extra_keys = [key for key in used_config_keys if key not in init_params]
-        for key in extra_keys:
-            args.append(
-                f"{key}={self._render_odometry_param_value(params_cfg[key], reference_map, odometry_class=odometry_class, param_name=key)}"
-            )
-
-        return f"{odometry_class.__name__}({', '.join(args)})"
-
-    def _render_odometry_param_value(
-        self,
-        value: Any,
-        reference_map: Dict[str, str],
-        *,
-        odometry_class: Optional[type] = None,
-        param_name: Optional[str] = None,
-    ) -> str:
-        if isinstance(value, str):
-            if value in reference_map:
-                return reference_map[value]
-            if value.startswith("defs.") and value[5:] in reference_map:
-                return reference_map[value[5:]]
-            return build_literal_expr(value)
-
-        if isinstance(value, dict) and odometry_class is not None and param_name is not None:
-            nested_cls = self._infer_odometry_param_class(odometry_class, param_name)
-            if nested_cls is not None:
-                return build_constructor_expr(
-                    nested_cls,
-                    value,
-                    f"robot.odometry.{param_name}",
-                    self.imports,
-                )
-
-        return build_literal_expr(value)
-
-    def _infer_odometry_param_class(self, odometry_class: type, param_name: str) -> Optional[type]:
-        from ..introspection import infer_param_type
-
-        nested_cls = infer_param_type(odometry_class, param_name)
-        if nested_cls is not None:
-            logger.info(
-                f"Inferred type for odometry param '{param_name}': {nested_cls.__name__}"
-            )
-            return nested_cls
-
-        logger.warning(
-            f"robot.odometry: Could not infer class type for parameter '{param_name}' "
-            f"of {odometry_class.__name__}, using dict literal"
-        )
-        return None
-
-    def _introspect_odometry_params(self, odometry_class: type) -> Dict[str, Any]:
-        from ..introspection import get_init_params
-        return get_init_params(odometry_class)
 
     def generate_imports(self) -> str:
         generic_robot_cls = resolve_class("raccoon.GenericRobot")

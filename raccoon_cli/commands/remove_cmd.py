@@ -9,7 +9,6 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from raccoon_cli.mission_codegen import remove_mission_import_from_main
 from raccoon_cli.mission_config import remove_mission_from_config
 from raccoon_cli.naming import normalize_name
 from raccoon_cli.project import ProjectError, load_project_config, find_project_root
@@ -63,10 +62,6 @@ def remove_mission_command(ctx: click.Context, name: str, keep_file: bool) -> No
         logger.warning(f"Mission '{mission_class}' not found in raccoon.project.yml")
     else:
         console.print(f"[green]✓ Removed '{mission_class}' from raccoon.project.yml[/green]")
-    
-    # Remove import from main.py
-    remove_mission_import_from_main(project_root, mission_snake, mission_pascal)
-    console.print(f"[green]✓ Removed import from main.py[/green]")
     
     # Remove mission file unless --keep-file is set
     if not keep_file:

@@ -83,7 +83,9 @@ After that, the server starts automatically on boot and `raccoon connect` can re
 |:--------|:------------|
 | `raccoon wizard` | Re-run the interactive hardware configuration |
 | `raccoon codegen` | Regenerate `src/hardware/defs.py` and `src/hardware/robot.py` from config |
-| `raccoon calibrate` | Two-phase calibration: measure encoder ticks/rev, then run autotune |
+| `raccoon calibrate ticks` | Measure encoder ticks per revolution |
+| `raccoon calibrate autotune` | Run motor autotune |
+| `raccoon calibrate servos` | Interactively calibrate servo offsets |
 
 ### Remote development
 
@@ -183,6 +185,8 @@ left_motor:
   calibration:
     ticks_to_rad: 0.00002   # set by raccoon calibrate
     vel_lpf_alpha: 1.0
+    # Optional: omit pid to use STM32 firmware defaults
+    # pid: {kp: 1.22, ki: 0.045, kd: 0.0}
 right_motor:
   type: Motor
   port: 1

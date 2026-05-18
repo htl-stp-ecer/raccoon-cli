@@ -122,8 +122,11 @@ def build_chain(
         mount_rpy_rad = [math.radians(float(v)) for v in mount_rpy_deg]
 
         # Offset from the previous link's output frame to this joint's pivot.
-        # Explicit offset_cm wins; otherwise fall back to the previous joint's
-        # length-along-X shortcut.
+        # Composition: previous joint's structural length along its local +X
+        # (the rigid bar) PLUS the mounting bracket given by offset_cm. So
+        # this joint sits at (L_prev, 0, 0) + offset_cm in the parent's frame.
+        # When offset_cm is omitted, only the length-along-X is used (legacy
+        # short-hand for "next joint sits at the end of my bar").
         offset_cm_cfg = joint_cfg.get("offset_cm")
         if offset_cm_cfg is not None:
             if len(offset_cm_cfg) != 3:
@@ -131,7 +134,12 @@ def build_chain(
                     f"definitions.{field_name}.joints[{i}].offset_cm: "
                     f"expected 3 values [x,y,z], got {len(offset_cm_cfg)}"
                 )
-            origin_translation = [float(v) / 100.0 for v in offset_cm_cfg]
+            bracket_m = [float(v) / 100.0 for v in offset_cm_cfg]
+            origin_translation = [
+                fallback_next_translation[0] + bracket_m[0],
+                fallback_next_translation[1] + bracket_m[1],
+                fallback_next_translation[2] + bracket_m[2],
+            ]
         else:
             origin_translation = list(fallback_next_translation)
 
@@ -160,15 +168,21 @@ def build_chain(
             }
         )
 
-    # End-effector offset: explicit tip_offset_cm wins, else previous joint's
-    # length-along-X.
+    # End-effector offset: additive bracket on top of the last joint's bar
+    # (same composition rule as joints' offset_cm). When omitted, the tip
+    # sits at the end of the last joint's structural segment.
     if tip_offset_cm is not None:
         if len(tip_offset_cm) != 3:
             raise ValueError(
                 f"definitions.{field_name}.tip_offset_cm: "
                 f"expected 3 values [x,y,z], got {len(tip_offset_cm)}"
             )
-        ee_translation = [float(v) / 100.0 for v in tip_offset_cm]
+        tip_m = [float(v) / 100.0 for v in tip_offset_cm]
+        ee_translation = [
+            fallback_next_translation[0] + tip_m[0],
+            fallback_next_translation[1] + tip_m[1],
+            fallback_next_translation[2] + tip_m[2],
+        ]
     else:
         ee_translation = list(fallback_next_translation)
 
@@ -290,6 +304,47 @@ def joint_world_axes(
             {
                 "origin_cm": [float(origin[0]), float(origin[1]), float(origin[2])],
                 "axis": [float(world_axis[0]), float(world_axis[1]), float(world_axis[2])],
+            }
+        )
+    return out
+
+
+def joint_segments_cm(
+    chain,
+    joint_angles_deg: list[float],
+    lengths_cm: list[float],
+) -> list[dict[str, list[float]]]:
+    """For each joint, return its structural segment as (origin_cm → end_cm).
+
+    The "segment" is the rigid bar attached to a joint along its local +X axis,
+    length ``length_cm``. ``end_cm`` is where the next joint's mounting bracket
+    starts; the *actual* next-joint pivot may differ if ``offset_cm`` is set.
+
+    Output: ``[{"origin_cm": [...], "end_cm": [...], "length_cm": L}, ...]``
+    one entry per active joint, in chain order.
+    """
+    _, np = require_ikpy()
+    full = _expand_active_angles(chain, joint_angles_deg)
+    transforms = chain.forward_kinematics(full, full_kinematics=True)
+
+    out: list[dict[str, list[float]]] = []
+    active_links = list(chain.links[1:-1])
+    for idx, link in enumerate(active_links):
+        t = transforms[idx + 1]
+        R = t[:3, :3]
+        origin = t[:3, 3] * 100.0  # cm
+        local_x = np.array([1.0, 0.0, 0.0])
+        world_x = R @ local_x
+        n = float(np.linalg.norm(world_x))
+        if n > 1e-9:
+            world_x = world_x / n
+        L = float(lengths_cm[idx]) if idx < len(lengths_cm) else 0.0
+        end = origin + world_x * L
+        out.append(
+            {
+                "origin_cm": [float(origin[0]), float(origin[1]), float(origin[2])],
+                "end_cm": [float(end[0]), float(end[1]), float(end[2])],
+                "length_cm": L,
             }
         )
     return out

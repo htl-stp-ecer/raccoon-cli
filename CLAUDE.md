@@ -21,7 +21,9 @@ raccoon --help                      # View CLI help
 raccoon create project MyRobot      # Create new project
 raccoon wizard                      # Interactive hardware configuration
 raccoon codegen                     # Generate hardware code from YAML
-raccoon calibrate                   # Calibrate motor PID/feedforward
+raccoon calibrate ticks             # Measure encoder ticks per revolution
+raccoon calibrate autotune          # Run motor autotune
+raccoon calibrate servos            # Interactively calibrate servo offsets
 raccoon run                         # Run project (auto-codegen + execute)
 ```
 
@@ -79,6 +81,16 @@ raccoon/
   - **IDE backend** (`raccoon_cli/ide/`, laptop, default port 3000): owns the project files on disk. Handles project CRUD, missions, steps, type definitions, files, arm chain read/IK/FK/positions.
   - **Pi server** (`raccoon_cli/server/`, robot, port 8421): owns the hardware. Handles real-time execution, motor/servo/hardware access, and arm `/command` (moves servos via `raccoon.hal`).
   - Frontend split: `HttpService.localApi(...)` → IDE backend; `HttpService.deviceApi(...)` → Pi server. When adding a new endpoint, decide *which* server actually has the data/hardware it needs — putting it on the wrong one yields a generic 404 (FastAPI route-not-found).
+
+### KRITISCH: Einheitliche Service-Schicht für CLI und Web-IDE
+
+**CLI-Commands und Web-IDE-Backend MÜSSEN dieselbe Shared-Service-Schicht verwenden. Es gibt keine zwei Implementierungen derselben Logik.**
+
+- Shared business logic gehört in `raccoon_cli/` (z.B. `mission_codegen.py`, `mission_config.py`, `naming.py`) — nicht dupliziert in `raccoon_cli/commands/` UND `raccoon_cli/ide/`.
+- CLI-Commands (`raccoon_cli/commands/`) sind **nur dünne Wrapper**: CLI-Argumente parsen, Shared-Service aufrufen, Output formatieren.
+- IDE-Backend-Services (`raccoon_cli/ide/services/`) rufen **dieselben Shared-Service-Funktionen** auf wie die CLI-Commands.
+- Wenn du dieselbe Operation (z.B. Mission erstellen/entfernen) im CLI und in der IDE implementierst: **ein gemeinsamer Codepfad**, kein Copy-Paste. Divergenz zwischen CLI und IDE ist immer ein Bug.
+- Entscheidungsregel: *"Würde ich das auch ins CLI bauen?"* — wenn ja, gehört es ins Shared-Layer, nicht exklusiv in `ide/`.
 
 ### Configuration Files
 

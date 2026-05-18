@@ -1,7 +1,6 @@
 """Filesystem-backed repository for IDE project metadata and config files."""
 
 import os
-import subprocess
 from pathlib import Path
 from uuid import UUID
 
@@ -11,6 +10,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from raccoon_cli.ide.schemas.project import ProjectCreate, ProjectInDB, ProjectConnection
+from raccoon_cli.project_creation import create_mission as _create_mission, scaffold_project
 
 
 class ProjectRepository:
@@ -111,32 +111,8 @@ class ProjectRepository:
             raise ValueError("Project name cannot be empty")
 
         project_path = Path(self.project_root) / project_name
-        if project_path.exists():
-            raise FileExistsError(f"Project '{project_name}' already exists")
 
-        try:
-            subprocess.run(
-                [
-                    "raccoon",
-                    "create",
-                    "project",
-                    project_name,
-                    "--path",
-                    self.project_root,
-                    "--no-wizard",
-                    "--no-open-ide",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError("The 'raccoon' command is not available on the local backend") from exc
-        except subprocess.CalledProcessError as exc:
-            stderr = (exc.stderr or "").strip()
-            stdout = (exc.stdout or "").strip()
-            message = stderr or stdout or f"Failed to create project '{project_name}'"
-            raise RuntimeError(message) from exc
+        project_uuid, _ = scaffold_project(project_name, project_path)
 
         config_path = project_path / self.CONFIG_FILENAME
         if not config_path.exists():
@@ -154,7 +130,6 @@ class ProjectRepository:
         return project
 
     def create_mission(self, project_uuid: UUID, mission_name: str) -> None:
-        """Create a mission by delegating to the canonical CLI command."""
         mission_name = mission_name.strip()
         if not mission_name:
             raise ValueError("Mission name cannot be empty")
@@ -164,23 +139,7 @@ class ProjectRepository:
         if not config_path.exists():
             raise FileNotFoundError(f"Project '{project_uuid}' not found")
 
-        try:
-            subprocess.run(
-                ["raccoon", "create", "mission", mission_name],
-                check=True,
-                capture_output=True,
-                text=True,
-                cwd=project_path,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError("The 'raccoon' command is not available on the local backend") from exc
-        except subprocess.CalledProcessError as exc:
-            stderr = (exc.stderr or "").strip()
-            stdout = (exc.stdout or "").strip()
-            message = stderr or stdout or f"Failed to create mission '{mission_name}'"
-            if "already exists" in message.lower():
-                raise FileExistsError(message) from exc
-            raise RuntimeError(message) from exc
+        _create_mission(project_path, mission_name)
 
     def get_project(self, project_uuid: uuid.UUID) -> Optional[ProjectInDB]:
         data = self._load_project_config(project_uuid)

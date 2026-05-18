@@ -1,4 +1,4 @@
-"""Shared helpers for mission file scaffolding and main.py import management."""
+"""Shared helpers for mission file scaffolding."""
 
 from __future__ import annotations
 
@@ -67,50 +67,3 @@ def copy_template_dir(template_dir: Path, target_dir: Path, context: Dict[str, A
             else:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(item, output_path)
-
-
-def add_mission_import_to_main(project_root: Path, mission_snake: str, mission_pascal: str) -> None:
-    """Add mission import and registration to main.py."""
-    main_py = project_root / "src" / "main.py"
-
-    if not main_py.exists():
-        logger.warning(f"main.py not found at {main_py}")
-        return
-
-    content = main_py.read_text(encoding='utf-8')
-
-    import_line = f"from .missions.{mission_snake}_mission import {mission_pascal}Mission"
-
-    if import_line not in content:
-        lines = content.split('\n')
-        insert_idx = 0
-
-        for i, line in enumerate(lines):
-            if 'from .missions.' in line and 'import' in line:
-                insert_idx = i + 1
-
-        if insert_idx == 0:
-            for i, line in enumerate(lines):
-                if line.strip() and not line.startswith('#') and not line.startswith('"""') and 'import' not in line:
-                    insert_idx = i
-                    break
-
-        lines.insert(insert_idx, import_line)
-        content = '\n'.join(lines)
-        main_py.write_text(content, encoding='utf-8')
-
-
-def remove_mission_import_from_main(project_root: Path, mission_snake: str, mission_pascal: str) -> None:
-    """Remove mission import from main.py."""
-    main_py = project_root / "src" / "main.py"
-
-    if not main_py.exists():
-        return
-
-    content = main_py.read_text(encoding='utf-8')
-    import_line = f"from .missions.{mission_snake}_mission import {mission_pascal}Mission"
-
-    lines = content.split('\n')
-    lines = [line for line in lines if import_line not in line]
-
-    main_py.write_text('\n'.join(lines), encoding='utf-8')

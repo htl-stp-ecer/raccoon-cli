@@ -5,6 +5,11 @@ left_motor:
   calibration:
     ticks_to_rad: 0.00002
     vel_lpf_alpha: 1.0
+    # Optional firmware velocity PID. Omit pid to keep the STM32 defaults.
+    # pid:
+    #   kp: 1.22
+    #   ki: 0.045
+    #   kd: 0.0
 right_motor:
   type: Motor
   port: 1
@@ -12,3 +17,8 @@ right_motor:
   calibration:
     ticks_to_rad: 0.00002
     vel_lpf_alpha: 1.0
+    # Optional firmware velocity PID. Omit pid to keep the STM32 defaults.
+    # pid:
+    #   kp: 1.22
+    #   ki: 0.045
+    #   kd: 0.0

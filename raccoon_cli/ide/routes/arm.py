@@ -11,6 +11,7 @@ extra installed; ImportError surfaces as HTTP 503 with a clear hint.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import time
 from dataclasses import dataclass, field
@@ -23,7 +24,9 @@ from pydantic import BaseModel, Field
 
 from raccoon_cli.ide.repositories.project_repository import ProjectRepository
 from raccoon_cli.project import resolve_config_file
-from raccoon_cli.yaml_utils import load_yaml_raw, save_yaml_raw
+from raccoon_cli.yaml_utils import _IncludeTag, load_yaml_raw, save_yaml_raw
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -90,10 +93,17 @@ class JointAxisSpec(BaseModel):
     axis: list[float]
 
 
+class JointSegmentSpec(BaseModel):
+    origin_cm: list[float]
+    end_cm: list[float]
+    length_cm: float
+
+
 class FKResponse(BaseModel):
     frames: list[list[float]]
     end_effector_cm: list[float]
     joint_axes: list[JointAxisSpec] = Field(default_factory=list)
+    joint_segments: list[JointSegmentSpec] = Field(default_factory=list)
 
 
 class IKRequest(BaseModel):
@@ -124,6 +134,26 @@ class PositionUpdateRequest(BaseModel):
     joint_angles_deg: list[float]
 
 
+class JointStructureUpdate(BaseModel):
+    """All fields optional — only provided keys are written back."""
+    length_cm: Optional[float] = None
+    axis: Optional[list[float]] = None
+    mount_rpy_deg: Optional[list[float]] = None
+    offset_cm: Optional[list[float]] = None  # use [] to clear (fall back to length-along-X)
+    joint_range_deg: Optional[list[float]] = None
+    servo_range_deg: Optional[list[float]] = None
+
+
+class ArmStructureUpdate(BaseModel):
+    """Patch joint structure and/or chain-level tip offset.
+
+    ``joints`` length must match the existing joint count. To clear
+    ``tip_offset_cm`` pass an empty list.
+    """
+    joints: Optional[list[JointStructureUpdate]] = None
+    tip_offset_cm: Optional[list[float]] = None
+
+
 class PositionUpdateResponse(BaseModel):
     name: str
     joint_angles_deg: list[float]
@@ -143,24 +173,43 @@ def _load_arm(repo: ProjectRepository, project_uuid: UUID):
     caller can tell them apart.
     """
     project_path = repo.get_project_path(project_uuid)
+    log.info("arm/chain: looking up project %s at %s", project_uuid, project_path)
     if not project_path.exists():
+        log.warning("arm/chain: project path does not exist: %s", project_path)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project '{project_uuid}' not found",
         )
     config = repo.read_project_config(project_uuid)
     if not config:
+        log.warning("arm/chain: raccoon.project.yml missing or empty for %s", project_uuid)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"raccoon.project.yml not found or empty for '{project_uuid}'",
         )
+    log.debug("arm/chain: config top-level keys: %s", list(config.keys()))
     definitions = config.get("definitions", {}) or {}
+    log.info(
+        "arm/chain: definitions keys: %s",
+        {k: (v.get("type") if isinstance(v, dict) else type(v).__name__) for k, v in definitions.items()}
+        if definitions else "(empty)",
+    )
     for name, cfg in definitions.items():
         if isinstance(cfg, dict) and cfg.get("type") == "ArmChain":
+            log.info("arm/chain: found ArmChain '%s'", name)
             return project_path, definitions, name, cfg
+    log.warning(
+        "arm/chain: no ArmChain found for project %s — definitions present: %s",
+        project_uuid,
+        list(definitions.keys()) or "(none)",
+    )
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail="No ArmChain definition found in project definitions",
+        detail=(
+            f"No ArmChain definition found in project definitions. "
+            f"Definitions present: {list(definitions.keys()) or '(none)'}. "
+            f"Check that raccoon.project.yml contains an entry with type: ArmChain."
+        ),
     )
 
 
@@ -187,28 +236,98 @@ def _build_chain(hw_cfg: dict[str, Any], definitions: dict[str, Any], field_name
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _write_position(project_path: Path, field_name: str, mutate) -> None:
-    """Apply *mutate(positions_dict)* in the file that owns ``definitions``."""
-    target = resolve_config_file(project_path, "definitions")
-    data = load_yaml_raw(target)
+def _locate_arm_leaf(
+    path: Path,
+    field_name: str,
+    visited: Optional[set[Path]] = None,
+    bound_key: Optional[str] = None,
+):
+    """Walk !include / !include-merge chain to find the physical YAML file
+    that actually contains the arm definition.
 
-    # Either the target file IS the definitions mapping (when included as
-    # `definitions: !include …`), or it carries a top-level `definitions:`
-    # key (main YAML or include-merge source).
-    container = data
-    if isinstance(container, dict) and "definitions" in container and field_name not in container:
-        container = container["definitions"]
+    Returns ``(leaf_path, root_data, arm_block)`` — ``root_data`` is the full
+    parsed tree to pass to ``save_yaml_raw`` and ``arm_block`` is the dict to
+    mutate (a reference into ``root_data``).
 
-    if not isinstance(container, dict) or field_name not in container:
+    ``bound_key`` tracks the parent key this file was included under. When it
+    equals ``field_name`` the included file's *contents* ARE the arm block
+    (pattern: ``arm: !include arm.yml`` where arm.yml has ``type:`` /
+    ``joints:`` at top level instead of an outer ``arm:`` key).
+    """
+    path = path.resolve()
+    visited = visited if visited is not None else set()
+    if path in visited or not path.exists():
+        return None
+    visited.add(path)
+
+    data = load_yaml_raw(path)
+    if not isinstance(data, dict):
+        return None
+
+    # File's contents ARE the arm block (bound by parent key).
+    if bound_key == field_name:
+        return (path, data, data)
+
+    # File directly carries the arm key (e.g. file IS the definitions map).
+    if field_name in data and isinstance(data[field_name], dict):
+        return (path, data, data[field_name])
+
+    # File has a `definitions:` mapping holding the arm.
+    defs = data.get("definitions")
+    if isinstance(defs, dict) and field_name in defs and isinstance(defs[field_name], dict):
+        return (path, data, defs[field_name])
+
+    def _recurse(container: dict):
+        for k, v in container.items():
+            if isinstance(v, _IncludeTag):
+                inc_path = (path.parent / v.path).resolve()
+                # `!include-merge` does not bind to a specific key — its content
+                # merges into the parent. `!include` *does* bind the value to k.
+                child_bound = k if v.tag == "!include" else None
+                result = _locate_arm_leaf(inc_path, field_name, visited, child_bound)
+                if result is not None:
+                    return result
+            elif isinstance(v, dict):
+                result = _recurse(v)
+                if result is not None:
+                    return result
+        return None
+
+    return _recurse(data)
+
+
+def _mutate_arm_block(project_path: Path, field_name: str, mutate) -> None:
+    """Apply *mutate(arm_block)* on the YAML file that physically owns the arm
+    definition, even when split across ``!include`` / ``!include-merge`` files.
+    """
+    root_yaml = project_path / "raccoon.project.yml"
+    located = _locate_arm_leaf(root_yaml, field_name)
+    if located is None:
+        # Fallback to the legacy single-file resolver for direct layouts.
+        target = resolve_config_file(project_path, "definitions")
+        located = _locate_arm_leaf(target, field_name)
+    if located is None:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not locate arm '{field_name}' in {target.name} for write-back",
+            detail=(
+                f"Could not locate arm '{field_name}' in any project YAML file "
+                f"(starting from {root_yaml.name}) for write-back. "
+                f"Check that the arm definition lives in raccoon.project.yml or "
+                f"in an !include / !include-merge'd file."
+            ),
         )
 
-    arm_block = container[field_name]
-    positions = arm_block.setdefault("positions", {})
-    mutate(positions)
-    save_yaml_raw(data, target)
+    leaf_path, root_data, arm_block = located
+    mutate(arm_block)
+    save_yaml_raw(root_data, leaf_path)
+
+
+def _write_position(project_path: Path, field_name: str, mutate) -> None:
+    """Apply *mutate(positions_dict)* in the file that owns ``definitions``."""
+    def _inner(arm_block):
+        positions = arm_block.setdefault("positions", {})
+        mutate(positions)
+    _mutate_arm_block(project_path, field_name, _inner)
 
 
 # ---------------------------------------------------------------------------
@@ -284,21 +403,25 @@ async def compute_fk(
     repo: ProjectRepository = Depends(get_project_repository),
 ):
     _, definitions, field_name, hw_cfg = _load_arm(repo, project_uuid)
-    chain, _ = _build_chain(hw_cfg, definitions, field_name)
+    chain, joint_mappings = _build_chain(hw_cfg, definitions, field_name)
 
     from raccoon_cli.codegen.arm.kinematics import (  # noqa: PLC0415
         end_effector_cm,
         forward_kinematics,
+        joint_segments_cm,
         joint_world_axes,
     )
 
     frames = forward_kinematics(chain, request.joint_angles_deg)
     ee = end_effector_cm(chain, request.joint_angles_deg)
     axes = joint_world_axes(chain, request.joint_angles_deg)
+    lengths = [float(m.get("length_cm", 0.0) or 0.0) for m in joint_mappings]
+    segments = joint_segments_cm(chain, request.joint_angles_deg, lengths)
     return FKResponse(
         frames=frames,
         end_effector_cm=ee,
         joint_axes=[JointAxisSpec(**a) for a in axes],
+        joint_segments=[JointSegmentSpec(**s) for s in segments],
     )
 
 
@@ -480,6 +603,106 @@ async def command_arm(
     )
 
     return CommandResponse(success=True, count=len(positions))
+
+
+@router.patch("/{project_uuid}/arm/structure", response_model=ArmChainSpec)
+async def patch_arm_structure(
+    project_uuid: UUID,
+    request: ArmStructureUpdate,
+    repo: ProjectRepository = Depends(get_project_repository),
+):
+    """Patch joint structural parameters and/or tip offset.
+
+    Validates with a build_chain dry-run before writing. Invalidates the
+    live-command cache so the next /command call rebuilds servo mappings.
+    Returns the freshly reloaded chain spec.
+    """
+    project_path, definitions, field_name, hw_cfg = _load_arm(repo, project_uuid)
+    joints_cfg = list(hw_cfg.get("joints", []) or [])
+
+    if request.joints is not None and len(request.joints) != len(joints_cfg):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Expected {len(joints_cfg)} joint updates, "
+                f"got {len(request.joints)}"
+            ),
+        )
+
+    def _apply_joint(target: dict, patch: JointStructureUpdate) -> None:
+        if patch.length_cm is not None:
+            if patch.length_cm < 0:
+                raise HTTPException(status_code=400, detail="length_cm must be >= 0")
+            target["length_cm"] = float(patch.length_cm)
+        if patch.axis is not None:
+            if len(patch.axis) != 3:
+                raise HTTPException(status_code=400, detail="axis must have 3 components")
+            target["axis"] = [float(v) for v in patch.axis]
+        if patch.mount_rpy_deg is not None:
+            if len(patch.mount_rpy_deg) != 3:
+                raise HTTPException(status_code=400, detail="mount_rpy_deg must have 3 components")
+            target["mount_rpy_deg"] = [float(v) for v in patch.mount_rpy_deg]
+        if patch.offset_cm is not None:
+            if len(patch.offset_cm) == 0:
+                target.pop("offset_cm", None)
+            elif len(patch.offset_cm) != 3:
+                raise HTTPException(status_code=400, detail="offset_cm must have 3 components or be empty to clear")
+            else:
+                target["offset_cm"] = [float(v) for v in patch.offset_cm]
+        if patch.joint_range_deg is not None:
+            if len(patch.joint_range_deg) != 2:
+                raise HTTPException(status_code=400, detail="joint_range_deg must be [lo, hi]")
+            target["joint_range_deg"] = [float(v) for v in patch.joint_range_deg]
+        if patch.servo_range_deg is not None:
+            if len(patch.servo_range_deg) != 2:
+                raise HTTPException(status_code=400, detail="servo_range_deg must be [lo, hi]")
+            target["servo_range_deg"] = [float(v) for v in patch.servo_range_deg]
+
+    # Dry-run validation: build a candidate config, run build_chain on it,
+    # only persist if it succeeds.
+    candidate_joints = [dict(j) for j in joints_cfg]
+    if request.joints is not None:
+        for jc, patch in zip(candidate_joints, request.joints):
+            _apply_joint(jc, patch)
+
+    candidate_tip = hw_cfg.get("tip_offset_cm")
+    if request.tip_offset_cm is not None:
+        if len(request.tip_offset_cm) == 0:
+            candidate_tip = None
+        elif len(request.tip_offset_cm) != 3:
+            raise HTTPException(status_code=400, detail="tip_offset_cm must have 3 components or be empty to clear")
+        else:
+            candidate_tip = [float(v) for v in request.tip_offset_cm]
+
+    try:
+        from raccoon_cli.codegen.arm.kinematics import build_chain  # noqa: PLC0415
+        build_chain(
+            candidate_joints,
+            definitions,
+            field_name=field_name,
+            tip_offset_cm=candidate_tip,
+        )
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid structure: {exc}") from exc
+
+    def _write(arm_block) -> None:
+        if request.joints is not None:
+            yaml_joints = arm_block.get("joints") or []
+            for jc, patch in zip(yaml_joints, request.joints):
+                _apply_joint(jc, patch)
+        if request.tip_offset_cm is not None:
+            if len(request.tip_offset_cm) == 0:
+                arm_block.pop("tip_offset_cm", None)
+            else:
+                arm_block["tip_offset_cm"] = [float(v) for v in request.tip_offset_cm]
+
+    _mutate_arm_block(project_path, field_name, _write)
+    _live_cache.pop(str(project_uuid), None)
+
+    # Re-issue the GET-chain logic so the caller gets the fresh spec.
+    return await get_arm_chain(project_uuid, repo)  # type: ignore[return-value]
 
 
 @router.put("/{project_uuid}/arm/positions/{name}", response_model=PositionUpdateResponse)

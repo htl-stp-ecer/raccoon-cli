@@ -1,5 +1,4 @@
 from pathlib import Path
-from subprocess import CompletedProcess
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -18,16 +17,10 @@ def test_create_mission_route_uses_shared_cli_creation_path(tmp_path: Path):
     (project_dir / "src").mkdir()
     (project_dir / "src" / "missions").mkdir(parents=True)
 
-    with patch("raccoon_cli.ide.repositories.project_repository.subprocess.run") as run_mock:
-        run_mock.return_value = CompletedProcess(args=[], returncode=0, stdout="created", stderr="")
+    with patch("raccoon_cli.ide.repositories.project_repository._create_mission") as mock_create:
+        mock_create.return_value = "M010DriveMission"
         client = TestClient(create_app(project_root=tmp_path))
         response = client.post(f"/api/v1/missions/{project_uuid}", json={"name": "Drive"})
 
     assert response.status_code == 200, response.text
-    run_mock.assert_called_once_with(
-        ["raccoon", "create", "mission", "Drive"],
-        check=True,
-        capture_output=True,
-        text=True,
-        cwd=project_dir,
-    )
+    mock_create.assert_called_once_with(project_dir, "Drive")
