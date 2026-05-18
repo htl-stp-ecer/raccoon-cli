@@ -149,11 +149,3 @@ def create_kinematics_resolver() -> YamlResolver:
     return resolver
 
 
-def create_odometry_resolver() -> YamlResolver:
-    """Create a resolver configured for odometry types."""
-    resolver = YamlResolver(default_namespaces=["raccoon"])
-    resolver.add_type_mapping("fusedodometry", "raccoon.FusedOdometry")
-    resolver.add_type_mapping("fused", "raccoon.FusedOdometry")
-    resolver.add_type_mapping("stm32odometry", "raccoon.Stm32Odometry")
-    resolver.add_type_mapping("stm32", "raccoon.Stm32Odometry")
-    return resolver

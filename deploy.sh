@@ -3,6 +3,10 @@
 USER="pi"
   HOST="${RPI_HOST:-10.70.146.232}"
 
+echo "Installing locally..."
+pip install . --break-system-packages
+
+echo "Deploying to $HOST..."
 rsync -a --info=progress2 ./ $USER@$HOST:/home/$USER/toolchain --exclude-from='.gitignore' --delete
 # Remove stale user-level install that would shadow the system-wide one
 ssh $USER@$HOST 'python3 -m pip uninstall raccoon-cli -y --break-system-packages 2>/dev/null || true'

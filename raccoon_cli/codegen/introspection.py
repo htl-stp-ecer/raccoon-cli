@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import inspect
 import logging
+import types
 import typing
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -170,7 +171,7 @@ def _resolve_class_from_stub(qualname: str) -> type:
                 source_qualname = f"{source_module}.{alias.name}"
             else:
                 continue
-            cls = _resolve_class_from_stub(source_qualname)
+            cls = resolve_class(source_qualname)
             _stub_class_registry[qualname] = cls
             return cls
 
@@ -249,25 +250,59 @@ def _parse_param_type_from_pyi(cls: type, param_name: str) -> Optional[type]:
                 continue
 
             type_str = ast.unparse(arg.annotation)
-            # Try as fully-qualified name first
-            try:
-                return resolve_class(type_str)
-            except ImportError:
-                pass
-            # Try just the class name (strips module prefix)
-            short = type_str.split(".")[-1]
-            # Same module as the parent class (most likely for co-located types)
-            try:
-                return resolve_class(f"{cls.__module__}.{short}")
-            except ImportError:
-                pass
-            # Fallback: top-level raccoon namespace
-            if short != type_str:
-                try:
-                    return resolve_class(f"raccoon.{short}")
-                except ImportError:
-                    pass
+            candidates = [type_str]
+            if "|" in type_str:
+                candidates = [
+                    part.strip()
+                    for part in type_str.split("|")
+                    if part.strip() not in ("None", "NoneType")
+                ]
+            elif type_str.startswith("Optional[") and type_str.endswith("]"):
+                candidates = [type_str[len("Optional["):-1].strip()]
+            elif type_str.startswith("typing.Optional[") and type_str.endswith("]"):
+                candidates = [type_str[len("typing.Optional["):-1].strip()]
+            elif type_str.startswith("Union[") and type_str.endswith("]"):
+                candidates = [
+                    part.strip()
+                    for part in type_str[len("Union["):-1].split(",")
+                    if part.strip() not in ("None", "NoneType")
+                ]
+            elif type_str.startswith("typing.Union[") and type_str.endswith("]"):
+                candidates = [
+                    part.strip()
+                    for part in type_str[len("typing.Union["):-1].split(",")
+                    if part.strip() not in ("None", "NoneType")
+                ]
 
+            for candidate in candidates:
+                resolved = _resolve_annotation_candidate(cls, candidate)
+                if resolved is not None:
+                    return resolved
+
+    return None
+
+
+def _resolve_annotation_candidate(cls: type, type_str: str) -> Optional[type]:
+    """Resolve a simple pyi annotation string to a class, if possible."""
+    if type_str in ("None", "NoneType"):
+        return None
+    if "[" in type_str and type_str.endswith("]"):
+        return None
+
+    try:
+        return resolve_class(type_str)
+    except ImportError:
+        pass
+    short = type_str.split(".")[-1]
+    try:
+        return resolve_class(f"{cls.__module__}.{short}")
+    except ImportError:
+        pass
+    if short != type_str:
+        try:
+            return resolve_class(f"raccoon.{short}")
+        except ImportError:
+            pass
     return None
 
 
@@ -314,6 +349,13 @@ def infer_param_type(parent_cls: type, param_name: str) -> Optional[type]:
                     return resolve_class(type_hint)
                 except ImportError:
                     pass
+            origin = typing.get_origin(type_hint)
+            if origin in (typing.Union, types.UnionType):
+                for arg in typing.get_args(type_hint):
+                    if arg is type(None):
+                        continue
+                    if isinstance(arg, type):
+                        return arg
     except Exception:
         pass
 

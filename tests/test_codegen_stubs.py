@@ -184,6 +184,24 @@ class TestParseParamTypeFromPyi:
         # This test just verifies no exception is raised
         _parse_param_type_from_pyi(cls, "port")  # should not raise
 
+    def test_resolves_optional_nested_type_annotation(self, tmp_path, monkeypatch):
+        import importlib.util as ilu
+        pyi = tmp_path / "mymod.pyi"
+        pyi.write_text(dedent("""\
+            class PidGains:
+                def __init__(self, kp: float, ki: float, kd: float) -> None: ...
+            class MotorCalibration:
+                def __init__(self, ticks_to_rad: float, vel_lpf_alpha: float, pid: PidGains | None = None) -> None: ...
+        """))
+        fake_spec = type("FakeSpec", (), {"origin": str(tmp_path / "mymod.so")})()
+        monkeypatch.setattr(ilu, "find_spec", lambda n: fake_spec if n == "mymod" else None)
+
+        cls = type("MotorCalibration", (), {"__module__": "mymod", "__name__": "MotorCalibration"})
+        from raccoon_cli.codegen.introspection import _parse_param_type_from_pyi
+        resolved = _parse_param_type_from_pyi(cls, "pid")
+        assert resolved is not None
+        assert resolved.__name__ == "PidGains"
+
 
 # ---------------------------------------------------------------------------
 # Stub-fallback tests — require raccoon-stubs but NOT the runtime

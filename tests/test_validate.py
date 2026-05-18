@@ -484,22 +484,12 @@ class _DummySummary:
 class TestCreateMissionDoesNotTouchMainPy:
     def test_main_py_unchanged_after_create(self, tmp_path):
         """raccoon create mission must not insert imports into main.py."""
-        from raccoon_cli.commands.create import _get_next_mission_number
-        from raccoon_cli.mission_codegen import add_mission_import_to_main
-
-        original_main = "from src.hardware.robot import Robot\n\ndef main():\n    pass\n"
-        (tmp_path / "src").mkdir(parents=True)
-        (tmp_path / "src" / "missions").mkdir()
-        (tmp_path / "src" / "main.py").write_text(original_main, encoding="utf-8")
-
-        # Verify add_mission_import_to_main is NOT called from create_mission_command
-        # by checking the source of the command directly.
         import inspect
         from raccoon_cli.commands import create as create_module
         src = inspect.getsource(create_module.create_mission_command.callback)
         assert "add_mission_import_to_main" not in src
 
-    def test_add_mission_import_still_exists_as_utility(self):
-        """The helper still exists for other callers — we only removed the call."""
-        from raccoon_cli.mission_codegen import add_mission_import_to_main
-        assert callable(add_mission_import_to_main)
+    def test_get_next_mission_number_exists_in_shared_layer(self):
+        """Mission-number logic lives in the shared layer, not buried in CLI."""
+        from raccoon_cli.project_creation import get_next_mission_number
+        assert callable(get_next_mission_number)

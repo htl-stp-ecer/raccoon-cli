@@ -183,6 +183,8 @@ left_motor:
   calibration:
     ticks_to_rad: 0.00002   # set by raccoon calibrate
     vel_lpf_alpha: 1.0
+    # Optional: omit pid to use STM32 firmware defaults
+    # pid: {kp: 1.22, ki: 0.045, kd: 0.0}
 right_motor:
   type: Motor
   port: 1
