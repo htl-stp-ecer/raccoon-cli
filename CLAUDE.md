@@ -21,7 +21,9 @@ raccoon --help                      # View CLI help
 raccoon create project MyRobot      # Create new project
 raccoon wizard                      # Interactive hardware configuration
 raccoon codegen                     # Generate hardware code from YAML
-raccoon calibrate                   # Calibrate motor PID/feedforward
+raccoon calibrate ticks             # Measure encoder ticks per revolution
+raccoon calibrate autotune          # Run motor autotune
+raccoon calibrate servos            # Interactively calibrate servo offsets
 raccoon run                         # Run project (auto-codegen + execute)
 ```
 
