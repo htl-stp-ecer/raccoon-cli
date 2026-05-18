@@ -119,6 +119,12 @@ class ImportSet:
             return
         self._entries.add((cls.__module__, cls.__name__))
 
+    def add_qualname(self, qualname: str) -> str:
+        """Add an import by dotted qualname and return the simple class name."""
+        module, name = qualname.rsplit(".", 1)
+        self._entries.add((module, name))
+        return name
+
     def render(self) -> str:
         """Render the imports as Python import statements."""
         by_mod: Dict[str, Set[str]] = {}

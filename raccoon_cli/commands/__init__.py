@@ -19,7 +19,6 @@ from .migrate import migrate_command
 from .validate import validate_command
 from .shell import shell_command
 from .doctor import doctor_command
-
 __all__ = [
     "calibrate_group",
     "codegen_command",

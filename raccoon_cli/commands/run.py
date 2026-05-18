@@ -82,6 +82,95 @@ def _print_output_summary(console: Console, collected: list[str]) -> None:
     )
 
 
+def _terminate_process_on_interrupt(proc: subprocess.Popen, console: Console) -> int:
+    """Stop a child process after Ctrl+C and return its exit code."""
+    console.print("\n[yellow]Ctrl+C — stopping program...[/yellow]")
+    proc.terminate()
+    try:
+        return proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return proc.wait()
+
+
+def _run_via_pty(
+    cmd_parts: list[str],
+    project_root: Path,
+    env: dict,
+    console: Console,
+) -> int:
+    """Run cmd_parts with a PTY as stdout/stderr so isatty() returns True.
+
+    Used when our own stdout is a pipe (Pi server executor).  The PTY makes
+    colour libraries that check isatty() activate, and the output is relayed
+    byte-for-byte to sys.stdout so the executor can forward it upstream.
+    """
+    import pty
+    import select
+    import termios
+
+    master_fd, slave_fd = pty.openpty()
+
+    # Disable output-processing on the slave so the PTY line discipline does
+    # not convert bare \n → \r\n before we relay the bytes.
+    attrs = termios.tcgetattr(slave_fd)
+    attrs[1] &= ~termios.OPOST  # c_oflag: clear OPOST
+    termios.tcsetattr(slave_fd, termios.TCSANOW, attrs)
+
+    proc = subprocess.Popen(
+        cmd_parts,
+        cwd=project_root,
+        env=env,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+    )
+    os.close(slave_fd)  # parent no longer needs the slave end
+
+    try:
+        while True:
+            try:
+                r, _, _ = select.select([master_fd], [], [], 0.05)
+            except (ValueError, OSError):
+                break
+            if r:
+                try:
+                    data = os.read(master_fd, 4096)
+                    if not data:
+                        break
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+                except OSError:
+                    # EIO: child closed the slave (normal exit path)
+                    break
+            elif proc.poll() is not None:
+                # Process exited; drain any remaining PTY bytes
+                try:
+                    while True:
+                        r2, _, _ = select.select([master_fd], [], [], 0.1)
+                        if not r2:
+                            break
+                        data = os.read(master_fd, 4096)
+                        if not data:
+                            break
+                        sys.stdout.buffer.write(data)
+                        sys.stdout.buffer.flush()
+                except OSError:
+                    pass
+                break
+    finally:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        return _terminate_process_on_interrupt(proc, console)
+
+
 def _run_local(
     ctx: click.Context,
     project_root: Path,
@@ -113,6 +202,11 @@ def _run_local(
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    # Force color output: uv and other launchers may not propagate the TTY to
+    # the child Python process, so libraries like Rich fall back to no-color mode.
+    env.setdefault("FORCE_COLOR", "1")
+    env.setdefault("TERM", "xterm-256color")
+    env.setdefault("COLORTERM", "truecolor")
     # Ensure ~/.local/bin is in PATH so uv and other user-installed tools are found
     local_bin = str(Path.home() / ".local" / "bin")
     path_dirs = env.get("PATH", "").split(os.pathsep)
@@ -147,24 +241,20 @@ def _run_local(
 
     # On Windows, Ctrl+C doesn't reliably propagate to child processes.
     # Use Popen so we can catch SIGINT ourselves and terminate the child.
-    # stdout/stderr are inherited so the process writes directly to the terminal
-    # (or the executor's pipe when running on the Pi), preserving 1:1 output.
-    proc = subprocess.Popen(
-        cmd_parts,
-        cwd=project_root,
-        env=env,
-    )
-
-    try:
-        returncode = proc.wait()
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Ctrl+C — stopping program...[/yellow]")
-        proc.terminate()
+    #
+    # When stdout is already a TTY (interactive console), inherit it so the
+    # child writes directly to the terminal.  When stdout is a pipe (e.g. the
+    # Pi server executor captures output), allocate a PTY so the child's
+    # isatty() check returns True and colour libraries (loguru, colorama, …)
+    # activate — FORCE_COLOR alone only helps libraries that check that env var.
+    if sys.platform == "win32" or sys.stdout.isatty():
+        proc = subprocess.Popen(cmd_parts, cwd=project_root, env=env)
         try:
-            returncode = proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
             returncode = proc.wait()
+        except KeyboardInterrupt:
+            returncode = _terminate_process_on_interrupt(proc, console)
+    else:
+        returncode = _run_via_pty(cmd_parts, project_root, env, console)
 
     exit_style = "bold green" if returncode == 0 else "bold red"
     console.print(

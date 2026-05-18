@@ -1,10 +1,10 @@
-"""Unit tests for raccoon_cli/commands/create.py — mission number assignment."""
+"""Unit tests for mission number assignment."""
 
 from __future__ import annotations
 
 import pytest
 
-from raccoon_cli.commands.create import _get_next_mission_number
+from raccoon_cli.project_creation import get_next_mission_number as _get_next_mission_number
 
 
 # ---------------------------------------------------------------------------

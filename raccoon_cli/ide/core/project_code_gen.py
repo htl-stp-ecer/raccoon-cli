@@ -8,8 +8,6 @@ from raccoon_cli.ide.repositories.project_repository import ProjectRepository
 from raccoon_cli.mission_codegen import (
     get_templates_dir,
     copy_template_dir,
-    add_mission_import_to_main,
-    remove_mission_import_from_main,
 )
 from raccoon_cli.mission_config import add_mission_to_config, remove_mission_from_config
 
@@ -64,9 +62,6 @@ class ProjectCodeGen:
         }
         copy_template_dir(template_path, project_path, context)
 
-        # Add import to main.py
-        add_mission_import_to_main(project_path, mission_name.snake, mission_name.pascal)
-
         # Add to project config
         mission_class_name = f"{mission_name.pascal}Mission"
         add_mission_to_config(project_path, mission_class_name)
@@ -97,9 +92,6 @@ class ProjectCodeGen:
 
         # Remove from config
         remove_mission_from_config(project_path, mission_class)
-
-        # Remove import from main.py
-        remove_mission_import_from_main(project_path, mission_snake, mission_pascal)
 
         # Delete file if requested
         if delete_file:

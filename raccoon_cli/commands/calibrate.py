@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import logging
 import math
 import signal
@@ -65,6 +66,199 @@ robot = Robot()
 robot.missions = [_AutotuneMission()]
 robot.start()
 """
+
+_STEP_RESPONSE_SCRIPT = """\
+import sys, os, csv, time, argparse
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from raccoon.hal import Motor
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--ports", nargs="+", type=int, default=[0])
+parser.add_argument("--mode", choices=["speed", "velocity"], default="speed")
+parser.add_argument("--speed", type=int, default=70)
+parser.add_argument("--duration", type=float, default=3.0)
+parser.add_argument("--brake-tail", type=float, default=2.0)
+parser.add_argument("--hz", type=int, default=100)
+parser.add_argument("--out", required=True)
+args = parser.parse_args()
+
+def _log(msg):
+    sys.stderr.write(f"[step_response] {msg}\\n")
+    sys.stderr.flush()
+
+motors = [Motor(p) for p in args.ports]
+interval = 1.0 / args.hz
+
+def brake_all():
+    for m in motors:
+        m.brake()
+
+def drive_all(value):
+    for m in motors:
+        if args.mode == "speed":
+            m.set_speed(value)
+        else:
+            m.set_velocity(value)
+
+_log(f"ports={args.ports} mode={args.mode} speed={args.speed} "
+     f"duration={args.duration}s hz={args.hz}")
+
+with open(args.out, "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow(
+        ["sys_time", "elapsed_s", "brake_elapsed_s"]
+        + [f"bemf_{p}" for p in args.ports]
+        + [f"pos_{p}" for p in args.ports]
+    )
+
+    start = time.time()
+
+    drive_all(args.speed)
+    try:
+        while True:
+            now = time.time()
+            elapsed = now - start
+            if elapsed >= args.duration:
+                break
+            bemfs = [m.get_bemf() for m in motors]
+            positions = [m.get_position() for m in motors]
+            writer.writerow([round(now, 6), round(elapsed, 5), ""] + bemfs + positions)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
+
+    brake_all()
+    brake_time = time.time()
+    _log(f"Braking - recording {args.brake_tail}s tail...")
+
+    while time.time() - brake_time < args.brake_tail:
+        now = time.time()
+        elapsed = now - start
+        brake_elapsed = now - brake_time
+        bemfs = [m.get_bemf() for m in motors]
+        positions = [m.get_position() for m in motors]
+        writer.writerow(
+            [round(now, 6), round(elapsed, 5), round(brake_elapsed, 5)]
+            + bemfs + positions
+        )
+        time.sleep(interval)
+
+    for m in motors:
+        m.off()
+
+print(f"DONE:{args.out}", flush=True)
+_log("Done.")
+"""
+
+
+def _plot_step_response(csv_path: Path, out_path: Path, console: Console) -> None:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+    except ImportError:
+        console.print("[yellow]matplotlib not installed - skipping plot.[/yellow]")
+        return
+
+    rows: list[dict] = []
+    with csv_path.open() as f:
+        for row in csv.DictReader(f):
+            rows.append(row)
+    if not rows:
+        console.print("[yellow]CSV is empty - skipping plot.[/yellow]")
+        return
+
+    def _float(v: str) -> float:
+        return float(v) if v != "" else float("nan")
+
+    cols: dict[str, list[float]] = {k: [] for k in rows[0]}
+    for row in rows:
+        for k, v in row.items():
+            cols[k].append(_float(v))
+
+    ports = sorted(int(k.split("_")[1]) for k in cols if k.startswith("bemf_"))
+    elapsed = cols["elapsed_s"]
+
+    brake_at: float | None = None
+    for t, bv in zip(elapsed, cols["brake_elapsed_s"]):
+        if not math.isnan(bv):
+            brake_at = t
+            break
+
+    has_pos = f"pos_{ports[0]}" in cols
+    n_rows = 2 if has_pos else 1
+    fig, axes = plt.subplots(
+        n_rows,
+        len(ports),
+        figsize=(max(6, 4 * len(ports)), 3.5 * n_rows),
+        squeeze=False,
+        sharex="col",
+    )
+    fig.suptitle(f"Motor Step Response - {csv_path.name}", fontsize=11)
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
+    for ci, port in enumerate(ports):
+        color = colors[ci % len(colors)]
+        bemf = cols[f"bemf_{port}"]
+
+        ax = axes[0][ci]
+        ax.plot(elapsed, bemf, color=color, linewidth=0.9)
+        ax.set_title(f"Motor {port} - BEMF")
+        ax.set_ylabel("BEMF [raw]")
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("%.2f"))
+        if brake_at is not None:
+            ax.axvline(brake_at, color="crimson", linestyle="--", linewidth=1.2, label="brake")
+            ax.legend(fontsize=7, loc="upper right")
+
+        if has_pos:
+            ax_p = axes[1][ci]
+            ax_p.plot(elapsed, cols[f"pos_{port}"], color=color, linewidth=0.9)
+            ax_p.set_ylabel("Position [ticks]")
+            ax_p.set_xlabel("Time [s]")
+            ax_p.grid(True, alpha=0.3)
+            if brake_at is not None:
+                ax_p.axvline(brake_at, color="crimson", linestyle="--", linewidth=1.2)
+        else:
+            ax.set_xlabel("Time [s]")
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    console.print(f"[green]Plot saved:[/green] {out_path}")
+
+    if brake_at is not None:
+        run_bemf = {
+            port: [v for t, v in zip(elapsed, cols[f"bemf_{port}"]) if t < brake_at and not math.isnan(v)]
+            for port in ports
+        }
+    else:
+        run_bemf = {
+            port: [v for v in cols[f"bemf_{port}"] if not math.isnan(v)]
+            for port in ports
+        }
+
+    table = Table(title="BEMF - run phase")
+    table.add_column("Motor", style="cyan")
+    table.add_column("Mean", justify="right")
+    table.add_column("Min", justify="right")
+    table.add_column("Max", justify="right")
+    table.add_column("Spread", justify="right")
+    for port in ports:
+        vals = run_bemf[port]
+        if vals:
+            mean = sum(vals) / len(vals)
+            table.add_row(
+                f"M{port}",
+                f"{mean:+.1f}",
+                f"{min(vals):+.0f}",
+                f"{max(vals):+.0f}",
+                f"{max(vals) - min(vals):.0f}",
+            )
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +856,65 @@ def _run_autotune(ctx: click.Context) -> None:
         asyncio.run(_autotune_remote(ctx, ctx.obj["project_root"], ctx.obj["config"]))
 
 
+def _run_step_response_local(
+    console: Console,
+    project_root: Path,
+    ports: list[str],
+    mode: str,
+    speed: int,
+    duration: float,
+    brake_tail: float,
+    hz: int,
+    csv_path: Path,
+) -> None:
+    script_path = project_root / "_raccoon_step_response.py"
+    script_path.write_text(_STEP_RESPONSE_SCRIPT)
+
+    cmd = [
+        sys.executable,
+        str(script_path),
+        "--ports",
+        *ports,
+        "--mode",
+        mode,
+        "--speed",
+        str(speed),
+        "--duration",
+        str(duration),
+        "--brake-tail",
+        str(brake_tail),
+        "--hz",
+        str(hz),
+        "--out",
+        str(csv_path),
+    ]
+
+    try:
+        console.print("[cyan]Recording - press Ctrl+C to brake early.[/cyan]")
+        console.print(f"[dim]CSV -> {csv_path}[/dim]\n")
+
+        proc = subprocess.Popen(cmd, cwd=project_root)
+        try:
+            returncode = proc.wait()
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Ctrl+C - braking motors...[/yellow]")
+            proc.terminate()
+            try:
+                returncode = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                returncode = proc.wait()
+
+        style = "bold green" if returncode == 0 else "bold red"
+        console.print(Panel.fit(f"Recording finished (exit {returncode})", style=style))
+        if returncode != 0:
+            raise SystemExit(returncode)
+
+        console.print(f"[green]CSV saved:[/green] {csv_path}")
+    finally:
+        script_path.unlink(missing_ok=True)
+
+
 @click.group(name="calibrate", no_args_is_help=True)
 @click.option("--local", "-l", is_flag=True, help="Run locally on this machine (requires hardware)")
 @click.pass_context
@@ -702,3 +955,68 @@ def calibrate_servos_cmd(ctx: click.Context) -> None:
     """Phase 3: jog servos to find named positions."""
     _prepare_calibration_subcommand_context(ctx)
     _calibrate_servos(ctx, ctx.obj["project_root"], ctx.obj["config"])
+
+
+@calibrate_group.command(name="step-response")
+@click.option("--local", "force_local", is_flag=True, help="Run directly on this machine (requires hardware)")
+@click.option("--ports", default="0,1,2,3", show_default=True, help="Comma-separated motor ports to record")
+@click.option(
+    "--mode",
+    type=click.Choice(["speed", "velocity"]),
+    default="speed",
+    show_default=True,
+    help="speed = set_speed() [%%], velocity = set_velocity() [BEMF units, PID]",
+)
+@click.option("--speed", default=70, show_default=True, help="Speed value (percent or BEMF units)")
+@click.option("--duration", default=3.0, show_default=True, help="Run duration in seconds")
+@click.option("--brake-tail", default=2.0, show_default=True, help="Extra seconds to record after braking")
+@click.option("--hz", default=100, show_default=True, help="Sample rate in Hz")
+@click.option("--out", default="step_response.csv", show_default=True, help="CSV output filename")
+@click.option("--plot", default="step_response.png", show_default=True, help="Plot output filename")
+@click.option("--no-plot", is_flag=True, help="Skip generating the plot")
+@click.pass_context
+def calibrate_step_response_cmd(
+    ctx: click.Context,
+    force_local: bool,
+    ports: str,
+    mode: str,
+    speed: int,
+    duration: float,
+    brake_tail: float,
+    hz: int,
+    out: str,
+    plot: str,
+    no_plot: bool,
+) -> None:
+    """Record a motor step response and plot BEMF vs time."""
+    parent = ctx.parent
+    parent_local = bool(parent.params.get("local", False)) if parent is not None else False
+    _prepare_calibration_context(ctx, parent_local or force_local)
+
+    console: Console = ctx.obj["console"]
+    project_root: Path = ctx.obj["project_root"]
+
+    port_list = [p.strip() for p in ports.split(",") if p.strip()]
+    console.print(
+        Panel(
+            f"[bold]Motor Step Response[/bold]\n"
+            f"ports=[cyan]{ports}[/cyan]  mode=[cyan]{mode}[/cyan]  "
+            f"speed=[cyan]{speed}[/cyan]  duration=[cyan]{duration}s[/cyan]  "
+            f"brake_tail=[cyan]{brake_tail}s[/cyan]  hz=[cyan]{hz}[/cyan]",
+            border_style="cyan",
+        )
+    )
+
+    if not ctx.obj["local"]:
+        console.print(
+            "[yellow]Remote step-response not yet implemented - use --local to run on the Wombat.[/yellow]"
+        )
+        raise SystemExit(1)
+
+    csv_path = project_root / out
+    plot_path = project_root / plot
+    _run_step_response_local(
+        console, project_root, port_list, mode, speed, duration, brake_tail, hz, csv_path
+    )
+    if not no_plot:
+        _plot_step_response(csv_path, plot_path, console)

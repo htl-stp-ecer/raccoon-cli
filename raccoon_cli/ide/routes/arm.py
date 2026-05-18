@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from raccoon_cli.ide.repositories.project_repository import ProjectRepository
 from raccoon_cli.project import resolve_config_file
-from raccoon_cli.yaml_utils import load_yaml_raw, save_yaml_raw
+from raccoon_cli.yaml_utils import _IncludeTag, load_yaml_raw, save_yaml_raw
 
 log = logging.getLogger(__name__)
 
@@ -93,10 +93,17 @@ class JointAxisSpec(BaseModel):
     axis: list[float]
 
 
+class JointSegmentSpec(BaseModel):
+    origin_cm: list[float]
+    end_cm: list[float]
+    length_cm: float
+
+
 class FKResponse(BaseModel):
     frames: list[list[float]]
     end_effector_cm: list[float]
     joint_axes: list[JointAxisSpec] = Field(default_factory=list)
+    joint_segments: list[JointSegmentSpec] = Field(default_factory=list)
 
 
 class IKRequest(BaseModel):
@@ -229,26 +236,90 @@ def _build_chain(hw_cfg: dict[str, Any], definitions: dict[str, Any], field_name
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _locate_arm_leaf(
+    path: Path,
+    field_name: str,
+    visited: Optional[set[Path]] = None,
+    bound_key: Optional[str] = None,
+):
+    """Walk !include / !include-merge chain to find the physical YAML file
+    that actually contains the arm definition.
+
+    Returns ``(leaf_path, root_data, arm_block)`` — ``root_data`` is the full
+    parsed tree to pass to ``save_yaml_raw`` and ``arm_block`` is the dict to
+    mutate (a reference into ``root_data``).
+
+    ``bound_key`` tracks the parent key this file was included under. When it
+    equals ``field_name`` the included file's *contents* ARE the arm block
+    (pattern: ``arm: !include arm.yml`` where arm.yml has ``type:`` /
+    ``joints:`` at top level instead of an outer ``arm:`` key).
+    """
+    path = path.resolve()
+    visited = visited if visited is not None else set()
+    if path in visited or not path.exists():
+        return None
+    visited.add(path)
+
+    data = load_yaml_raw(path)
+    if not isinstance(data, dict):
+        return None
+
+    # File's contents ARE the arm block (bound by parent key).
+    if bound_key == field_name:
+        return (path, data, data)
+
+    # File directly carries the arm key (e.g. file IS the definitions map).
+    if field_name in data and isinstance(data[field_name], dict):
+        return (path, data, data[field_name])
+
+    # File has a `definitions:` mapping holding the arm.
+    defs = data.get("definitions")
+    if isinstance(defs, dict) and field_name in defs and isinstance(defs[field_name], dict):
+        return (path, data, defs[field_name])
+
+    def _recurse(container: dict):
+        for k, v in container.items():
+            if isinstance(v, _IncludeTag):
+                inc_path = (path.parent / v.path).resolve()
+                # `!include-merge` does not bind to a specific key — its content
+                # merges into the parent. `!include` *does* bind the value to k.
+                child_bound = k if v.tag == "!include" else None
+                result = _locate_arm_leaf(inc_path, field_name, visited, child_bound)
+                if result is not None:
+                    return result
+            elif isinstance(v, dict):
+                result = _recurse(v)
+                if result is not None:
+                    return result
+        return None
+
+    return _recurse(data)
+
+
 def _mutate_arm_block(project_path: Path, field_name: str, mutate) -> None:
-    """Apply *mutate(arm_block)* on the YAML file that owns the arm definition."""
-    target = resolve_config_file(project_path, "definitions")
-    data = load_yaml_raw(target)
-
-    # Either the target file IS the definitions mapping (when included as
-    # `definitions: !include …`), or it carries a top-level `definitions:`
-    # key (main YAML or include-merge source).
-    container = data
-    if isinstance(container, dict) and "definitions" in container and field_name not in container:
-        container = container["definitions"]
-
-    if not isinstance(container, dict) or field_name not in container:
+    """Apply *mutate(arm_block)* on the YAML file that physically owns the arm
+    definition, even when split across ``!include`` / ``!include-merge`` files.
+    """
+    root_yaml = project_path / "raccoon.project.yml"
+    located = _locate_arm_leaf(root_yaml, field_name)
+    if located is None:
+        # Fallback to the legacy single-file resolver for direct layouts.
+        target = resolve_config_file(project_path, "definitions")
+        located = _locate_arm_leaf(target, field_name)
+    if located is None:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not locate arm '{field_name}' in {target.name} for write-back",
+            detail=(
+                f"Could not locate arm '{field_name}' in any project YAML file "
+                f"(starting from {root_yaml.name}) for write-back. "
+                f"Check that the arm definition lives in raccoon.project.yml or "
+                f"in an !include / !include-merge'd file."
+            ),
         )
 
-    mutate(container[field_name])
-    save_yaml_raw(data, target)
+    leaf_path, root_data, arm_block = located
+    mutate(arm_block)
+    save_yaml_raw(root_data, leaf_path)
 
 
 def _write_position(project_path: Path, field_name: str, mutate) -> None:
@@ -332,21 +403,25 @@ async def compute_fk(
     repo: ProjectRepository = Depends(get_project_repository),
 ):
     _, definitions, field_name, hw_cfg = _load_arm(repo, project_uuid)
-    chain, _ = _build_chain(hw_cfg, definitions, field_name)
+    chain, joint_mappings = _build_chain(hw_cfg, definitions, field_name)
 
     from raccoon_cli.codegen.arm.kinematics import (  # noqa: PLC0415
         end_effector_cm,
         forward_kinematics,
+        joint_segments_cm,
         joint_world_axes,
     )
 
     frames = forward_kinematics(chain, request.joint_angles_deg)
     ee = end_effector_cm(chain, request.joint_angles_deg)
     axes = joint_world_axes(chain, request.joint_angles_deg)
+    lengths = [float(m.get("length_cm", 0.0) or 0.0) for m in joint_mappings]
+    segments = joint_segments_cm(chain, request.joint_angles_deg, lengths)
     return FKResponse(
         frames=frames,
         end_effector_cm=ee,
         joint_axes=[JointAxisSpec(**a) for a in axes],
+        joint_segments=[JointSegmentSpec(**s) for s in segments],
     )
 
 
@@ -556,8 +631,8 @@ async def patch_arm_structure(
 
     def _apply_joint(target: dict, patch: JointStructureUpdate) -> None:
         if patch.length_cm is not None:
-            if patch.length_cm <= 0:
-                raise HTTPException(status_code=400, detail="length_cm must be > 0")
+            if patch.length_cm < 0:
+                raise HTTPException(status_code=400, detail="length_cm must be >= 0")
             target["length_cm"] = float(patch.length_cm)
         if patch.axis is not None:
             if len(patch.axis) != 3:

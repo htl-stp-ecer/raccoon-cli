@@ -18,7 +18,6 @@ from contextlib import suppress
 from raccoon_cli.ide.core.analysis.detailed_mission_analyzer import DetailedMissionAnalyzer
 from raccoon_cli.ide.core.analysis.mission_analyzer import MissionAnalyzer
 from raccoon_cli.ide.core.mission_code_generator import MissionUpdater
-from raccoon_cli.mission_codegen import remove_mission_import_from_main
 from raccoon_cli.ide.core.project_config import (
     ensure_mission_list,
     is_special_mission,
@@ -928,9 +927,6 @@ class MissionService:
             refs_removed = remove_mission_entry(config, mission_class)
             if refs_removed:
                 self._repo.save_config_keys(project_uuid, {"missions": config["missions"]})
-
-            # Remove import from main.py
-            remove_mission_import_from_main(project_path, nn.snake, nn.pascal)
 
             # Delete the mission file if present
             missions_dir = project_path / "src" / "missions"
