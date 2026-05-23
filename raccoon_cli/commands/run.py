@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import logging
 import re
 import signal
@@ -42,6 +43,19 @@ def _extract_skip_missions(args: tuple) -> tuple[tuple, set[int]]:
         else:
             remaining.append(arg)
     return tuple(remaining), skip
+
+
+def _allocate_recording_path(record_localization: bool) -> tuple[str | None, str | None]:
+    """Mint a per-run recording path.
+
+    Returns (relative_path, timestamp_id) — both ``None`` if recording is off.
+    Relative so it resolves under ``project_root`` on either laptop or Pi
+    without coupling to absolute paths.
+    """
+    if not record_localization:
+        return None, None
+    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f".raccoon/runs/{ts}/localization.jsonl", ts
 
 
 _WARN_ERROR_RE = re.compile(r"\b(WARNING|WARN|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
@@ -181,6 +195,8 @@ def _run_local(
     no_codegen: bool = False,
     no_checkpoints: bool = False,
     skip_missions: set[int] | None = None,
+    record_localization: bool = False,
+    record_hz: float | None = None,
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
@@ -238,6 +254,17 @@ def _run_local(
         env["LIBSTP_NO_CHECKPOINTS"] = "1"
     if skip_missions:
         env["LIBSTP_SKIP_MISSIONS"] = ",".join(str(i) for i in sorted(skip_missions))
+
+    rec_path, rec_ts = _allocate_recording_path(record_localization)
+    if rec_path is not None:
+        (project_root / rec_path).parent.mkdir(parents=True, exist_ok=True)
+        env["LIBSTP_RECORD_LOCALIZATION"] = "1"
+        env["LIBSTP_RECORDING_PATH"] = rec_path
+        if record_hz is not None:
+            env["LIBSTP_RECORDING_HZ"] = str(record_hz)
+        console.print(
+            f"[cyan]Recording localization → {rec_path}[/cyan] (run id: {rec_ts})"
+        )
 
     # On Windows, Ctrl+C doesn't reliably propagate to child processes.
     # Use Popen so we can catch SIGINT ourselves and terminate the child.
@@ -307,6 +334,8 @@ async def _run_remote(
     no_sync: bool = False,
     no_checkpoints: bool = False,
     skip_missions: set[int] | None = None,
+    record_localization: bool = False,
+    record_hz: float | None = None,
 ) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
@@ -370,6 +399,16 @@ async def _run_remote(
             if skip_missions:
                 env["LIBSTP_SKIP_MISSIONS"] = ",".join(
                     str(i) for i in sorted(skip_missions)
+                )
+            rec_path, rec_ts = _allocate_recording_path(record_localization)
+            if rec_path is not None:
+                env["LIBSTP_RECORD_LOCALIZATION"] = "1"
+                env["LIBSTP_RECORDING_PATH"] = rec_path
+                if record_hz is not None:
+                    env["LIBSTP_RECORDING_HZ"] = str(record_hz)
+                console.print(
+                    f"[cyan]Recording localization on Pi → {rec_path}[/cyan] "
+                    f"(run id: {rec_ts}; pulled back after run)"
                 )
             result = await client.run_project(project_uuid, args=list(args), env=env)
         except Exception as e:
@@ -508,6 +547,17 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
     is_flag=True,
     help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)",
 )
+@click.option(
+    "--record-localization",
+    is_flag=True,
+    help="Record particle filter state during the run to .raccoon/runs/<ts>/localization.jsonl for replay in the Web-IDE.",
+)
+@click.option(
+    "--record-hz",
+    type=float,
+    default=None,
+    help="Recorder downsample rate in Hz (default 20). Only effective with --record-localization.",
+)
 @click.pass_context
 def run_command(
     ctx: click.Context,
@@ -518,6 +568,8 @@ def run_command(
     no_calibrate: bool,
     no_codegen: bool,
     no_checkpoints: bool,
+    record_localization: bool,
+    record_hz: float | None,
 ) -> None:
     """Run codegen and then execute src.main.
 
@@ -600,6 +652,8 @@ def run_command(
                         no_sync=no_sync,
                         no_checkpoints=no_checkpoints,
                         skip_missions=skip_missions,
+                        record_localization=record_localization,
+                        record_hz=record_hz,
                     )
                 )
                 return
@@ -623,6 +677,8 @@ def run_command(
             no_codegen=no_codegen,
             no_checkpoints=no_checkpoints,
             skip_missions=skip_missions,
+            record_localization=record_localization,
+            record_hz=record_hz,
         )
 
     except ProjectError as exc:

@@ -44,3 +44,64 @@ def test_create_mission_calls_shared_create_mission(tmp_path: Path):
         repository.create_mission(project_uuid, "Drive")
 
     mock_create.assert_called_once_with(project_dir, "Drive")
+
+
+def test_save_config_keys_preserves_split_config_layout(tmp_path: Path):
+    repository = ProjectRepository(tmp_path)
+    project_uuid = UUID("62df6ec4-9d0d-46bb-b8f5-b72991a3e9d1")
+    project_dir = tmp_path / "Demo Bot"
+    config_dir = project_dir / "config"
+    config_dir.mkdir(parents=True)
+
+    (project_dir / "raccoon.project.yml").write_text(
+        "\n".join([
+            "name: Demo Bot",
+            f"uuid: {project_uuid}",
+            "robot: !include 'config/robot.yml'",
+            "definitions: !include 'config/hardware.yml'",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    (config_dir / "robot.yml").write_text(
+        "\n".join([
+            "physical:",
+            "  width_cm: 15.0",
+            "  length_cm: 20.0",
+            "  sensors: []",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    (config_dir / "hardware.yml").write_text(
+        "\n".join([
+            "front_left_ir_sensor:",
+            "  type: IRSensor",
+            "  port: 1",
+            "_motors: !include-merge 'motors.yml'",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    (config_dir / "motors.yml").write_text(
+        "\n".join([
+            "left_motor:",
+            "  type: Motor",
+            "  port: 0",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    config = repository.read_project_config(project_uuid)
+    config["robot"]["physical"]["sensors"] = [
+        {"name": "front_left_ir_sensor", "x_cm": 4.0, "y_cm": 12.0}
+    ]
+    repository.save_config_keys(project_uuid, {"robot": config["robot"]})
+
+    assert "_motors: !include-merge 'motors.yml'" in (config_dir / "hardware.yml").read_text(encoding="utf-8")
+    assert "left_motor:" in (config_dir / "motors.yml").read_text(encoding="utf-8")
+    assert "front_left_ir_sensor:" in (config_dir / "hardware.yml").read_text(encoding="utf-8")
+    assert "robot: !include 'config/robot.yml'" in (project_dir / "raccoon.project.yml").read_text(encoding="utf-8")
+    assert "width_cm: 15.0" in (config_dir / "robot.yml").read_text(encoding="utf-8")
+    assert "x_cm: 4.0" in (config_dir / "robot.yml").read_text(encoding="utf-8")

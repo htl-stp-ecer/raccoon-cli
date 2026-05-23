@@ -1420,16 +1420,42 @@ class MissionService:
         run picks up the latest map without leaking files outside the
         project tree. We always rewrite — the file is cheap and stale data
         would silently desync from the Web-IDE's table editor.
+
+        v2 layered maps are flattened to the active layer's lines because the
+        libstp runner currently understands only flat ``lines[]``. Multi-layer
+        simulation will be added once libstp supports layered scenes.
         """
         try:
             sim_dir = project_path / ".raccoon" / "sim"
             sim_dir.mkdir(parents=True, exist_ok=True)
             target = sim_dir / "scene.ftmap"
+            table = table_map.get("table") or {"widthCm": 200, "heightCm": 100}
+
+            # Resolve flat lines from either v2 (layers) or v1 (lines).
+            flat_lines: list = []
+            if isinstance(table_map.get("layers"), list) and table_map["layers"]:
+                active_id = table_map.get("activeLayerId")
+                active = None
+                if active_id:
+                    active = next(
+                        (l for l in table_map["layers"] if isinstance(l, dict) and l.get("id") == active_id),
+                        None,
+                    )
+                if active is None:
+                    active = next(
+                        (l for l in table_map["layers"] if isinstance(l, dict)),
+                        None,
+                    )
+                if active and isinstance(active.get("lines"), list):
+                    flat_lines = active["lines"]
+            elif isinstance(table_map.get("lines"), list):
+                flat_lines = table_map["lines"]
+
             payload = {
                 "format": table_map.get("format", "flowchart-table-map"),
-                "version": table_map.get("version", 1),
-                "table": table_map.get("table") or {"widthCm": 200, "heightCm": 100},
-                "lines": table_map.get("lines") or [],
+                "version": 1,
+                "table": table,
+                "lines": flat_lines,
             }
             target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             return target

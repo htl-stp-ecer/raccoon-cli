@@ -1,6 +1,7 @@
 """Filesystem-backed repository for IDE project metadata and config files."""
 
 import os
+from copy import deepcopy
 from pathlib import Path
 from uuid import UUID
 
@@ -98,11 +99,16 @@ class ProjectRepository:
         mutate: Callable[[Dict[str, Any]], Dict[str, Any] | None],
     ) -> Optional[Dict[str, Any]]:
         current = self.read_project_config(project_uuid)
-        updated = mutate(dict(current)) if mutate else current
+        updated = mutate(deepcopy(current)) if mutate else deepcopy(current)
         if updated is None:
             return None
         updated.setdefault("uuid", project_uuid)
-        self._write_project_config(project_uuid, updated)
+        changed_keys = [
+            key for key in updated.keys()
+            if current.get(key) != updated.get(key)
+        ]
+        if changed_keys:
+            self.save_config_keys(project_uuid, {key: updated[key] for key in changed_keys})
         return updated
 
     def create_project(self, project_create: ProjectCreate) -> ProjectInDB:
