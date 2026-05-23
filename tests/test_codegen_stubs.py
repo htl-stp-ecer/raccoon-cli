@@ -45,9 +45,9 @@ requires_raccoon = pytest.mark.skipif(
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_latest_raccoon_stubs():
-    """Always pull the latest raccoon-stubs from PyPI before integration tests run."""
+    """Always pull the latest raccoon-library from PyPI before integration tests run."""
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "raccoon-stubs", "-q"],
+        [sys.executable, "-m", "pip", "install", "--upgrade", "raccoon-library", "-q"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
