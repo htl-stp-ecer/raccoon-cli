@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import datetime as _dt
 import logging
 import re
 import signal
@@ -23,6 +22,7 @@ from raccoon_cli.codegen import create_pipeline
 from raccoon_cli.project import ProjectError, load_project_config, require_project
 from raccoon_cli.commands.codegen import _resolve_ftmap_paths
 from raccoon_cli.commands.migrate import _get_format_version, _load_migrations
+from raccoon_cli.run_recording import make_run_id, recording_rel_path
 
 logger = logging.getLogger("raccoon")
 
@@ -46,16 +46,10 @@ def _extract_skip_missions(args: tuple) -> tuple[tuple, set[int]]:
 
 
 def _allocate_recording_path(record_localization: bool) -> tuple[str | None, str | None]:
-    """Mint a per-run recording path.
-
-    Returns (relative_path, timestamp_id) — both ``None`` if recording is off.
-    Relative so it resolves under ``project_root`` on either laptop or Pi
-    without coupling to absolute paths.
-    """
     if not record_localization:
         return None, None
-    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f".raccoon/runs/{ts}/localization.jsonl", ts
+    run_id = make_run_id()
+    return recording_rel_path(run_id), run_id
 
 
 _WARN_ERROR_RE = re.compile(r"\b(WARNING|WARN|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
