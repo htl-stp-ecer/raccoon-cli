@@ -31,6 +31,7 @@ from raccoon_cli.ide.schemas.mission import DiscoveredMission
 from raccoon_cli.ide.schemas.mission_detail import ParsedMission, ParsedStep, Vector2D, ParsedComment, ParsedGroup, StepArgument
 from raccoon_cli.ide.schemas.simulation import SimulationDelta, SimulationStepData, MissionSimulationData
 from raccoon_cli.ide.config import Settings
+from raccoon_cli.run_recording import make_run_id, build_recording_env
 import asyncio
 import os
 import sys
@@ -1088,6 +1089,7 @@ class MissionService:
         *,
         simulate: bool | str | None = None,
         debug: _OptionalBool[bool] = None,
+        record_localization: bool = False,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Run the mission and yield structured websocket events with live output.
 
@@ -1201,7 +1203,7 @@ class MissionService:
                     yield event
             else:
                 # Real execution - run run.sh and stream output
-                async for event in self._execute_mission(project_uuid, project_path, mission_name, flattened_steps):
+                async for event in self._execute_mission(project_uuid, project_path, mission_name, flattened_steps, record_localization=record_localization):
                     yield event
 
                 # After execution, send newly recorded timings from this run
@@ -1705,6 +1707,8 @@ class MissionService:
         project_path: Path,
         mission_name: str | None,
         flattened_steps: List[Dict[str, Any]],
+        *,
+        record_localization: bool = False,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Execute the mission(s) via run.sh and stream output.
 
@@ -1716,12 +1720,16 @@ class MissionService:
         def _stamped(event: Dict[str, Any]) -> Dict[str, Any]:
             return {**event, "timestamp": time.time()}
 
+        run_id: str | None = None
         argv = ["bash", "run.sh"]
         if mission_name:
             argv.append(mission_name)
         # Fix terminal width so Rich boxes render at a consistent 120-col width
         # regardless of the parent process's TTY state.
         run_env = {**os.environ, "COLUMNS": "120", "PYTHONUNBUFFERED": "1"}
+        if record_localization:
+            run_id = make_run_id()
+            run_env.update(build_recording_env(project_path, run_id))
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=str(project_path),
@@ -1765,6 +1773,8 @@ class MissionService:
         self._running_procs.pop(project_uuid, None)
 
         yield _stamped({"type": "exit", "returncode": proc.returncode})
+        if run_id is not None:
+            yield _stamped({"type": "run_recorded", "run_id": run_id})
 
     async def _collect_lines(self, stream, stream_type: str) -> List[Dict[str, Any]]:
         """Collect a batch of lines from a stream."""

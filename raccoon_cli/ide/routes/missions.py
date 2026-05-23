@@ -340,8 +340,11 @@ async def _run_ws_handler(
         if debug_param is not None:
             debug_mode = str(debug_param).lower() in {"1", "true", "yes", "on"}
 
+        record_param = qp.get("record_localization") if qp is not None else None
+        record_localization = record_param is not None and str(record_param).lower() in {"1", "true", "yes", "on"}
+
         async def producer():
-            async for event in svc.stream_mission_output(project_uuid, mission_name, simulate=simulate, debug=debug_mode):
+            async for event in svc.stream_mission_output(project_uuid, mission_name, simulate=simulate, debug=debug_mode, record_localization=record_localization):
                 await websocket.send_json(event)
 
         async def consumer():
