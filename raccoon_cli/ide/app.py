@@ -21,6 +21,7 @@ from raccoon_cli.ide.routes import device as device_router
 from raccoon_cli.ide.routes import files as files_router
 from raccoon_cli.ide.routes import arm as arm_router
 from raccoon_cli.ide.routes import runs as runs_router
+from raccoon_cli.ide.routes import run_configurations as run_configurations_router
 from raccoon_cli.ide.repositories.run_repository import RunRepository
 
 
@@ -102,6 +103,9 @@ def create_app(project_root: Path | str = None, settings: Settings = None) -> Fa
     app.dependency_overrides[files_router.get_project_service] = get_project_service
     app.dependency_overrides[arm_router.get_project_repository] = lambda: project_repository
     app.dependency_overrides[runs_router.get_run_repository] = lambda: run_repository
+    app.dependency_overrides[run_configurations_router.get_project_repository] = (
+        lambda: project_repository
+    )
 
     # Include API routes
     app.include_router(projects_router.router, prefix="/api/v1/projects", tags=["projects"])
@@ -112,6 +116,11 @@ def create_app(project_root: Path | str = None, settings: Settings = None) -> Fa
     app.include_router(files_router.router, prefix="/api/v1/files", tags=["files"])
     app.include_router(arm_router.router, prefix="/api/v1/projects", tags=["arm"])
     app.include_router(runs_router.router, prefix="/api/v1/runs", tags=["runs"])
+    app.include_router(
+        run_configurations_router.router,
+        prefix="/api/v1/run-configurations",
+        tags=["run-configurations"],
+    )
 
     # Health check endpoint
     @app.get("/api/v1/health")

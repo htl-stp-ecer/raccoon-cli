@@ -1090,6 +1090,7 @@ class MissionService:
         simulate: bool | str | None = None,
         debug: _OptionalBool[bool] = None,
         record_localization: bool = False,
+        extra_env: Dict[str, str] | None = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Run the mission and yield structured websocket events with live output.
 
@@ -1203,7 +1204,7 @@ class MissionService:
                     yield event
             else:
                 # Real execution - run run.sh and stream output
-                async for event in self._execute_mission(project_uuid, project_path, mission_name, flattened_steps, record_localization=record_localization):
+                async for event in self._execute_mission(project_uuid, project_path, mission_name, flattened_steps, record_localization=record_localization, extra_env=extra_env):
                     yield event
 
                 # After execution, send newly recorded timings from this run
@@ -1709,6 +1710,7 @@ class MissionService:
         flattened_steps: List[Dict[str, Any]],
         *,
         record_localization: bool = False,
+        extra_env: Dict[str, str] | None = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Execute the mission(s) via run.sh and stream output.
 
@@ -1727,6 +1729,11 @@ class MissionService:
         # Fix terminal width so Rich boxes render at a consistent 120-col width
         # regardless of the parent process's TTY state.
         run_env = {**os.environ, "COLUMNS": "120", "PYTHONUNBUFFERED": "1"}
+        if extra_env:
+            # Run-config env wins over the inherited environment, but the
+            # recording vars below still take precedence so localization
+            # capture stays predictable.
+            run_env.update({str(k): str(v) for k, v in extra_env.items()})
         if record_localization:
             run_id = make_run_id()
             run_env.update(build_recording_env(project_path, run_id))

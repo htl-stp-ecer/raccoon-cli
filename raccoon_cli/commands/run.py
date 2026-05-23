@@ -22,11 +22,34 @@ from raccoon_cli.codegen import create_pipeline
 from raccoon_cli.project import ProjectError, load_project_config, require_project
 from raccoon_cli.commands.codegen import _resolve_ftmap_paths
 from raccoon_cli.commands.migrate import _get_format_version, _load_migrations
+from raccoon_cli.run_configurations import (
+    RunConfiguration,
+    load_run_configurations,
+)
 from raccoon_cli.run_recording import make_run_id, recording_rel_path
 
 logger = logging.getLogger("raccoon")
 
 _NO_MISSION_RE = re.compile(r"^--no-m(\d+)$")
+
+
+def _extract_run_config(
+    args: tuple, available: dict
+) -> tuple[tuple, RunConfiguration | None]:
+    """If the first arg matches a known run-configuration name, pop and return it.
+
+    Names are matched case-insensitively so ``raccoon run Dev`` works.
+    """
+    if not args:
+        return args, None
+    candidate = args[0]
+    if candidate.startswith("-"):
+        return args, None
+    lower = candidate.lower()
+    for cfg_name, cfg in available.items():
+        if cfg_name.lower() == lower:
+            return args[1:], cfg
+    return args, None
 
 
 def _extract_skip_missions(args: tuple) -> tuple[tuple, set[int]]:
@@ -191,6 +214,7 @@ def _run_local(
     skip_missions: set[int] | None = None,
     record_localization: bool = False,
     record_hz: float | None = None,
+    extra_env: dict | None = None,
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
@@ -248,6 +272,12 @@ def _run_local(
         env["LIBSTP_NO_CHECKPOINTS"] = "1"
     if skip_missions:
         env["LIBSTP_SKIP_MISSIONS"] = ",".join(str(i) for i in sorted(skip_missions))
+    if extra_env:
+        # Run-configuration env vars override the inherited environment but
+        # not the LIBSTP_* flags we just set explicitly above — those reflect
+        # the resolved CLI/config combination.
+        for key, value in extra_env.items():
+            env.setdefault(key, str(value))
 
     rec_path, rec_ts = _allocate_recording_path(record_localization)
     if rec_path is not None:
@@ -330,6 +360,7 @@ async def _run_remote(
     skip_missions: set[int] | None = None,
     record_localization: bool = False,
     record_hz: float | None = None,
+    extra_env: dict | None = None,
 ) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
@@ -394,6 +425,9 @@ async def _run_remote(
                 env["LIBSTP_SKIP_MISSIONS"] = ",".join(
                     str(i) for i in sorted(skip_missions)
                 )
+            if extra_env:
+                for key, value in extra_env.items():
+                    env.setdefault(key, str(value))
             rec_path, rec_ts = _allocate_recording_path(record_localization)
             if rec_path is not None:
                 env["LIBSTP_RECORD_LOCALIZATION"] = "1"
@@ -570,6 +604,11 @@ def run_command(
     If connected to a Pi, syncs the project and runs remotely.
     Use --local to force local execution.
 
+    The first positional argument may name a run configuration declared
+    under ``run_configurations:`` in ``raccoon.project.yml`` (e.g.
+    ``raccoon run dev``). The configuration provides defaults for the
+    flags below; explicit CLI flags still win.
+
     Use --no-mN (e.g. --no-m0 --no-m2) to skip missions at those order indices.
     """
     console: Console = ctx.obj["console"]
@@ -589,6 +628,32 @@ def run_command(
         config = load_project_config(project_root)
         if not isinstance(config, dict):
             raise ProjectError("raccoon.project.yml must be a mapping")
+
+        # Resolve run configuration: first positional arg picks one if it
+        # matches a known name. CLI flags then layer on top of the config.
+        run_configs = load_run_configurations(project_root, config)
+        args, run_cfg = _extract_run_config(args, run_configs)
+        extra_env: dict[str, str] = {}
+        if run_cfg is not None:
+            console.print(
+                f"[cyan]Run configuration:[/cyan] {run_cfg.name}"
+                + (f" — {run_cfg.description}" if run_cfg.description else "")
+            )
+            dev = dev or run_cfg.dev
+            no_calibrate = no_calibrate or run_cfg.no_calibrate
+            no_checkpoints = no_checkpoints or run_cfg.no_checkpoints
+            no_codegen = no_codegen or run_cfg.no_codegen
+            no_sync = no_sync or run_cfg.no_sync
+            record_localization = record_localization or run_cfg.record_localization
+            if record_hz is None and run_cfg.record_hz is not None:
+                record_hz = run_cfg.record_hz
+            if run_cfg.target == "local":
+                local = True
+            elif run_cfg.target == "remote":
+                local = False
+            if run_cfg.args:
+                args = tuple(run_cfg.args) + args
+            extra_env = dict(run_cfg.env)
 
         _warn_if_migrations_pending(console, project_root)
 
@@ -648,6 +713,7 @@ def run_command(
                         skip_missions=skip_missions,
                         record_localization=record_localization,
                         record_hz=record_hz,
+                        extra_env=extra_env,
                     )
                 )
                 return
@@ -673,6 +739,7 @@ def run_command(
             skip_missions=skip_missions,
             record_localization=record_localization,
             record_hz=record_hz,
+            extra_env=extra_env,
         )
 
     except ProjectError as exc:
