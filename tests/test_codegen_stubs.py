@@ -17,7 +17,6 @@ from __future__ import annotations
 import ast
 import importlib.util
 import inspect
-import subprocess
 import sys
 from pathlib import Path
 from textwrap import dedent
@@ -42,15 +41,6 @@ requires_raccoon = pytest.mark.skipif(
     reason="raccoon runtime not installed (only stubs present)",
 )
 
-
-@pytest.fixture(scope="session", autouse=True)
-def ensure_latest_raccoon_stubs():
-    """Always pull the latest raccoon-library from PyPI before integration tests run."""
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "raccoon-library", "-q"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
 
 
 # ---------------------------------------------------------------------------
