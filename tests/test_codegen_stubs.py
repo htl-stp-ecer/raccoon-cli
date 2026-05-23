@@ -42,6 +42,21 @@ requires_raccoon = pytest.mark.skipif(
 )
 
 
+def _hal_pyi_available() -> bool:
+    """True when raccoon.hal has an accompanying .pyi stub file for introspection."""
+    try:
+        from raccoon_cli.codegen.introspection import _find_pyi_for_module
+        return _find_pyi_for_module("raccoon.hal") is not None
+    except Exception:
+        return False
+
+
+requires_hal_pyi = pytest.mark.skipif(
+    not _hal_pyi_available(),
+    reason="raccoon.hal has no .pyi stub — raccoon-library PyPI release does not include stubs yet",
+)
+
+
 
 # ---------------------------------------------------------------------------
 # Unit tests — pyi parsing (no raccoon required)
@@ -285,11 +300,13 @@ class TestResolveClass:
 
 
 @requires_raccoon
+@requires_hal_pyi
 class TestGetInitParams:
     """get_init_params() falls back to .pyi stubs for pybind11 native classes.
 
     If hal.pyi is not installed the params dict will be empty and these tests
-    fail — which is the regression we want to catch.
+    fail — which is the regression we want to catch. Skip when the installed
+    raccoon-library release does not ship .pyi files.
     """
 
     def test_motor_port_is_required(self):
@@ -338,6 +355,7 @@ class TestGetInitParams:
 
 
 @requires_raccoon
+@requires_hal_pyi
 class TestInferParamType:
     """infer_param_type() reads type annotations from .pyi stubs."""
 
@@ -352,6 +370,7 @@ class TestInferParamType:
 
 
 @requires_raccoon
+@requires_hal_pyi
 class TestCodegenEndToEnd:
     """Full codegen pipeline produces correct Python for common hardware configs."""
 
