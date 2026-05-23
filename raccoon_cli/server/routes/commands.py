@@ -183,6 +183,30 @@ async def _start_command(
         await _cancel_running_commands_for_project(project_id)
         _reject_if_another_project_running(project_id)
 
+        if command_type == CommandType.RUN:
+            from raccoon_cli.project import load_project_config
+            from raccoon_cli.project_services import deploy_project_services
+
+            try:
+                config_path = project["path"] / "raccoon.project.yml"
+                if config_path.exists():
+                    project_config = load_project_config(project["path"])
+                    changed = await asyncio.to_thread(
+                        deploy_project_services, project_config, project["path"]
+                    )
+                    if changed:
+                        logger.info(
+                            "Updated project services for %s: %s",
+                            project_id,
+                            ", ".join(changed),
+                        )
+            except Exception as exc:
+                logger.exception("Failed to deploy project services for %s", project_id)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to deploy project services: {exc}",
+                ) from exc
+
         command_id = str(uuid.uuid4())
         executor = CommandExecutor()
 

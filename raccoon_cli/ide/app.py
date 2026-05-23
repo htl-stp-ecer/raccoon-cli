@@ -20,6 +20,8 @@ from raccoon_cli.ide.routes import type_definitions as type_definitions_router
 from raccoon_cli.ide.routes import device as device_router
 from raccoon_cli.ide.routes import files as files_router
 from raccoon_cli.ide.routes import arm as arm_router
+from raccoon_cli.ide.routes import runs as runs_router
+from raccoon_cli.ide.repositories.run_repository import RunRepository
 
 
 def create_app(project_root: Path | str = None, settings: Settings = None) -> FastAPI:
@@ -72,12 +74,14 @@ def create_app(project_root: Path | str = None, settings: Settings = None) -> Fa
     step_discovery_service = StepDiscoveryService(
         project_service=project_service,
     )
+    run_repository = RunRepository(projects_root=project_root)
 
     # Store services in app state for WebSocket handlers
     app.state.project_service = project_service
     app.state.mission_service = mission_service
     app.state.step_discovery_service = step_discovery_service
     app.state.project_codegen = project_codegen
+    app.state.run_repository = run_repository
 
     # Override dependency injection functions
     def get_project_service() -> ProjectService:
@@ -97,6 +101,7 @@ def create_app(project_root: Path | str = None, settings: Settings = None) -> Fa
     app.dependency_overrides[device_router.get_project_service] = get_project_service
     app.dependency_overrides[files_router.get_project_service] = get_project_service
     app.dependency_overrides[arm_router.get_project_repository] = lambda: project_repository
+    app.dependency_overrides[runs_router.get_run_repository] = lambda: run_repository
 
     # Include API routes
     app.include_router(projects_router.router, prefix="/api/v1/projects", tags=["projects"])
@@ -106,6 +111,7 @@ def create_app(project_root: Path | str = None, settings: Settings = None) -> Fa
     app.include_router(device_router.router, prefix="/api/v1/device", tags=["device"])
     app.include_router(files_router.router, prefix="/api/v1/files", tags=["files"])
     app.include_router(arm_router.router, prefix="/api/v1/projects", tags=["arm"])
+    app.include_router(runs_router.router, prefix="/api/v1/runs", tags=["runs"])
 
     # Health check endpoint
     @app.get("/api/v1/health")

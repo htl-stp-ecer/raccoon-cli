@@ -16,7 +16,7 @@ SYSTEMD_SERVICE_PATH = Path("/etc/systemd/system") / SYSTEMD_SERVICE_NAME
 
 _NETWORK_SERVICES = ["wifi-power-save-off.service", "gratuitous-arp.service"]
 _SYSTEMD_DIR = Path("/etc/systemd/system")
-_PACKAGE_SYSTEMD = Path(__file__).parent / "systemd"
+_PACKAGE_SYSTEMD = Path(__file__).parent.parent / "systemd"
 
 
 def _install_network_services() -> list[str]:
