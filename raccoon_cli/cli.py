@@ -37,6 +37,38 @@ CONTEXT_SETTINGS = {
 _SKIP_VALIDATE_COMMANDS = {"validate", "create", "connect", "disconnect", "update", "doctor", "migrate", "web"}
 
 
+def _normalize_exit_code(code) -> int:
+    if code is None:
+        return 0
+    if isinstance(code, bool):
+        return 1 if code else 0
+    if isinstance(code, int):
+        return code
+    return 1
+
+
+class RaccoonGroup(click.Group):
+    def invoke(self, ctx: click.Context):
+        ctx.ensure_object(dict)
+        try:
+            result = super().invoke(ctx)
+        except click.exceptions.Exit as exc:
+            ctx.obj["exit_code"] = _normalize_exit_code(getattr(exc, "exit_code", None))
+            raise
+        except SystemExit as exc:
+            ctx.obj["exit_code"] = _normalize_exit_code(exc.code)
+            raise
+        except click.ClickException:
+            ctx.obj["exit_code"] = 1
+            raise
+        except Exception:
+            ctx.obj["exit_code"] = 1
+            raise
+        else:
+            ctx.obj["exit_code"] = 0
+            return result
+
+
 def _setup_context(ctx: click.Context) -> None:
     """Ensure console and logging are ready for a command invocation."""
     ctx.ensure_object(dict)
@@ -53,6 +85,7 @@ def _setup_context(ctx: click.Context) -> None:
 
     summary.clear()
     ctx.obj["summary_printed"] = False
+    ctx.obj.setdefault("exit_code", None)
     if not ctx.obj.get("summary_registered"):
         ctx.call_on_close(lambda: _print_summary(ctx))
         ctx.obj["summary_registered"] = True
@@ -66,6 +99,12 @@ def _print_summary(ctx: click.Context) -> None:
     console: Console | None = ctx.obj.get("console")
     summary = ctx.obj.get("log_summary")
     if console is None or summary is None:
+        return
+
+    exit_code = ctx.obj.get("exit_code")
+    if not summary.has_messages() and exit_code not in (None, 0):
+        summary.clear()
+        ctx.obj["summary_printed"] = True
         return
 
     render_summary(console, summary)
@@ -91,7 +130,7 @@ def _run_auto_validate(ctx: click.Context) -> None:
     run_validation_or_exit(ctx.obj["console"], project_root)
 
 
-@click.group(context_settings=CONTEXT_SETTINGS, no_args_is_help=True)
+@click.group(context_settings=CONTEXT_SETTINGS, no_args_is_help=True, cls=RaccoonGroup)
 @click.option("--no-validate", is_flag=True, help="Skip pre-command project validation.")
 @click.pass_context
 def main(ctx: click.Context, no_validate: bool) -> None:

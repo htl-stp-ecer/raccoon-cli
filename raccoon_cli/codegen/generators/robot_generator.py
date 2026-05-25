@@ -131,6 +131,15 @@ class RobotGenerator(BaseGenerator):
             )
         builder.add_class_attribute("shutdown_in", repr(shutdown_in))
 
+        builder.add_method(
+            "@property\n"
+            "def odometry(self):\n"
+            "    if not hasattr(self, \"_odometry\"):\n"
+            "        from raccoon.hal import platform as _platform\n"
+            "        self._odometry = _platform.Platform.create_odometry(self.kinematics)\n"
+            "    return self._odometry\n"
+        )
+
         if hasattr(self, '_full_config'):
             self._add_missions_to_builder(builder, self._full_config)
 

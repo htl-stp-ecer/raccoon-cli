@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import BaseGenerator
@@ -210,7 +211,20 @@ class DefsGenerator(BaseGenerator):
         attributes.append(("analog_sensors", analog_list))
         attributes.extend(wfl_extra_attrs)
 
-        return ClassBuilder.build_simple_class(self.class_name, attributes)
+        group_attrs = self._build_sensor_pair_groups(data)
+        if group_attrs:
+            attributes.extend(group_attrs)
+
+        defs_source = ClassBuilder.build_simple_class(self.class_name, attributes)
+        if group_attrs:
+            helper = (
+                "class _SensorPair:\n"
+                "    def __init__(self, left=None, right=None):\n"
+                "        self.left = left\n"
+                "        self.right = right\n"
+            )
+            return helper + "\n\n" + defs_source
+        return defs_source
 
     @staticmethod
     def _extract_servo_preset(
@@ -258,6 +272,49 @@ class DefsGenerator(BaseGenerator):
             return issubclass(hw_class, self._analog_sensor_class)
         except TypeError:
             return False
+
+    def _build_sensor_pair_groups(self, data: Dict[str, Any]) -> List[Tuple[str, str]]:
+        """Auto-create simple left/right sensor pairs for common naming schemes."""
+        left_re = re.compile(r"^(?P<prefix>.+)_left_(?P<suffix>.+)$")
+        right_re = re.compile(r"^(?P<prefix>.+)_right_(?P<suffix>.+)$")
+
+        left_map: dict[tuple[str, str], str] = {}
+        right_map: dict[tuple[str, str], str] = {}
+
+        for name in self._analog_sensor_fields:
+            m_left = left_re.match(name)
+            if m_left:
+                left_map[(m_left.group("prefix"), m_left.group("suffix"))] = name
+                continue
+            m_right = right_re.match(name)
+            if m_right:
+                right_map[(m_right.group("prefix"), m_right.group("suffix"))] = name
+
+        if not left_map or not right_map:
+            return []
+
+        pairs_by_prefix: dict[str, list[tuple[str, str, str]]] = {}
+        for key, left_name in left_map.items():
+            right_name = right_map.get(key)
+            if not right_name:
+                continue
+            prefix, suffix = key
+            pairs_by_prefix.setdefault(prefix, []).append((suffix, left_name, right_name))
+
+        group_attrs: list[tuple[str, str]] = []
+        for prefix, pairs in pairs_by_prefix.items():
+            if prefix in data:
+                continue  # explicit definition wins
+            if len(pairs) != 1:
+                continue  # ambiguous — require explicit SensorGroup
+            if not prefix.isidentifier():
+                continue
+            _, left_name, right_name = pairs[0]
+            group_attrs.append(
+                (prefix, f"_SensorPair(left={left_name}, right={right_name})")
+            )
+
+        return group_attrs
 
     @staticmethod
     def _validate_sensor_group(

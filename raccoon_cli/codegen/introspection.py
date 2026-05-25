@@ -64,7 +64,13 @@ def _find_pyi_for_module(module_name: str) -> Optional[Path]:
         origin = Path(spec.origin)
         stem = origin.stem.split(".")[0]
         pyi = origin.parent / f"{stem}.pyi"
-        return pyi if pyi.exists() else None
+        if pyi.exists():
+            return pyi
+        # Some distributions ship a compiled <stem>.so next to a stub package
+        # <stem>/__init__.pyi (e.g. raccoon.hal). find_spec picks the .so as
+        # origin, so we have to look for the package-style stub explicitly.
+        pkg_pyi = origin.parent / stem / "__init__.pyi"
+        return pkg_pyi if pkg_pyi.exists() else None
 
     if spec is not None and spec.submodule_search_locations:
         for search_path in spec.submodule_search_locations:
