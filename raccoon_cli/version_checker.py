@@ -396,8 +396,17 @@ def get_pypi_versions(pip_name: str) -> Optional[list[str]]:
     return None
 
 
-def resolve_pypi_version(pip_name: str, requested: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    """Resolve a PyPI version, falling back to the latest available if missing."""
+def resolve_pypi_version(
+    pip_name: str,
+    requested: Optional[str],
+    allow_missing_fallback: bool = False,
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve a PyPI version.
+
+    By default, a missing requested version is treated as an error so bundle
+    updates stay exact. Callers may opt into falling back to the latest PyPI
+    release with ``allow_missing_fallback=True``.
+    """
     versions = get_pypi_versions(pip_name)
     if not versions:
         return requested, None
@@ -405,6 +414,12 @@ def resolve_pypi_version(pip_name: str, requested: Optional[str]) -> tuple[Optio
         return requested, None
     latest = max(versions, key=_parse_version)
     if requested:
+        if not allow_missing_fallback:
+            raise ValueError(
+                f"{pip_name} {requested} is not on PyPI. "
+                "Re-run with --allow-missing-pypi-version-fallback to install "
+                f"{latest} instead."
+            )
         return latest, f"{pip_name} {requested} is not on PyPI; using {latest} instead."
     return latest, None
 

@@ -27,14 +27,6 @@ def _pip_version(package: str) -> Optional[str]:
     return None
 
 
-def _pip_version_any(packages: list[str]) -> Optional[str]:
-    for pkg in packages:
-        version = _pip_version(pkg)
-        if version:
-            return version
-    return None
-
-
 def _binary_version(binary_path: str) -> Optional[str]:
     try:
         result = subprocess.run(
@@ -68,7 +60,7 @@ async def get_versions() -> dict:
     ui_version = _file_version(_BOTUI_VERSION_FILE)
     return {
         "raccoon-cli": _pip_version("raccoon-cli"),
-        "raccoon-lib": _pip_version_any(["raccoon-library", "raccoon"]),
+        "raccoon-lib": _pip_version("raccoon-library"),
         "raccoon-transport": _pip_version("raccoon-transport"),
         "stm32-data-reader": _binary_version(_STM32_BINARY),
         "raccoon-cam": _binary_version(_CAM_BINARY),
