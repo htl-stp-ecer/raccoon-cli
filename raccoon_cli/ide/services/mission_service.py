@@ -31,6 +31,7 @@ from raccoon_cli.ide.schemas.mission import DiscoveredMission
 from raccoon_cli.ide.schemas.mission_detail import ParsedMission, ParsedStep, Vector2D, ParsedComment, ParsedGroup, StepArgument
 from raccoon_cli.ide.schemas.simulation import SimulationDelta, SimulationStepData, MissionSimulationData
 from raccoon_cli.ide.config import Settings
+from raccoon_cli.run_recording import make_run_id, build_recording_env
 import asyncio
 import os
 import sys
@@ -1088,6 +1089,8 @@ class MissionService:
         *,
         simulate: bool | str | None = None,
         debug: _OptionalBool[bool] = None,
+        record_localization: bool = False,
+        extra_env: Dict[str, str] | None = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Run the mission and yield structured websocket events with live output.
 
@@ -1201,7 +1204,7 @@ class MissionService:
                     yield event
             else:
                 # Real execution - run run.sh and stream output
-                async for event in self._execute_mission(project_uuid, project_path, mission_name, flattened_steps):
+                async for event in self._execute_mission(project_uuid, project_path, mission_name, flattened_steps, record_localization=record_localization, extra_env=extra_env):
                     yield event
 
                 # After execution, send newly recorded timings from this run
@@ -1420,16 +1423,42 @@ class MissionService:
         run picks up the latest map without leaking files outside the
         project tree. We always rewrite — the file is cheap and stale data
         would silently desync from the Web-IDE's table editor.
+
+        v2 layered maps are flattened to the active layer's lines because the
+        libstp runner currently understands only flat ``lines[]``. Multi-layer
+        simulation will be added once libstp supports layered scenes.
         """
         try:
             sim_dir = project_path / ".raccoon" / "sim"
             sim_dir.mkdir(parents=True, exist_ok=True)
             target = sim_dir / "scene.ftmap"
+            table = table_map.get("table") or {"widthCm": 200, "heightCm": 100}
+
+            # Resolve flat lines from either v2 (layers) or v1 (lines).
+            flat_lines: list = []
+            if isinstance(table_map.get("layers"), list) and table_map["layers"]:
+                active_id = table_map.get("activeLayerId")
+                active = None
+                if active_id:
+                    active = next(
+                        (l for l in table_map["layers"] if isinstance(l, dict) and l.get("id") == active_id),
+                        None,
+                    )
+                if active is None:
+                    active = next(
+                        (l for l in table_map["layers"] if isinstance(l, dict)),
+                        None,
+                    )
+                if active and isinstance(active.get("lines"), list):
+                    flat_lines = active["lines"]
+            elif isinstance(table_map.get("lines"), list):
+                flat_lines = table_map["lines"]
+
             payload = {
                 "format": table_map.get("format", "flowchart-table-map"),
-                "version": table_map.get("version", 1),
-                "table": table_map.get("table") or {"widthCm": 200, "heightCm": 100},
-                "lines": table_map.get("lines") or [],
+                "version": 1,
+                "table": table,
+                "lines": flat_lines,
             }
             target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             return target
@@ -1679,6 +1708,9 @@ class MissionService:
         project_path: Path,
         mission_name: str | None,
         flattened_steps: List[Dict[str, Any]],
+        *,
+        record_localization: bool = False,
+        extra_env: Dict[str, str] | None = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Execute the mission(s) via run.sh and stream output.
 
@@ -1690,12 +1722,21 @@ class MissionService:
         def _stamped(event: Dict[str, Any]) -> Dict[str, Any]:
             return {**event, "timestamp": time.time()}
 
+        run_id: str | None = None
         argv = ["bash", "run.sh"]
         if mission_name:
             argv.append(mission_name)
         # Fix terminal width so Rich boxes render at a consistent 120-col width
         # regardless of the parent process's TTY state.
         run_env = {**os.environ, "COLUMNS": "120", "PYTHONUNBUFFERED": "1"}
+        if extra_env:
+            # Run-config env wins over the inherited environment, but the
+            # recording vars below still take precedence so localization
+            # capture stays predictable.
+            run_env.update({str(k): str(v) for k, v in extra_env.items()})
+        if record_localization:
+            run_id = make_run_id()
+            run_env.update(build_recording_env(project_path, run_id))
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=str(project_path),
@@ -1739,6 +1780,8 @@ class MissionService:
         self._running_procs.pop(project_uuid, None)
 
         yield _stamped({"type": "exit", "returncode": proc.returncode})
+        if run_id is not None:
+            yield _stamped({"type": "run_recorded", "run_id": run_id})
 
     async def _collect_lines(self, stream, stream_type: str) -> List[Dict[str, Any]]:
         """Collect a batch of lines from a stream."""

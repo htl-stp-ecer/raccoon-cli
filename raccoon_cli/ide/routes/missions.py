@@ -340,8 +340,41 @@ async def _run_ws_handler(
         if debug_param is not None:
             debug_mode = str(debug_param).lower() in {"1", "true", "yes", "on"}
 
+        record_param = qp.get("record_localization") if qp is not None else None
+        record_localization = record_param is not None and str(record_param).lower() in {"1", "true", "yes", "on"}
+
+        # Optional run-configuration name. Resolved against
+        # raccoon.project.yml + builtin presets, then layered onto the
+        # explicit query-param values (explicit query params still win).
+        run_config_param = qp.get("run_config") if qp is not None else None
+        run_config_env: dict[str, str] | None = None
+        if run_config_param:
+            from raccoon_cli.run_configurations import get_run_configuration
+            from raccoon_cli.project import ProjectError as _ProjectError
+            try:
+                project_path = svc._repo.get_project_path(project_uuid)
+                if project_path and project_path.exists():
+                    rc = get_run_configuration(project_path, run_config_param)
+                    # Map config target → simulate flag if caller did not set one
+                    if simulate is None and rc.target == "simulated":
+                        simulate = "real"
+                    if not record_localization and rc.record_localization:
+                        record_localization = True
+                    # Build LIBSTP_* env for the child process — same wire
+                    # format as raccoon_cli/commands/run.py uses.
+                    run_config_env = dict(rc.env)
+                    if rc.dev:
+                        run_config_env.setdefault("LIBSTP_DEV_MODE", "1")
+                    if rc.no_calibrate:
+                        run_config_env.setdefault("LIBSTP_NO_CALIBRATE", "1")
+                    if rc.no_checkpoints:
+                        run_config_env.setdefault("LIBSTP_NO_CHECKPOINTS", "1")
+            except _ProjectError as e:
+                await websocket.send_json({"type": "error", "message": str(e)})
+                return
+
         async def producer():
-            async for event in svc.stream_mission_output(project_uuid, mission_name, simulate=simulate, debug=debug_mode):
+            async for event in svc.stream_mission_output(project_uuid, mission_name, simulate=simulate, debug=debug_mode, record_localization=record_localization, extra_env=run_config_env):
                 await websocket.send_json(event)
 
         async def consumer():
