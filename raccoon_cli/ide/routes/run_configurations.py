@@ -149,7 +149,9 @@ async def delete_run_configuration_endpoint(
     name: str,
     repo: ProjectRepository = Depends(get_project_repository),
 ):
-    """Remove a user-defined configuration. Builtins return 400."""
+    """Remove a configuration. Deleting a builtin tombstones it so it no
+    longer appears in either the CLI or the IDE until a new entry with
+    that name is created."""
     project_path = _resolve_project_root(project_uuid, repo)
     try:
         delete_run_configuration(project_path, name)

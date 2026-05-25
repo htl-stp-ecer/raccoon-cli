@@ -26,6 +26,7 @@ from raccoon_cli.project import (
 
 
 CONFIG_KEY = "run_configurations"
+HIDDEN_KEY = "hidden_run_configurations"
 
 
 @dataclass
@@ -141,7 +142,20 @@ def load_run_configurations(
             "configuration"
         )
 
+    hidden_raw = config.get(HIDDEN_KEY) or []
+    if not isinstance(hidden_raw, list):
+        raise ProjectError(
+            f"raccoon.project.yml: '{HIDDEN_KEY}' must be a list of names"
+        )
+    hidden = {str(name) for name in hidden_raw}
+
     result = _builtin_presets()
+    # Drop tombstoned builtins so neither the CLI nor the IDE sees them.
+    # A user entry with the same name re-introduces it below.
+    for name in list(result):
+        if name in hidden:
+            result.pop(name)
+
     for name, data in raw.items():
         rc = RunConfiguration.from_dict(str(name), data or {})
         # User-defined entries shadow the builtin presets but keep the
@@ -172,28 +186,49 @@ def get_run_configuration(
 def save_run_configurations(
     project_root: Path,
     configs: Dict[str, RunConfiguration],
+    hidden_builtins: Optional[set[str]] = None,
 ) -> None:
     """Persist user-defined configurations to ``raccoon.project.yml``.
 
-    Builtins are stripped — they live in code, not in the YAML.
+    Builtins are stripped — they live in code, not in the YAML. The
+    ``hidden_builtins`` tombstone list lets the user hide a shipped
+    preset (so neither the CLI nor the IDE offers it any more).
     """
     persistable = {
         name: cfg.to_dict()
         for name, cfg in configs.items()
         if not cfg.builtin
     }
-    save_project_keys(project_root, {CONFIG_KEY: persistable})
+    updates: Dict[str, Any] = {CONFIG_KEY: persistable}
+    if hidden_builtins is not None:
+        # Sorted for deterministic diffs in YAML.
+        updates[HIDDEN_KEY] = sorted(hidden_builtins)
+    save_project_keys(project_root, updates)
+
+
+def _load_hidden_builtins(project_root: Path) -> set[str]:
+    config = load_project_config(project_root)
+    raw = config.get(HIDDEN_KEY) or []
+    if not isinstance(raw, list):
+        return set()
+    return {str(n) for n in raw}
 
 
 def upsert_run_configuration(
     project_root: Path,
     cfg: RunConfiguration,
 ) -> Dict[str, RunConfiguration]:
-    """Insert or replace *cfg*, persist, and return the updated set."""
+    """Insert or replace *cfg*, persist, and return the updated set.
+
+    Upserting an entry also un-hides a tombstoned builtin of the same
+    name — explicit user action wins over the hide-list.
+    """
     existing = load_run_configurations(project_root)
     cfg.builtin = False
     existing[cfg.name] = cfg
-    save_run_configurations(project_root, existing)
+    hidden = _load_hidden_builtins(project_root)
+    hidden.discard(cfg.name)
+    save_run_configurations(project_root, existing, hidden_builtins=hidden)
     return existing
 
 
@@ -201,18 +236,25 @@ def delete_run_configuration(
     project_root: Path,
     name: str,
 ) -> Dict[str, RunConfiguration]:
-    """Remove a user-defined configuration; builtins cannot be deleted."""
-    existing = load_run_configurations(project_root)
-    cfg = existing.get(name)
-    if cfg is None:
+    """Remove a configuration from the project.
+
+    User-defined entries are stripped from ``run_configurations:``.
+    Builtins are tombstoned in ``hidden_run_configurations:`` so they
+    disappear from both the CLI and the IDE until the user un-hides them
+    (which currently only happens by re-creating an entry with the same
+    name through the IDE).
+    """
+    builtins = _builtin_presets()
+    user_names = _user_defined_names(project_root)
+    if name not in builtins and name not in user_names:
         raise ProjectError(f"Run configuration '{name}' not found")
-    if cfg.builtin and name not in _user_defined_names(project_root):
-        raise ProjectError(
-            f"'{name}' is a builtin preset and cannot be deleted"
-        )
+
+    existing = load_run_configurations(project_root)
     existing.pop(name, None)
-    save_run_configurations(project_root, existing)
-    # Re-load so builtins re-surface if a shadowing entry was removed.
+    hidden = _load_hidden_builtins(project_root)
+    if name in builtins:
+        hidden.add(name)
+    save_run_configurations(project_root, existing, hidden_builtins=hidden)
     return load_run_configurations(project_root)
 
 
