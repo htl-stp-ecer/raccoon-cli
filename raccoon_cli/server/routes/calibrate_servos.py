@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/v1/calibrate-servos", tags=["servo-calibration"]
 
 _session: Optional[dict] = None  # { servo, servo_port, current_angle, initial_angle }
 _session_lock = asyncio.Lock()
+_raccoon_hal = None  # holds raccoon.hal module reference alive for the duration of a session
 
 
 class ServoCalibrationStartRequest(BaseModel):
@@ -33,19 +34,18 @@ class ServoCalibrationEndResponse(BaseModel):
 
 @router.post("/start")
 async def calibrate_servo_start(request: ServoCalibrationStartRequest):
-    global _session
+    global _session, _raccoon_hal
 
     async with _session_lock:
         if _session is not None:
             raise HTTPException(
                 status_code=409,
-                detail=f"Session for '{request.servo_id}' already active. Call /end first."
+                detail=f"Session for '{_session['servo_id']}' already active. Call /end first."
             )
 
         try:
-            from raccoon.hal import Motor
-            from raccoon.hal import Servo
-            Motor.enable_all()
+            import raccoon.hal as _raccoon_hal
+            Servo = _raccoon_hal.Servo
             servo = Servo(port=request.servo_port)
             servo.enable()
             servo.set_position(float(request.initial_angle))
@@ -54,6 +54,7 @@ async def calibrate_servo_start(request: ServoCalibrationStartRequest):
 
         _session = {
             "servo": servo,
+            "servo_id": request.servo_id,
             "servo_port": request.servo_port,
             "current_angle": request.initial_angle,
             "initial_angle": request.initial_angle,
@@ -89,7 +90,7 @@ async def calibrate_servo_move(request: ServoCalibrationMoveRequest):
 
 @router.post("/end", response_model=ServoCalibrationEndResponse)
 async def calibrate_servo_end():
-    global _session
+    global _session, _raccoon_hal
 
     async with _session_lock:
         if _session is None:
@@ -109,4 +110,5 @@ async def calibrate_servo_end():
             delta=_session["current_angle"] - _session["initial_angle"]
         )
         _session = None
+        _raccoon_hal = None
         return response

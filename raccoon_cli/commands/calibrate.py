@@ -586,8 +586,8 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
 
         try:
             r = httpx.post(
-                f"{base_url}/servo/set",
-                json={"positions": [{"port": port, "angle_deg": start_deg}]},
+                f"{base_url}/calibrate-servos/start",
+                json={"servo_id": servo_name, "servo_port": port, "initial_angle": start_deg},
                 headers=request_headers,
                 timeout=5.0,
             )
@@ -621,13 +621,13 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
                     break
                 try:
                     r = httpx.post(
-                        f"{base_url}/servo/set",
-                        json={"positions": [{"port": port, "angle_deg": _current_angle[0] + delta}]},
+                        f"{base_url}/calibrate-servos/move",
+                        json={"delta_to_move": delta},
                         headers=request_headers,
                         timeout=2.0,
                     )
                     r.raise_for_status()
-                    _current_angle[0] += delta
+                    _current_angle[0] = r.json()["current_angle"]
                     offset = _current_angle[0] - start_deg
                     sys.stdout.write(f"\r  [{_step:g}°]  Offset: {offset:+.1f}°  (current: {_current_angle[0]:.1f}°)  ")
                     sys.stdout.flush()
@@ -687,14 +687,26 @@ def _calibrate_servos(ctx: click.Context, project_root: Path, config: dict) -> N
             sys.stdout.write("\n")
             sys.stdout.flush()
 
+        end_data: dict | None = None
         try:
-            if not skipped:
-                delta = _current_angle[0] - start_deg
+            end_resp = httpx.post(
+                f"{base_url}/calibrate-servos/end",
+                headers=request_headers,
+                timeout=5.0,
+            )
+            end_resp.raise_for_status()
+            end_data = end_resp.json()
+        except Exception as exc:
+            console.print(f"[yellow]Failed to end calibration session: {exc}[/yellow]")
+
+        try:
+            if not skipped and end_data:
+                delta = end_data["delta"]
                 new_offset = current_offset + delta
                 saved_path = _save_servo_offset(project_root, config, servo_name, new_offset)
                 defn["offset"] = new_offset
                 console.print(
-                    f"  delta: {delta:+.1f}°  final: {_current_angle[0]:.1f}°  "
+                    f"  delta: {delta:+.1f}°  final: {end_data['final_angle']:.1f}°  "
                     f"[green]saved offset {new_offset:+.1f}°[/green] [dim]({saved_path})[/dim]"
                 )
         except Exception as exc:
