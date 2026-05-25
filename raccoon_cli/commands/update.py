@@ -42,6 +42,11 @@ logger = logging.getLogger("raccoon")
 @click.option("--force", is_flag=True, help="Force reinstall even if versions match")
 @click.option("--bundle", "bundle_tag", default=None, metavar="NAME", help="Pin to a specific bundle (e.g. 2026.4.25.1)")
 @click.option("--dev", "use_dev", is_flag=True, help="Use the dev manifest (latest component tips, auto-updated by CI)")
+@click.option(
+    "--allow-missing-pypi-version-fallback",
+    is_flag=True,
+    help="If the requested bundle version is missing on PyPI, install the latest available PyPI release instead.",
+)
 @click.pass_context
 def update_command(
     ctx: click.Context,
@@ -51,6 +56,7 @@ def update_command(
     force: bool,
     bundle_tag: Optional[str],
     use_dev: bool,
+    allow_missing_pypi_version_fallback: bool,
 ) -> None:
     """Check for and install updates across all packages.
 
@@ -143,7 +149,12 @@ def update_command(
 
     # Perform updates
     if laptop_updates:
-        _update_laptop(console, laptop_updates, force)
+        _update_laptop(
+            console,
+            laptop_updates,
+            force,
+            allow_missing_pypi_version_fallback,
+        )
 
     if pi_updates:
         if ssh_client is None:
@@ -151,7 +162,13 @@ def update_command(
                 "[yellow]Skipping Pi updates — not connected to a Pi.[/yellow]"
             )
         else:
-            _update_pi(console, ssh_client, pi_updates, force)
+            _update_pi(
+                console,
+                ssh_client,
+                pi_updates,
+                force,
+                allow_missing_pypi_version_fallback,
+            )
 
     # After any Pi update, run post-install migrations via the bundled command.
     if pi_updates and ssh_client is not None:
@@ -282,7 +299,10 @@ def _get_pi_ahead(statuses: list[PackageStatus]) -> list[PackageStatus]:
 
 
 def _update_laptop(
-    console: Console, updates: list[PackageStatus], force: bool
+    console: Console,
+    updates: list[PackageStatus],
+    force: bool,
+    allow_missing_pypi_version_fallback: bool,
 ) -> None:
     """Update laptop pip packages directly from PyPI."""
     console.print()
@@ -292,7 +312,14 @@ def _update_laptop(
     for s in updates:
         if not (s.info.pip_name and s.info.on_pypi and s.latest_version):
             continue
-        resolved, note = resolve_pypi_version(s.info.pip_name, s.latest_version)
+        try:
+            resolved, note = resolve_pypi_version(
+                s.info.pip_name,
+                s.latest_version,
+                allow_missing_fallback=allow_missing_pypi_version_fallback,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
         if note:
             console.print(f"[yellow]{note}[/yellow]")
         if resolved:
@@ -369,6 +396,7 @@ def _update_pi(
     ssh_client,
     updates: list[PackageStatus],
     force: bool,
+    allow_missing_pypi_version_fallback: bool,
 ) -> None:
     """Update Pi packages.
 
@@ -391,7 +419,13 @@ def _update_pi(
     tarball_updates = [s for s in updates if not s.info.pip_name]
 
     if pypi_updates:
-        _pi_install_from_pypi(console, ssh_client, pypi_updates, force)
+        _pi_install_from_pypi(
+            console,
+            ssh_client,
+            pypi_updates,
+            force,
+            allow_missing_pypi_version_fallback,
+        )
 
     if wheel_updates:
         _pi_install_github_wheels(console, ssh_client, wheel_updates, force)
@@ -447,13 +481,21 @@ def _pi_install_from_pypi(
     ssh_client,
     updates: list[PackageStatus],
     force: bool,
+    allow_missing_pypi_version_fallback: bool,
 ) -> None:
     """Install PyPI packages on the Pi via ``pip3 install`` over SSH."""
     specs: list[str] = []
     for s in updates:
         if not (s.info.pip_name and s.latest_version):
             continue
-        resolved, note = resolve_pypi_version(s.info.pip_name, s.latest_version)
+        try:
+            resolved, note = resolve_pypi_version(
+                s.info.pip_name,
+                s.latest_version,
+                allow_missing_fallback=allow_missing_pypi_version_fallback,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
         if note:
             console.print(f"[yellow]{note}[/yellow]")
         if resolved:

@@ -39,7 +39,7 @@ def _create_pyproject(project_root: Path, pyproject: Path) -> None:
         f'[project]\n'
         f'name = "{project_name}"\n'
         f'version = "0.1.0"\n'
-        f'requires-python = ">=3.11"\n'
+        f'requires-python = ">=3.13"\n'
         f'dependencies = [\n'
         f'    "raccoon>=1.0.0",\n'
         f']\n'
