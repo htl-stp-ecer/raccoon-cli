@@ -53,7 +53,7 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
     PackageInfo(
         name="raccoon-lib",
         repo="htl-stp-ecer/raccoon-lib",
-        pip_name="raccoon",
+        pip_name="raccoon-library",
         targets=["pi"],
         on_pypi=False,
     ),
@@ -356,7 +356,7 @@ def check_all_versions(
 
         # Pi version — HTTP only; if /version endpoint missing, leave as None → update everything
         if "pi" in pkg.targets and pi_versions_http is not None:
-            status.pi_version = pi_versions_http.get(pkg.name)
+            status.pi_version = _resolve_pi_version(pkg.name, pi_versions_http)
 
         statuses.append(status)
 
@@ -372,6 +372,56 @@ def _parse_version(v: str):
         return Version(v)
     except Exception:
         return tuple(int(x) for x in v.split(".") if x.isdigit())
+
+
+def _resolve_pi_version(name: str, versions: dict[str, Optional[str]]) -> Optional[str]:
+    if name == "botui":
+        return versions.get("botui") or versions.get("ui")
+    return versions.get(name)
+
+
+_PYPI_API = "https://pypi.org/pypi"
+
+
+def get_pypi_versions(pip_name: str) -> Optional[list[str]]:
+    """Fetch available versions for a PyPI package."""
+    url = f"{_PYPI_API}/{pip_name}/json"
+    try:
+        resp = httpx.get(url, headers={"User-Agent": "raccoon-cli"}, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            return list((data.get("releases") or {}).keys())
+    except httpx.HTTPError:
+        pass
+    return None
+
+
+def resolve_pypi_version(
+    pip_name: str,
+    requested: Optional[str],
+    allow_missing_fallback: bool = False,
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve a PyPI version.
+
+    By default, a missing requested version is treated as an error so bundle
+    updates stay exact. Callers may opt into falling back to the latest PyPI
+    release with ``allow_missing_fallback=True``.
+    """
+    versions = get_pypi_versions(pip_name)
+    if not versions:
+        return requested, None
+    if requested and requested in versions:
+        return requested, None
+    latest = max(versions, key=_parse_version)
+    if requested:
+        if not allow_missing_fallback:
+            raise ValueError(
+                f"{pip_name} {requested} is not on PyPI. "
+                "Re-run with --allow-missing-pypi-version-fallback to install "
+                f"{latest} instead."
+            )
+        return latest, f"{pip_name} {requested} is not on PyPI; using {latest} instead."
+    return latest, None
 
 
 def version_is_newer(installed: str, target: str) -> bool:

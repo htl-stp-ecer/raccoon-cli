@@ -19,6 +19,7 @@ class ClassBuilder:
         self.base_classes = base_classes or []
         self._class_attrs: List[Tuple[str, str]] = []
         self._instance_attrs: List[Tuple[str, str, str]] = []
+        self._methods: List[ast.FunctionDef] = []
 
     def add_class_attribute(self, name: str, expression: str) -> ClassBuilder:
         """Add a class-level attribute."""
@@ -34,6 +35,14 @@ class ClassBuilder:
         if not name.isidentifier():
             raise ValueError(f"'{name}' is not a valid Python identifier")
         self._instance_attrs.append((name, type_hint, expression))
+        return self
+
+    def add_method(self, source: str) -> ClassBuilder:
+        """Add a method from a source string (def ...)."""
+        node = ast.parse(source).body[0]
+        if not isinstance(node, ast.FunctionDef):
+            raise ValueError("Method source must define a function")
+        self._methods.append(node)
         return self
 
     def build(self) -> str:
@@ -82,6 +91,9 @@ class ClassBuilder:
                 returns=None,
             )
             body.append(init_fn)
+
+        if self._methods:
+            body.extend(self._methods)
 
         if not body:
             body = [ast.Pass()]

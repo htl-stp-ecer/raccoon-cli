@@ -29,6 +29,7 @@ from raccoon_cli.version_checker import (
     render_version_table,
     fetch_bundle_manifest,
     version_is_newer,
+    resolve_pypi_version,
 )
 
 logger = logging.getLogger("raccoon")
@@ -41,6 +42,11 @@ logger = logging.getLogger("raccoon")
 @click.option("--force", is_flag=True, help="Force reinstall even if versions match")
 @click.option("--bundle", "bundle_tag", default=None, metavar="NAME", help="Pin to a specific bundle (e.g. 2026.4.25.1)")
 @click.option("--dev", "use_dev", is_flag=True, help="Use the dev manifest (latest component tips, auto-updated by CI)")
+@click.option(
+    "--allow-missing-pypi-version-fallback",
+    is_flag=True,
+    help="If the requested bundle version is missing on PyPI, install the latest available PyPI release instead.",
+)
 @click.pass_context
 def update_command(
     ctx: click.Context,
@@ -50,6 +56,7 @@ def update_command(
     force: bool,
     bundle_tag: Optional[str],
     use_dev: bool,
+    allow_missing_pypi_version_fallback: bool,
 ) -> None:
     """Check for and install updates across all packages.
 
@@ -142,7 +149,12 @@ def update_command(
 
     # Perform updates
     if laptop_updates:
-        _update_laptop(console, laptop_updates, force)
+        _update_laptop(
+            console,
+            laptop_updates,
+            force,
+            allow_missing_pypi_version_fallback,
+        )
 
     if pi_updates:
         if ssh_client is None:
@@ -150,7 +162,13 @@ def update_command(
                 "[yellow]Skipping Pi updates — not connected to a Pi.[/yellow]"
             )
         else:
-            _update_pi(console, ssh_client, pi_updates, force)
+            _update_pi(
+                console,
+                ssh_client,
+                pi_updates,
+                force,
+                allow_missing_pypi_version_fallback,
+            )
 
     # After any Pi update, run post-install migrations via the bundled command.
     if pi_updates and ssh_client is not None:
@@ -281,17 +299,31 @@ def _get_pi_ahead(statuses: list[PackageStatus]) -> list[PackageStatus]:
 
 
 def _update_laptop(
-    console: Console, updates: list[PackageStatus], force: bool
+    console: Console,
+    updates: list[PackageStatus],
+    force: bool,
+    allow_missing_pypi_version_fallback: bool,
 ) -> None:
     """Update laptop pip packages directly from PyPI."""
     console.print()
     console.print("[bold]Updating laptop packages...[/bold]")
 
-    specs = [
-        f"{s.info.pip_name}=={s.latest_version}"
-        for s in updates
-        if s.info.pip_name and s.info.on_pypi and s.latest_version
-    ]
+    specs: list[str] = []
+    for s in updates:
+        if not (s.info.pip_name and s.info.on_pypi and s.latest_version):
+            continue
+        try:
+            resolved, note = resolve_pypi_version(
+                s.info.pip_name,
+                s.latest_version,
+                allow_missing_fallback=allow_missing_pypi_version_fallback,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        if note:
+            console.print(f"[yellow]{note}[/yellow]")
+        if resolved:
+            specs.append(f"{s.info.pip_name}=={resolved}")
     skipped = [s for s in updates if not (s.info.pip_name and s.info.on_pypi)]
     for s in skipped:
         console.print(
@@ -364,6 +396,7 @@ def _update_pi(
     ssh_client,
     updates: list[PackageStatus],
     force: bool,
+    allow_missing_pypi_version_fallback: bool,
 ) -> None:
     """Update Pi packages.
 
@@ -386,7 +419,13 @@ def _update_pi(
     tarball_updates = [s for s in updates if not s.info.pip_name]
 
     if pypi_updates:
-        _pi_install_from_pypi(console, ssh_client, pypi_updates, force)
+        _pi_install_from_pypi(
+            console,
+            ssh_client,
+            pypi_updates,
+            force,
+            allow_missing_pypi_version_fallback,
+        )
 
     if wheel_updates:
         _pi_install_github_wheels(console, ssh_client, wheel_updates, force)
@@ -404,7 +443,7 @@ def _update_pi(
 
 def _pi_pip_install(
     console: Console, ssh_client, install_args: list[str], force: bool
-) -> bool:
+) -> tuple[bool, str]:
     """Run ``pip3 install`` on the Pi with sudo/break-system-packages fallbacks.
 
     ``install_args`` are the args after ``install`` (e.g. pinned specs or wheel
@@ -426,7 +465,7 @@ def _pi_pip_install(
             exit_code = stdout.channel.recv_exit_status()
             err = stderr.read().decode(errors="replace")
             if exit_code == 0:
-                return True
+                return True, ""
             last_err = err
             if "externally-managed-environment" not in err and "Permission denied" not in err:
                 # Unrelated failure — don't try escalating further
@@ -434,9 +473,7 @@ def _pi_pip_install(
         except Exception as e:
             last_err = str(e)
             break
-
-    console.print(f"[red]pip3 install failed on Pi:[/red]\n{last_err.strip()}")
-    return False
+    return False, last_err
 
 
 def _pi_install_from_pypi(
@@ -444,13 +481,25 @@ def _pi_install_from_pypi(
     ssh_client,
     updates: list[PackageStatus],
     force: bool,
+    allow_missing_pypi_version_fallback: bool,
 ) -> None:
     """Install PyPI packages on the Pi via ``pip3 install`` over SSH."""
-    specs = [
-        f"{s.info.pip_name}=={s.latest_version}"
-        for s in updates
-        if s.info.pip_name and s.latest_version
-    ]
+    specs: list[str] = []
+    for s in updates:
+        if not (s.info.pip_name and s.latest_version):
+            continue
+        try:
+            resolved, note = resolve_pypi_version(
+                s.info.pip_name,
+                s.latest_version,
+                allow_missing_fallback=allow_missing_pypi_version_fallback,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        if note:
+            console.print(f"[yellow]{note}[/yellow]")
+        if resolved:
+            specs.append(f"{s.info.pip_name}=={resolved}")
     if not specs:
         return
 
@@ -458,8 +507,17 @@ def _pi_install_from_pypi(
     for spec in specs:
         console.print(f"  [dim]{spec}[/dim]")
 
-    if _pi_pip_install(console, ssh_client, specs, force):
+    success, err = _pi_pip_install(console, ssh_client, specs, force)
+    if success:
         console.print("[green]PyPI packages updated on Pi.[/green]")
+        return
+
+    console.print("[yellow]Pi PyPI install failed — trying offline wheel install.[/yellow]")
+    if _pi_install_from_local_wheels(console, ssh_client, specs, force):
+        console.print("[green]PyPI packages updated on Pi.[/green]")
+        return
+
+    console.print(f"[red]pip3 install failed on Pi:[/red]\n{err.strip()}")
 
 
 def _pi_install_github_wheels(
@@ -498,13 +556,117 @@ def _pi_install_github_wheels(
             console.print("[yellow]No wheels to install on Pi.[/yellow]")
             return
 
-        success = _pi_pip_install(console, ssh_client, remote_paths, force)
+        success, err = _pi_pip_install(console, ssh_client, remote_paths, force)
 
         # Clean up uploaded wheels regardless of success
         ssh_client.exec_command("rm -f " + " ".join(remote_paths))
 
         if success:
             console.print("[green]GitHub wheels installed on Pi.[/green]")
+        else:
+            console.print(f"[red]pip3 install failed on Pi:[/red]\n{err.strip()}")
+
+
+def _pi_install_from_local_wheels(
+    console: Console,
+    ssh_client,
+    specs: list[str],
+    force: bool,
+) -> bool:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        wheels = _download_pypi_wheels_for_pi(console, ssh_client, specs, tmpdir)
+        if not wheels:
+            return False
+
+        remote_paths: list[str] = []
+        sftp = ssh_client.open_sftp()
+        try:
+            for local_path in wheels:
+                name = os.path.basename(local_path)
+                remote_path = f"/tmp/{name}"
+                console.print(f"  [dim]Uploading {name} → Pi:{remote_path}[/dim]")
+                sftp.put(local_path, remote_path)
+                remote_paths.append(remote_path)
+        finally:
+            sftp.close()
+
+        success, _ = _pi_pip_install(console, ssh_client, remote_paths, force)
+        ssh_client.exec_command("rm -f " + " ".join(remote_paths))
+        return success
+
+
+def _download_pypi_wheels_for_pi(
+    console: Console,
+    ssh_client,
+    specs: list[str],
+    tmpdir: str,
+) -> list[str]:
+    py_tag, impl_tag, abi_tag, platforms = _get_pi_wheel_tags(ssh_client)
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "download",
+        "--no-deps",
+        "--only-binary=:all:",
+        "-d",
+        tmpdir,
+        "--python-version",
+        py_tag,
+        "--implementation",
+        impl_tag,
+        "--abi",
+        abi_tag,
+    ]
+    for platform_tag in platforms:
+        cmd.extend(["--platform", platform_tag])
+    cmd.extend(specs)
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        console.print(f"[red]pip download failed:[/red]\n{result.stderr.strip()}")
+        return []
+
+    wheels = [
+        os.path.join(tmpdir, name)
+        for name in os.listdir(tmpdir)
+        if name.endswith(".whl")
+    ]
+    if not wheels:
+        console.print("[red]No wheels downloaded for Pi.[/red]")
+    return wheels
+
+
+def _get_pi_wheel_tags(ssh_client) -> tuple[str, str, str, list[str]]:
+    py_tag = "311"
+    impl_tag = "cp"
+    abi_tag = "cp311"
+    platforms = ["manylinux2014_aarch64", "linux_aarch64"]
+    try:
+        _, stdout, _ = ssh_client.exec_command(
+            "python3 -c \"import platform,sys; "
+            "print(f'{sys.version_info.major}{sys.version_info.minor}'); "
+            "print(sys.implementation.name); "
+            "print(platform.machine())\"",
+            timeout=10,
+        )
+        lines = stdout.read().decode(errors="replace").splitlines()
+        if len(lines) >= 1 and lines[0].strip():
+            py_tag = lines[0].strip()
+            abi_tag = f"cp{py_tag}"
+        if len(lines) >= 2 and lines[1].strip():
+            impl = lines[1].strip().lower()
+            impl_tag = "cp" if impl.startswith("cpython") else impl[:2]
+            abi_tag = f"{impl_tag}{py_tag}"
+        if len(lines) >= 3 and lines[2].strip():
+            machine = lines[2].strip().lower()
+            if "armv7" in machine:
+                platforms = ["manylinux2014_armv7l", "linux_armv7l"]
+            elif "arm" in machine and "64" in machine:
+                platforms = ["manylinux2014_aarch64", "linux_aarch64"]
+    except Exception:
+        pass
+    return py_tag, impl_tag, abi_tag, platforms
 
 
 def _update_pi_tarball(

@@ -1,18 +1,15 @@
-FROM ubuntu:24.04
+FROM python:3.13-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# System packages: Python 3.12, pip, build tools, git, Node.js 20
+# System packages: Python 3.13, build tools, git, Node.js 20
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
         build-essential \
-        python3 \
-        python3-pip \
-        python3-dev \
         libglib2.0-0 \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
