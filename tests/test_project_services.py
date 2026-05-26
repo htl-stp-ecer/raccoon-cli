@@ -68,21 +68,30 @@ def test_deploy_project_services_restarts_only_when_changed(tmp_path: Path):
     def runner(cmd, check):
         calls.append(cmd)
 
-    changed = deploy_project_services(config, tmp_path, runner=runner)
+    results = deploy_project_services(config, tmp_path, runner=runner)
 
-    assert changed == ["raccoon-project-project-123-vision.service"]
+    assert [r.systemd_name for r in results] == ["raccoon-project-project-123-vision.service"]
+    assert results[0].action == "restart"
+    assert results[0].first_deploy is True
+    assert results[0].digest_changed is True
     assert ["sudo", "systemctl", "restart", "raccoon-project-project-123-vision.service"] in calls
 
     calls.clear()
-    changed = deploy_project_services(config, tmp_path, runner=runner)
+    results = deploy_project_services(config, tmp_path, runner=runner)
 
-    assert changed == []
+    assert results[0].action == "start"
+    assert results[0].first_deploy is False
+    assert results[0].digest_changed is False
+    assert "unchanged" in results[0].reason
     assert ["sudo", "systemctl", "start", "raccoon-project-project-123-vision.service"] in calls
     assert ["sudo", "systemctl", "restart", "raccoon-project-project-123-vision.service"] not in calls
 
     (tmp_path / "src" / "daemon.py").write_text("print('changed')\n", encoding="utf-8")
     calls.clear()
-    changed = deploy_project_services(config, tmp_path, runner=runner)
+    results = deploy_project_services(config, tmp_path, runner=runner)
 
-    assert changed == ["raccoon-project-project-123-vision.service"]
+    assert results[0].action == "restart"
+    assert results[0].first_deploy is False
+    assert results[0].digest_changed is True
+    assert "watched files changed" in results[0].reason
     assert ["sudo", "systemctl", "restart", "raccoon-project-project-123-vision.service"] in calls

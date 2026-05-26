@@ -209,17 +209,35 @@ def service_content_hash(service: ProjectService, unit_text: str) -> str:
     return h.hexdigest()
 
 
+@dataclass(frozen=True)
+class ServiceDeployResult:
+    """Result of deploying a single project service.
+
+    ``action`` is the systemctl verb actually issued (``restart`` for a real
+    restart, ``start`` for a no-op when already running). ``first_deploy``
+    means there was no previous digest on disk. ``digest_changed`` means the
+    rendered unit + watched files differ from the last deploy.
+    """
+
+    name: str
+    systemd_name: str
+    action: str  # "restart" | "start"
+    first_deploy: bool
+    digest_changed: bool
+    reason: str
+
+
 def deploy_project_services(
     config: dict[str, Any],
     project_path: Path,
     *,
     runner=subprocess.run,
-) -> list[str]:
-    """Install/update configured project services and return changed unit names."""
+) -> list[ServiceDeployResult]:
+    """Install/update configured project services and return per-service results."""
     services = load_project_services(config, project_path)
-    changed: list[str] = []
+    results: list[ServiceDeployResult] = []
     if not services:
-        return changed
+        return results
 
     state_dir = project_path / ".raccoon" / "services"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -229,6 +247,8 @@ def deploy_project_services(
         digest = service_content_hash(service, unit_text)
         digest_path = state_dir / f"{service.name}.sha256"
         previous_digest = digest_path.read_text().strip() if digest_path.exists() else ""
+        first_deploy = previous_digest == ""
+        digest_changed = previous_digest != digest
         unit_path = f"/etc/systemd/system/{service.systemd_name}"
         if service.after_sync not in {"restart", "restart_if_changed", "leave_running"}:
             raise ValueError(
@@ -236,7 +256,7 @@ def deploy_project_services(
             )
         should_restart = (
             service.after_sync == "restart"
-            or (service.after_sync == "restart_if_changed" and previous_digest != digest)
+            or (service.after_sync == "restart_if_changed" and digest_changed)
         )
 
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
@@ -250,11 +270,21 @@ def deploy_project_services(
 
             if service.after_sync == "leave_running":
                 runner(["sudo", "systemctl", "start", service.systemd_name], check=True)
+                action = "start"
+                reason = "after_sync=leave_running"
             elif should_restart:
                 runner(["sudo", "systemctl", "restart", service.systemd_name], check=True)
-                changed.append(service.systemd_name)
+                action = "restart"
+                if first_deploy:
+                    reason = "first deploy"
+                elif service.after_sync == "restart":
+                    reason = "after_sync=restart"
+                else:
+                    reason = "watched files changed"
             else:
                 runner(["sudo", "systemctl", "start", service.systemd_name], check=True)
+                action = "start"
+                reason = "unchanged (after_sync=restart_if_changed)"
 
             if service.required_for_run:
                 runner(["sudo", "systemctl", "is-active", "--quiet", service.systemd_name], check=True)
@@ -265,4 +295,15 @@ def deploy_project_services(
             except OSError:
                 pass
 
-    return changed
+        results.append(
+            ServiceDeployResult(
+                name=service.name,
+                systemd_name=service.systemd_name,
+                action=action,
+                first_deploy=first_deploy,
+                digest_changed=digest_changed,
+                reason=reason,
+            )
+        )
+
+    return results

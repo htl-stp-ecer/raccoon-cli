@@ -93,6 +93,38 @@ def _has_error_lines(collected: list[str]) -> bool:
     return False
 
 
+def _print_service_deployments(console: Console, deployments: list[dict]) -> None:
+    """Render a per-service summary of what the Pi did during service deploy."""
+    if not deployments:
+        return
+    from rich.table import Table
+
+    table = Table(
+        title="[bold]Project services[/bold]",
+        show_header=True,
+        title_style="bold",
+        padding=(0, 1),
+        box=box.SIMPLE,
+    )
+    table.add_column("Service", style="cyan")
+    table.add_column("Action")
+    table.add_column("Reason", style="dim")
+
+    for d in deployments:
+        action = d.get("action", "?")
+        if action == "restart":
+            action_text = Text("restarted", style="bold yellow")
+        elif d.get("digest_changed"):
+            action_text = Text("started", style="green")
+        else:
+            action_text = Text("unchanged", style="dim")
+        if d.get("first_deploy"):
+            action_text = Text("installed", style="bold green")
+        table.add_row(d.get("name", "?"), action_text, d.get("reason", ""))
+
+    console.print(table)
+
+
 def _print_output_summary(console: Console, collected: list[str]) -> None:
     """Print collected warning/error lines from program output as a summary panel."""
     if not collected:
@@ -442,6 +474,8 @@ async def _run_remote(
         except Exception as e:
             console.print(f"[red]Failed to start run on Pi: {e}[/red]")
             raise SystemExit(1)
+
+        _print_service_deployments(console, result.service_deployments or [])
 
         # Stream output via WebSocket (URL includes auth token)
         ws_url = client.get_websocket_url(result.command_id)
