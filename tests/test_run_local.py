@@ -1,18 +1,21 @@
 """Tests for local run command — Ctrl+C handling via Popen."""
 
 import subprocess
+import signal
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from raccoon_cli.commands.run import _run_local
+from raccoon_cli.commands.run import _ensure_single_active_program, _run_local
 
 
 class FakePopen:
     """Minimal Popen stub whose wait() behaviour is configurable."""
 
     def __init__(self, *, returncode=0, wait_side_effect=None, output_lines=()):
+        self.pid = 4242
         self.returncode = returncode
         self._wait_side_effect = list(wait_side_effect or [])
         self.terminate_called = False
@@ -52,6 +55,19 @@ def click_ctx():
     ctx = MagicMock()
     ctx.obj = {"console": MagicMock()}
     return ctx
+
+
+@pytest.fixture(autouse=True)
+def patch_single_program_guard():
+    """Prevent tests from touching real process state or signal handlers."""
+    with patch("raccoon_cli.commands.run._active_program_lock", return_value=nullcontext()), \
+         patch("raccoon_cli.commands.run._ensure_single_active_program"), \
+         patch("raccoon_cli.commands.run._write_active_program_state"), \
+         patch("raccoon_cli.commands.run._clear_active_program_state"), \
+         patch("raccoon_cli.commands.run._install_termination_handlers", return_value=(None, None)), \
+         patch("raccoon_cli.commands.run._restore_termination_handlers"), \
+         patch("raccoon_cli.commands.run.sys.stdout.isatty", return_value=True):
+        yield
 
 
 def test_normal_exit(fake_project, click_ctx):
@@ -94,6 +110,7 @@ def test_keyboard_interrupt_terminates(fake_project, click_ctx):
     )
 
     with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake), \
+         patch("raccoon_cli.commands.run._kill_process_group") as mock_kill, \
          patch("raccoon_cli.commands.run.create_checkpoint"), \
          patch("raccoon_cli.commands.run.create_pipeline"):
 
@@ -103,8 +120,7 @@ def test_keyboard_interrupt_terminates(fake_project, click_ctx):
                 no_codegen=True,
             )
 
-    assert fake.terminate_called
-    assert not fake.kill_called
+    assert mock_kill.call_args_list == [call(fake.pid, signal.SIGTERM)]
 
 
 def test_keyboard_interrupt_escalates_to_kill(fake_project, click_ctx):
@@ -118,6 +134,7 @@ def test_keyboard_interrupt_escalates_to_kill(fake_project, click_ctx):
     )
 
     with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake), \
+         patch("raccoon_cli.commands.run._kill_process_group") as mock_kill, \
          patch("raccoon_cli.commands.run.create_checkpoint"), \
          patch("raccoon_cli.commands.run.create_pipeline"):
 
@@ -127,5 +144,35 @@ def test_keyboard_interrupt_escalates_to_kill(fake_project, click_ctx):
                 no_codegen=True,
             )
 
-    assert fake.terminate_called
-    assert fake.kill_called
+    assert mock_kill.call_args_list == [
+        call(fake.pid, signal.SIGTERM),
+        call(fake.pid, signal.SIGKILL),
+    ]
+
+
+def test_launches_src_main_in_own_session(fake_project, click_ctx):
+    """Robot program is launched in its own POSIX session for group cleanup."""
+    fake = FakePopen(returncode=0)
+
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake) as mock_popen, \
+         patch("raccoon_cli.commands.run.create_checkpoint"), \
+         patch("raccoon_cli.commands.run.create_pipeline"):
+        _run_local(
+            click_ctx, fake_project, {"name": "test"}, args=(),
+            no_codegen=True,
+        )
+
+    assert mock_popen.call_args.kwargs["start_new_session"] is True
+
+
+def test_single_program_guard_kills_stale_robot_programs(click_ctx, fake_project):
+    """Before launching, stale `src.main` processes are terminated."""
+    console = click_ctx.obj["console"]
+
+    with patch("raccoon_cli.commands.run._read_active_program_state", return_value={"pid": 111}), \
+         patch("raccoon_cli.commands.run._is_process_alive", return_value=True), \
+         patch("raccoon_cli.commands.run._list_robot_program_pids", return_value=[111, 222]), \
+         patch("raccoon_cli.commands.run._terminate_process_by_pid") as mock_kill:
+        _ensure_single_active_program(fake_project, console)
+
+    assert mock_kill.call_args_list == [call(111), call(222)]
