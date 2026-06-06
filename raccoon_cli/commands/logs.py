@@ -737,6 +737,171 @@ def _clear_local(ctx: click.Context, console: Console, yes: bool) -> None:
         console.print(f"[green]Deleted {len(files)} log file(s) ({size_mb:.1f} MB).[/green]")
 
 
+# ── services ────────────────────────────────────────────────────────
+
+
+_ACTIVE_STATE_STYLES = {
+    "active": "bold green",
+    "activating": "yellow",
+    "reloading": "yellow",
+    "inactive": "dim",
+    "deactivating": "yellow",
+    "failed": "bold red",
+}
+
+
+@logs_group.group(name="services", invoke_without_command=True)
+@click.pass_context
+def services_cmd(ctx: click.Context) -> None:
+    """List project services and their journald output.
+
+    Only works against the connected Pi — project services are systemd units
+    on the robot.
+    """
+    if ctx.obj.get("force_local"):
+        console: Console = ctx.obj.get("console", Console())
+        console.print("[yellow]`raccoon logs services` is remote-only (services run on the Pi).[/yellow]")
+        raise SystemExit(1)
+
+    if ctx.invoked_subcommand is not None:
+        return
+
+    console: Console = ctx.obj.get("console", Console())
+    remote = _get_remote_context(console)
+    asyncio.run(_list_services_remote(console, remote))
+
+
+async def _list_services_remote(console: Console, remote: tuple) -> None:
+    from raccoon_cli.client.api import create_api_client
+
+    state, project_uuid = remote
+    async with create_api_client(
+        state.pi_address, state.pi_port, api_token=state.api_token
+    ) as client:
+        try:
+            data = await client.list_project_services(project_uuid)
+        except Exception as e:
+            console.print(f"[red]Failed to fetch services: {e}[/red]")
+            raise SystemExit(1)
+
+    services = data.get("services", [])
+    if not services:
+        console.print(
+            "[dim]No services declared in raccoon.project.yml.[/dim]\n"
+            "[dim]See the [cyan]services:[/cyan] section in CLAUDE.md for the schema.[/dim]"
+        )
+        return
+
+    table = Table(
+        title=f"Project services on {state.pi_hostname or state.pi_address}",
+        show_header=True,
+        title_style="bold",
+        padding=(0, 1),
+    )
+    table.add_column("Name", style="cyan")
+    table.add_column("State")
+    table.add_column("Sub", style="dim")
+    table.add_column("PID", justify="right", style="dim")
+    table.add_column("Restarts", justify="right")
+    table.add_column("Started", style="dim")
+    table.add_column("Required")
+
+    for svc in services:
+        active = svc.get("active_state", "unknown")
+        style = _ACTIVE_STATE_STYLES.get(active, "")
+        n_restarts = svc.get("n_restarts", "0")
+        restart_style = "yellow" if n_restarts not in ("0", "", "—") else ""
+        table.add_row(
+            svc.get("name", "?"),
+            Text(active, style=style),
+            svc.get("sub_state", ""),
+            svc.get("main_pid", "0"),
+            Text(n_restarts, style=restart_style),
+            (svc.get("active_enter_ts") or "")[:25],
+            "yes" if svc.get("required_for_run") else "no",
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[dim]  Use [bold]raccoon logs services <name>[/bold] to view journal output.[/dim]"
+    )
+
+
+@services_cmd.command(name="show")
+@click.argument("service_name")
+@click.option("-n", "--lines", type=int, default=200, help="Number of journal lines to fetch.")
+@click.option("--no-pager", is_flag=True, help="Don't use a pager for output.")
+@click.pass_context
+def services_show_cmd(
+    ctx: click.Context, service_name: str, lines: int, no_pager: bool
+) -> None:
+    """Show the last N journald entries for a project service."""
+    console: Console = ctx.obj.get("console", Console())
+    if ctx.obj.get("force_local"):
+        console.print("[yellow]`raccoon logs services show` is remote-only.[/yellow]")
+        raise SystemExit(1)
+
+    remote = _get_remote_context(console)
+    asyncio.run(_show_service_journal_remote(console, remote, service_name, lines, no_pager))
+
+
+def _render_journal_entry(entry: dict) -> Text:
+    level = entry.get("level", "INFO")
+    style = _level_style(level)
+    line = Text()
+    ts = (entry.get("timestamp") or "").replace("T", " ")[:19]
+    line.append(f"{ts} ", style="dim")
+    line.append(f"{level:<6} ", style=style)
+    line.append(entry.get("message", ""))
+    return line
+
+
+async def _show_service_journal_remote(
+    console: Console,
+    remote: tuple,
+    service_name: str,
+    lines: int,
+    no_pager: bool,
+) -> None:
+    from raccoon_cli.client.api import create_api_client
+
+    state, project_uuid = remote
+    console.print(
+        f"[dim]Fetching journal for service '{service_name}' from "
+        f"{state.pi_hostname or state.pi_address}...[/dim]"
+    )
+
+    async with create_api_client(
+        state.pi_address, state.pi_port, api_token=state.api_token
+    ) as client:
+        try:
+            data = await client.get_service_journal(project_uuid, service_name, lines=lines)
+        except Exception as e:
+            console.print(f"[red]Failed to fetch journal: {e}[/red]")
+            raise SystemExit(1)
+
+    entries = data.get("entries", [])
+    svc = data.get("service", {})
+    header = (
+        f"{svc.get('name', service_name)}  ({svc.get('systemd_name', '')})  "
+        f"|  last {len(entries)} entries"
+    )
+    if not entries:
+        console.print(Panel(header, style="bold"))
+        console.print("[dim]No journal entries.[/dim]")
+        return
+
+    if no_pager:
+        console.print(Panel(header, style="bold"))
+        for entry in entries:
+            console.print(_render_journal_entry(entry))
+    else:
+        with console.pager(styles=True):
+            console.print(Panel(header, style="bold"))
+            for entry in entries:
+                console.print(_render_journal_entry(entry))
+
+
 async def _clear_remote(console: Console, remote: tuple) -> None:
     """Delete logs on the Pi."""
     from raccoon_cli.client.api import create_api_client

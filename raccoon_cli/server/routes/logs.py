@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import subprocess
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from raccoon_cli.logs import detect_runs, discover_log_files, parse_log_file
+from raccoon_cli.project import load_project_config
+from raccoon_cli.project_services import load_project_services
 from raccoon_cli.server.auth import require_auth
 
 router = APIRouter(prefix="/api/v1/logs", tags=["logs"], dependencies=[Depends(require_auth)])
@@ -152,4 +157,160 @@ async def clear_logs(project_id: str):
     return {
         "deleted_files": deleted,
         "total_bytes": total_bytes,
+    }
+
+
+# ── Project services ────────────────────────────────────────────────
+
+
+_SYSTEMCTL_PROPS = (
+    "Id,ActiveState,SubState,LoadState,MainPID,NRestarts,"
+    "ActiveEnterTimestamp,ActiveExitTimestamp"
+)
+
+# journald PRIORITY → log level name (RFC 5424)
+_JOURNAL_PRIORITY = {
+    "0": "EMERG",
+    "1": "ALERT",
+    "2": "CRITICAL",
+    "3": "ERROR",
+    "4": "WARN",
+    "5": "NOTICE",
+    "6": "INFO",
+    "7": "DEBUG",
+}
+
+
+def _load_configured_services(project_path: Path):
+    """Load services declared in raccoon.project.yml; empty list if none."""
+    config = load_project_config(project_path)
+    if not isinstance(config, dict):
+        return []
+    return load_project_services(config, project_path)
+
+
+def _systemctl_show(unit: str) -> dict[str, str]:
+    """Run ``systemctl show`` for a unit and return its key=value pairs."""
+    proc = subprocess.run(
+        ["systemctl", "show", unit, f"--property={_SYSTEMCTL_PROPS}"],
+        capture_output=True,
+        text=True,
+    )
+    out: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            out[k] = v
+    return out
+
+
+@router.get("/{project_id}/services")
+async def list_services(project_id: str):
+    """List project-declared services with their current systemd status."""
+    project_path = _get_project_path_or_404(project_id)
+    try:
+        services = await asyncio.to_thread(_load_configured_services, project_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read services: {exc}")
+
+    result = []
+    for svc in services:
+        info = await asyncio.to_thread(_systemctl_show, svc.systemd_name)
+        result.append(
+            {
+                "name": svc.name,
+                "systemd_name": svc.systemd_name,
+                "module": svc.module,
+                "command": svc.command,
+                "active_state": info.get("ActiveState", "unknown"),
+                "sub_state": info.get("SubState", ""),
+                "load_state": info.get("LoadState", ""),
+                "main_pid": info.get("MainPID", "0"),
+                "n_restarts": info.get("NRestarts", "0"),
+                "active_enter_ts": info.get("ActiveEnterTimestamp", ""),
+                "active_exit_ts": info.get("ActiveExitTimestamp", ""),
+                "required_for_run": svc.required_for_run,
+                "after_sync": svc.after_sync,
+            }
+        )
+    return {"project_id": project_id, "services": result}
+
+
+def _journalctl(unit: str, lines: int) -> list[dict]:
+    """Fetch the last N journal entries for a unit as parsed JSON dicts."""
+    proc = subprocess.run(
+        [
+            "journalctl",
+            "-u",
+            unit,
+            "-n",
+            str(lines),
+            "--no-pager",
+            "-o",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or f"journalctl exited {proc.returncode}")
+
+    entries: list[dict] = []
+    for raw in proc.stdout.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        ts_us = obj.get("__REALTIME_TIMESTAMP")
+        try:
+            ts_iso = ""
+            if ts_us:
+                from datetime import datetime, timezone
+
+                ts_iso = datetime.fromtimestamp(
+                    int(ts_us) / 1_000_000, tz=timezone.utc
+                ).isoformat()
+        except (ValueError, TypeError):
+            ts_iso = ""
+        entries.append(
+            {
+                "timestamp": ts_iso,
+                "level": _JOURNAL_PRIORITY.get(str(obj.get("PRIORITY", "6")), "INFO"),
+                "message": obj.get("MESSAGE", ""),
+                "pid": obj.get("_PID", ""),
+                "identifier": obj.get("SYSLOG_IDENTIFIER", ""),
+            }
+        )
+    return entries
+
+
+@router.get("/{project_id}/services/{service_name}/journal")
+async def get_service_journal(
+    project_id: str,
+    service_name: str,
+    lines: int = Query(200, ge=1, le=10000),
+):
+    """Fetch the last N journald entries for a project service."""
+    project_path = _get_project_path_or_404(project_id)
+    services = await asyncio.to_thread(_load_configured_services, project_path)
+    svc = next((s for s in services if s.name == service_name), None)
+    if svc is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Service '{service_name}' not declared in raccoon.project.yml",
+        )
+
+    try:
+        entries = await asyncio.to_thread(_journalctl, svc.systemd_name, lines)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "project_id": project_id,
+        "service": {"name": svc.name, "systemd_name": svc.systemd_name},
+        "lines": lines,
+        "entries": entries,
     }

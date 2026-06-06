@@ -27,6 +27,7 @@ class CommandResult:
     command_type: str
     started_at: str
     websocket_url: str
+    service_deployments: list[dict] = None  # populated for RUN; list of dicts
 
 
 @dataclass
@@ -236,6 +237,7 @@ class RaccoonApiClient:
             command_type=data["command_type"],
             started_at=data["started_at"],
             websocket_url=data["websocket_url"],
+            service_deployments=data.get("service_deployments") or [],
         )
 
     async def calibrate_project(
@@ -511,6 +513,29 @@ class RaccoonApiClient:
         response = await client.get(
             f"{self.base_url}/api/v1/logs/{project_id}/runs/{run_index}",
             params=params,
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def list_project_services(self, project_id: str) -> dict:
+        """List project services with their current systemd status."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/logs/{project_id}/services",
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_service_journal(
+        self, project_id: str, service_name: str, lines: int = 200
+    ) -> dict:
+        """Fetch the last N journal entries for a project service."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/logs/{project_id}/services/{service_name}/journal",
+            params={"lines": str(lines)},
             headers=self._auth_headers(),
         )
         response.raise_for_status()

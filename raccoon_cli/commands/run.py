@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import signal
 import os
 import subprocess
 import sys
+import time
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import click
@@ -31,6 +34,13 @@ from raccoon_cli.run_recording import make_run_id, recording_rel_path
 logger = logging.getLogger("raccoon")
 
 _NO_MISSION_RE = re.compile(r"^--no-m(\d+)$")
+_ACTIVE_PROGRAM_LOCK_PATH = Path.home() / ".raccoon" / "active_program.lock"
+_ACTIVE_PROGRAM_STATE_PATH = Path.home() / ".raccoon" / "active_program.json"
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
 
 
 def _extract_run_config(
@@ -93,6 +103,38 @@ def _has_error_lines(collected: list[str]) -> bool:
     return False
 
 
+def _print_service_deployments(console: Console, deployments: list[dict]) -> None:
+    """Render a per-service summary of what the Pi did during service deploy."""
+    if not deployments:
+        return
+    from rich.table import Table
+
+    table = Table(
+        title="[bold]Project services[/bold]",
+        show_header=True,
+        title_style="bold",
+        padding=(0, 1),
+        box=box.SIMPLE,
+    )
+    table.add_column("Service", style="cyan")
+    table.add_column("Action")
+    table.add_column("Reason", style="dim")
+
+    for d in deployments:
+        action = d.get("action", "?")
+        if action == "restart":
+            action_text = Text("restarted", style="bold yellow")
+        elif d.get("digest_changed"):
+            action_text = Text("started", style="green")
+        else:
+            action_text = Text("unchanged", style="dim")
+        if d.get("first_deploy"):
+            action_text = Text("installed", style="bold green")
+        table.add_row(d.get("name", "?"), action_text, d.get("reason", ""))
+
+    console.print(table)
+
+
 def _print_output_summary(console: Console, collected: list[str]) -> None:
     """Print collected warning/error lines from program output as a summary panel."""
     if not collected:
@@ -116,12 +158,187 @@ def _print_output_summary(console: Console, collected: list[str]) -> None:
 def _terminate_process_on_interrupt(proc: subprocess.Popen, console: Console) -> int:
     """Stop a child process after Ctrl+C and return its exit code."""
     console.print("\n[yellow]Ctrl+C — stopping program...[/yellow]")
-    proc.terminate()
+    return _terminate_program_process(proc)
+
+
+@contextmanager
+def _active_program_lock():
+    """Serialize program start/stop decisions across raccoon run processes."""
+    _ACTIVE_PROGRAM_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _ACTIVE_PROGRAM_LOCK_PATH.open("a+", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _read_active_program_state() -> dict | None:
+    """Load the last known active program record, if any."""
+    try:
+        return json.loads(_ACTIVE_PROGRAM_STATE_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception:
+        logger.warning("Ignoring unreadable active program state", exc_info=True)
+        return None
+
+
+def _write_active_program_state(*, pid: int, project_root: Path, cmd_parts: list[str]) -> None:
+    """Persist the currently running robot program."""
+    _ACTIVE_PROGRAM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _ACTIVE_PROGRAM_STATE_PATH.write_text(
+        json.dumps(
+            {
+                "pid": pid,
+                "project_root": str(project_root.resolve()),
+                "cmd_parts": list(cmd_parts),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _clear_active_program_state(pid: int) -> None:
+    """Clear the active program record if it still points at pid."""
+    state = _read_active_program_state()
+    if not state or state.get("pid") != pid:
+        return
+    with suppress(FileNotFoundError):
+        _ACTIVE_PROGRAM_STATE_PATH.unlink()
+
+
+def _is_process_alive(pid: int) -> bool:
+    """Return True when pid still exists."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _list_robot_program_pids() -> list[int]:
+    """Find live `python -m src.main` processes on Linux via /proc."""
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return []
+
+    matches: list[int] = []
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        try:
+            cmdline_raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if not cmdline_raw:
+            continue
+        argv = [part.decode("utf-8", errors="ignore") for part in cmdline_raw.split(b"\0") if part]
+        if len(argv) < 3:
+            continue
+        if "-m" not in argv:
+            continue
+        try:
+            module = argv[argv.index("-m") + 1]
+        except (ValueError, IndexError):
+            continue
+        if module != "src.main":
+            continue
+        matches.append(pid)
+    return matches
+
+
+def _kill_process_group(pid: int, sig: int) -> None:
+    """Send sig to the process tree rooted at pid."""
+    if os.name == "posix":
+        try:
+            os.killpg(os.getpgid(pid), sig)
+            return
+        except (ProcessLookupError, OSError):
+            pass
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _wait_for_process_exit(pid: int, timeout_s: float) -> bool:
+    """Wait for pid to disappear."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if not _is_process_alive(pid):
+            return True
+        time.sleep(0.1)
+    return not _is_process_alive(pid)
+
+
+def _terminate_process_by_pid(pid: int) -> None:
+    """Terminate a stale robot program by pid."""
+    _kill_process_group(pid, signal.SIGTERM)
+    if _wait_for_process_exit(pid, timeout_s=3.0):
+        return
+    _kill_process_group(pid, signal.SIGKILL)
+    _wait_for_process_exit(pid, timeout_s=1.0)
+
+
+def _terminate_program_process(proc: subprocess.Popen) -> int:
+    """Terminate a spawned src.main process and return its exit code."""
+    pid = proc.pid
+    _kill_process_group(pid, signal.SIGTERM)
     try:
         return proc.wait(timeout=3)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_process_group(pid, signal.SIGKILL)
         return proc.wait()
+
+
+def _ensure_single_active_program(project_root: Path, console: Console) -> None:
+    """Kill any previously active robot program before launching a new one."""
+    stale_pids: set[int] = set()
+
+    state = _read_active_program_state()
+    if state:
+        pid = state.get("pid")
+        if isinstance(pid, int) and pid > 0 and _is_process_alive(pid):
+            stale_pids.add(pid)
+
+    stale_pids.update(_list_robot_program_pids())
+    stale_pids.discard(os.getpid())
+
+    if not stale_pids:
+        return
+
+    console.print(
+        f"[yellow]Stopping existing robot program(s): {', '.join(str(pid) for pid in sorted(stale_pids))}[/yellow]"
+    )
+    for pid in sorted(stale_pids):
+        _terminate_process_by_pid(pid)
+
+
+def _install_termination_handlers():
+    """Forward SIGINT/SIGTERM to the child process group."""
+    original_sigint = signal.getsignal(signal.SIGINT)
+    original_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _handler(sig, frame):
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGINT, _handler)
+    signal.signal(signal.SIGTERM, _handler)
+    return original_sigint, original_sigterm
+
+
+def _restore_termination_handlers(original_sigint, original_sigterm) -> None:
+    """Restore previous SIGINT/SIGTERM handlers."""
+    signal.signal(signal.SIGINT, original_sigint)
+    signal.signal(signal.SIGTERM, original_sigterm)
 
 
 def _run_via_pty(
@@ -148,17 +365,27 @@ def _run_via_pty(
     attrs[1] &= ~termios.OPOST  # c_oflag: clear OPOST
     termios.tcsetattr(slave_fd, termios.TCSANOW, attrs)
 
-    proc = subprocess.Popen(
-        cmd_parts,
-        cwd=project_root,
-        env=env,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        stdin=subprocess.DEVNULL,
-        close_fds=True,
-    )
+    with _active_program_lock():
+        _ensure_single_active_program(project_root, console)
+        proc = subprocess.Popen(
+            cmd_parts,
+            cwd=project_root,
+            env=env,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=(os.name == "posix"),
+        )
+        _write_active_program_state(
+            pid=proc.pid,
+            project_root=project_root,
+            cmd_parts=cmd_parts,
+        )
     os.close(slave_fd)  # parent no longer needs the slave end
+    original_sigint, original_sigterm = _install_termination_handlers()
 
+    returncode: int | None = None
     try:
         while True:
             try:
@@ -190,16 +417,20 @@ def _run_via_pty(
                 except OSError:
                     pass
                 break
+    except KeyboardInterrupt:
+        returncode = _terminate_process_on_interrupt(proc, console)
     finally:
+        _restore_termination_handlers(original_sigint, original_sigterm)
+        with _active_program_lock():
+            _clear_active_program_state(proc.pid)
         try:
             os.close(master_fd)
         except OSError:
             pass
 
-    try:
-        return proc.wait()
-    except KeyboardInterrupt:
-        return _terminate_process_on_interrupt(proc, console)
+    if returncode is not None:
+        return returncode
+    return proc.wait()
 
 
 def _run_local(
@@ -299,11 +530,28 @@ def _run_local(
     # isatty() check returns True and colour libraries (loguru, colorama, …)
     # activate — FORCE_COLOR alone only helps libraries that check that env var.
     if sys.platform == "win32" or sys.stdout.isatty():
-        proc = subprocess.Popen(cmd_parts, cwd=project_root, env=env)
+        with _active_program_lock():
+            _ensure_single_active_program(project_root, console)
+            proc = subprocess.Popen(
+                cmd_parts,
+                cwd=project_root,
+                env=env,
+                start_new_session=(os.name == "posix"),
+            )
+            _write_active_program_state(
+                pid=proc.pid,
+                project_root=project_root,
+                cmd_parts=cmd_parts,
+            )
+        original_sigint, original_sigterm = _install_termination_handlers()
         try:
             returncode = proc.wait()
         except KeyboardInterrupt:
             returncode = _terminate_process_on_interrupt(proc, console)
+        finally:
+            _restore_termination_handlers(original_sigint, original_sigterm)
+            with _active_program_lock():
+                _clear_active_program_state(proc.pid)
     else:
         returncode = _run_via_pty(cmd_parts, project_root, env, console)
 
@@ -442,6 +690,8 @@ async def _run_remote(
         except Exception as e:
             console.print(f"[red]Failed to start run on Pi: {e}[/red]")
             raise SystemExit(1)
+
+        _print_service_deployments(console, result.service_deployments or [])
 
         # Stream output via WebSocket (URL includes auth token)
         ws_url = client.get_websocket_url(result.command_id)

@@ -42,6 +42,17 @@ class CommandRequest(BaseModel):
     env: dict[str, str] = {}
 
 
+class ServiceDeploymentInfo(BaseModel):
+    """Per-service deployment outcome returned by RUN."""
+
+    name: str
+    systemd_name: str
+    action: str  # "restart" | "start"
+    first_deploy: bool
+    digest_changed: bool
+    reason: str
+
+
 class CommandResponse(BaseModel):
     """Response model for command execution."""
 
@@ -51,6 +62,7 @@ class CommandResponse(BaseModel):
     command_type: CommandType
     started_at: str
     websocket_url: str
+    service_deployments: list[ServiceDeploymentInfo] = []
 
 
 class CommandStatusResponse(BaseModel):
@@ -183,6 +195,7 @@ async def _start_command(
         await _cancel_running_commands_for_project(project_id)
         _reject_if_another_project_running(project_id)
 
+        deploy_results: list = []
         if command_type == CommandType.RUN:
             from raccoon_cli.project import load_project_config
             from raccoon_cli.project_services import deploy_project_services
@@ -191,14 +204,18 @@ async def _start_command(
                 config_path = project["path"] / "raccoon.project.yml"
                 if config_path.exists():
                     project_config = load_project_config(project["path"])
-                    changed = await asyncio.to_thread(
+                    deploy_results = await asyncio.to_thread(
                         deploy_project_services, project_config, project["path"]
                     )
-                    if changed:
+                    for r in deploy_results:
                         logger.info(
-                            "Updated project services for %s: %s",
+                            "service %s/%s: %s (%s, digest_changed=%s, first_deploy=%s)",
                             project_id,
-                            ", ".join(changed),
+                            r.name,
+                            r.action,
+                            r.reason,
+                            r.digest_changed,
+                            r.first_deploy,
                         )
             except Exception as exc:
                 logger.exception("Failed to deploy project services for %s", project_id)
@@ -238,6 +255,17 @@ async def _start_command(
             command_type=command_type,
             started_at=_active_commands[command_id]["started_at"],
             websocket_url=f"/ws/output/{command_id}",
+            service_deployments=[
+                ServiceDeploymentInfo(
+                    name=r.name,
+                    systemd_name=r.systemd_name,
+                    action=r.action,
+                    first_deploy=r.first_deploy,
+                    digest_changed=r.digest_changed,
+                    reason=r.reason,
+                )
+                for r in deploy_results
+            ],
         )
 
 
