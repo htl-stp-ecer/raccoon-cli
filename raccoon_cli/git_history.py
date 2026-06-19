@@ -1,10 +1,14 @@
-"""Local git history helpers for project scaffolding and sync snapshots."""
+"""Local git history helpers for project scaffolding.
+
+Pre-sync safety snapshots live in :mod:`raccoon_cli.checkpoint`, which stores
+them as invisible refs via ``git stash create`` rather than real commits.
+"""
 
 from __future__ import annotations
 
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 AUTO_GIT_USER_NAME = "Raccoon Auto History"
@@ -20,21 +24,6 @@ class GitInitResult:
     commit_sha: str | None = None
     reason: str = ""
     error: str = ""
-
-
-@dataclass
-class GitSnapshotResult:
-    """Result of an automatic pre-sync snapshot commit."""
-
-    created: bool
-    commit_sha: str | None = None
-    summary: str = ""
-    reason: str = ""
-    error: str = ""
-
-    @property
-    def short_sha(self) -> str | None:
-        return self.commit_sha[:7] if self.commit_sha else None
 
 
 def _run_git(project_root: Path, args: list[str]) -> subprocess.CompletedProcess:
@@ -68,39 +57,6 @@ def _has_staged_changes(project_root: Path) -> tuple[bool, str]:
     if proc.returncode == 0:
         return False, ""
     return False, proc.stderr.strip() or proc.stdout.strip()
-
-
-def _collect_staged_changes(project_root: Path) -> tuple[list[tuple[str, str]], str]:
-    """
-    Return staged changes as (status, path) tuples.
-
-    Status uses the git short name-status code (A, M, D, ...).
-    """
-    proc = _run_git(project_root, ["diff", "--cached", "--name-status", "--no-renames"])
-    if proc.returncode != 0:
-        return [], proc.stderr.strip() or proc.stdout.strip()
-
-    entries: list[tuple[str, str]] = []
-    for line in proc.stdout.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        status = parts[0][:1]
-        path = parts[-1]
-        entries.append((status, path))
-    return entries, ""
-
-
-def _build_change_summary(changes: list[tuple[str, str]]) -> str:
-    added = sum(1 for status, _ in changes if status == "A")
-    modified = sum(1 for status, _ in changes if status == "M")
-    deleted = sum(1 for status, _ in changes if status == "D")
-    other = len(changes) - added - modified - deleted
-
-    summary = f"{len(changes)} files (+{added} ~{modified} -{deleted}"
-    if other:
-        summary += f" ?{other}"
-    return summary + ")"
 
 
 def _commit(
@@ -189,70 +145,4 @@ def initialize_project_history(project_root: Path, project_name: str) -> GitInit
         initialized=True,
         commit_created=True,
         commit_sha=commit_sha,
-    )
-
-
-def create_pre_sync_snapshot(project_root: Path, direction: str, target: str) -> GitSnapshotResult:
-    """Create an automatic snapshot commit before sync if local changes exist."""
-    if not is_git_available():
-        return GitSnapshotResult(created=False, reason="git_unavailable")
-
-    if not is_git_repo(project_root):
-        return GitSnapshotResult(created=False, reason="not_git_repo")
-
-    add_proc = _run_git(project_root, ["add", "-A"])
-    if add_proc.returncode != 0:
-        return GitSnapshotResult(
-            created=False,
-            reason="add_failed",
-            error=add_proc.stderr.strip() or add_proc.stdout.strip(),
-        )
-
-    has_changes, check_error = _has_staged_changes(project_root)
-    if check_error:
-        return GitSnapshotResult(
-            created=False,
-            reason="status_failed",
-            error=check_error,
-        )
-    if not has_changes:
-        return GitSnapshotResult(created=False, reason="no_changes")
-
-    changes, changes_error = _collect_staged_changes(project_root)
-    if changes_error:
-        return GitSnapshotResult(
-            created=False,
-            reason="changes_failed",
-            error=changes_error,
-        )
-
-    summary = _build_change_summary(changes)
-    subject = f"chore(sync): pre-{direction} snapshot"
-    body_lines = [
-        f"Direction: {direction}",
-        f"Target: {target}",
-        f"Summary: {summary}",
-        "",
-        "Changed files:",
-    ]
-
-    max_paths = 12
-    for status, path in changes[:max_paths]:
-        body_lines.append(f"- {status} {path}")
-    remaining = len(changes) - max_paths
-    if remaining > 0:
-        body_lines.append(f"- ... (+{remaining} more)")
-
-    commit_sha, commit_error = _commit(project_root, subject, body="\n".join(body_lines))
-    if commit_error:
-        return GitSnapshotResult(
-            created=False,
-            reason="commit_failed",
-            error=commit_error,
-        )
-
-    return GitSnapshotResult(
-        created=True,
-        commit_sha=commit_sha,
-        summary=summary,
     )
