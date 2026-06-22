@@ -442,6 +442,7 @@ def _run_local(
     no_calibrate: bool = False,
     no_codegen: bool = False,
     no_checkpoints: bool = False,
+    debug: bool = False,
     skip_missions: set[int] | None = None,
     record_localization: bool = False,
     record_hz: float | None = None,
@@ -501,6 +502,8 @@ def _run_local(
         env["LIBSTP_NO_CALIBRATE"] = "1"
     if no_checkpoints:
         env["LIBSTP_NO_CHECKPOINTS"] = "1"
+    if debug:
+        env["LIBSTP_DEBUG"] = "1"
     if skip_missions:
         env["LIBSTP_SKIP_MISSIONS"] = ",".join(str(i) for i in sorted(skip_missions))
     if extra_env:
@@ -605,6 +608,7 @@ async def _run_remote(
     no_codegen: bool = False,
     no_sync: bool = False,
     no_checkpoints: bool = False,
+    debug: bool = False,
     skip_missions: set[int] | None = None,
     record_localization: bool = False,
     record_hz: float | None = None,
@@ -669,6 +673,8 @@ async def _run_remote(
                 env["LIBSTP_NO_CALIBRATE"] = "1"
             if no_checkpoints:
                 env["LIBSTP_NO_CHECKPOINTS"] = "1"
+            if debug:
+                env["LIBSTP_DEBUG"] = "1"
             if skip_missions:
                 env["LIBSTP_SKIP_MISSIONS"] = ",".join(
                     str(i) for i in sorted(skip_missions)
@@ -826,6 +832,11 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
     help="Skip waiting for time checkpoints (wait_for_checkpoint steps return immediately)",
 )
 @click.option(
+    "--debug",
+    is_flag=True,
+    help="Enable debug mode: breakpoint() steps pause and wait for a button press (otherwise no-op).",
+)
+@click.option(
     "--record-localization",
     is_flag=True,
     help="Record particle filter state during the run to .raccoon/runs/<ts>/localization.jsonl for replay in the Web-IDE.",
@@ -846,6 +857,7 @@ def run_command(
     no_calibrate: bool,
     no_codegen: bool,
     no_checkpoints: bool,
+    debug: bool,
     record_localization: bool,
     record_hz: float | None,
 ) -> None:
@@ -892,6 +904,7 @@ def run_command(
             dev = dev or run_cfg.dev
             no_calibrate = no_calibrate or run_cfg.no_calibrate
             no_checkpoints = no_checkpoints or run_cfg.no_checkpoints
+            debug = debug or run_cfg.debug
             no_codegen = no_codegen or run_cfg.no_codegen
             no_sync = no_sync or run_cfg.no_sync
             record_localization = record_localization or run_cfg.record_localization
@@ -960,6 +973,7 @@ def run_command(
                         no_codegen=no_codegen,
                         no_sync=no_sync,
                         no_checkpoints=no_checkpoints,
+                        debug=debug,
                         skip_missions=skip_missions,
                         record_localization=record_localization,
                         record_hz=record_hz,
@@ -986,6 +1000,7 @@ def run_command(
             no_calibrate=no_calibrate,
             no_codegen=no_codegen,
             no_checkpoints=no_checkpoints,
+            debug=debug,
             skip_missions=skip_missions,
             record_localization=record_localization,
             record_hz=record_hz,

@@ -459,11 +459,30 @@ class RobotGenerator(BaseGenerator):
         self._validate_hardware_refs(hardware_refs)
         self.imports.add(kinematics_class)
 
+        from ..introspection import infer_param_type
+
         args = []
         for key in sorted(params.keys()):
             value = params[key]
             if isinstance(value, tuple) and value[0] == "__hardware_ref__":
                 args.append(f"{key}=defs.{value[1]}")
+            elif isinstance(value, dict):
+                # A nested mapping (e.g. velocity_command_gain) must become a
+                # typed constructor call, not a raw dict literal. Resolve the
+                # parameter's declared type and build it recursively; fall back
+                # to a literal only when the type cannot be determined.
+                nested_cls = infer_param_type(kinematics_class, key)
+                if nested_cls is not None:
+                    expr = build_constructor_expr(
+                        nested_cls, value, f"robot.kinematics.{key}", self.imports
+                    )
+                    args.append(f"{key}={expr}")
+                else:
+                    logger.warning(
+                        f"robot.kinematics: could not resolve a type for nested "
+                        f"parameter '{key}'; emitting a dict literal"
+                    )
+                    args.append(f"{key}={build_literal_expr(value)}")
             else:
                 args.append(f"{key}={build_literal_expr(value)}")
 
