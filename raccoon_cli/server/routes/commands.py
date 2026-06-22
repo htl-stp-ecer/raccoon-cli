@@ -54,6 +54,17 @@ class ServiceDeploymentInfo(BaseModel):
     reason: str
 
 
+class ServiceDeploymentInfo(BaseModel):
+    """Per-service deployment outcome returned by RUN."""
+
+    name: str
+    systemd_name: str
+    action: str  # "restart" | "start"
+    first_deploy: bool
+    digest_changed: bool
+    reason: str
+
+
 class CommandResponse(BaseModel):
     """Response model for command execution."""
 
