@@ -14,8 +14,12 @@ env:
 
 jobs:
   test:
-    runs-on: [self-hosted, Linux]
-    container: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -31,8 +35,12 @@ jobs:
 
   build-and-release:
     needs: test
-    runs-on: [self-hosted, Linux]
-    container: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: write
 

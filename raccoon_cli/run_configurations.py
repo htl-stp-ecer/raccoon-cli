@@ -45,6 +45,7 @@ class RunConfiguration:
     dev: bool = False
     no_calibrate: bool = False
     no_checkpoints: bool = False
+    debug: bool = False
     no_codegen: bool = False
     no_sync: bool = False
     record_localization: bool = False
@@ -67,7 +68,7 @@ class RunConfiguration:
             )
         allowed = {
             "description", "target", "dev", "no_calibrate", "no_checkpoints",
-            "no_codegen", "no_sync", "record_localization", "record_hz",
+            "debug", "no_codegen", "no_sync", "record_localization", "record_hz",
             "args", "env",
         }
         kwargs: Dict[str, Any] = {"name": name}

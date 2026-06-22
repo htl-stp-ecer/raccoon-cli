@@ -40,6 +40,18 @@ class CommandRequest(BaseModel):
 
     args: list[str] = []
     env: dict[str, str] = {}
+    deploy_services: bool = True
+
+
+class ServiceDeploymentInfo(BaseModel):
+    """Per-service deployment outcome returned by RUN."""
+
+    name: str
+    systemd_name: str
+    action: str  # "restart" | "start"
+    first_deploy: bool
+    digest_changed: bool
+    reason: str
 
 
 class ServiceDeploymentInfo(BaseModel):
@@ -167,6 +179,8 @@ async def _start_command(
     command_type: CommandType,
     args: list[str],
     env: dict[str, str],
+    *,
+    deploy_services: bool = True,
 ) -> CommandResponse:
     """Schedule a new command after cancelling any same-project predecessor.
 
@@ -196,7 +210,7 @@ async def _start_command(
         _reject_if_another_project_running(project_id)
 
         deploy_results: list = []
-        if command_type == CommandType.RUN:
+        if command_type == CommandType.RUN and deploy_services:
             from raccoon_cli.project import load_project_config
             from raccoon_cli.project_services import deploy_project_services
 
@@ -284,6 +298,7 @@ async def run_project(project_id: str, request: CommandRequest = CommandRequest(
         command_type=CommandType.RUN,
         args=["run", "--local", "--no-codegen", *request.args],
         env=request.env,
+        deploy_services=request.deploy_services,
     )
 
 
@@ -301,6 +316,7 @@ async def calibrate_project(
         command_type=CommandType.CALIBRATE,
         args=["calibrate", *request.args, "--local"],
         env=request.env,
+        deploy_services=request.deploy_services,
     )
 
 

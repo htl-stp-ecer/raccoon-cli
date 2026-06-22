@@ -369,6 +369,8 @@ async def _run_ws_handler(
                         run_config_env.setdefault("LIBSTP_NO_CALIBRATE", "1")
                     if rc.no_checkpoints:
                         run_config_env.setdefault("LIBSTP_NO_CHECKPOINTS", "1")
+                    if rc.debug:
+                        run_config_env.setdefault("LIBSTP_DEBUG", "1")
             except _ProjectError as e:
                 await websocket.send_json({"type": "error", "message": str(e)})
                 return
