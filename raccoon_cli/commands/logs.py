@@ -22,6 +22,7 @@ from rich.text import Text
 from raccoon_cli.logs import (
     LogEntry,
     LogRun,
+    current_log_file,
     detect_runs,
     discover_log_files,
     find_log_dir,
@@ -214,7 +215,7 @@ def _filter_entries(
 @click.group(name="logs", invoke_without_command=True)
 @click.option("--dir", "log_dir", default=None, help="Path to a local .raccoon/logs/ directory (implies --local).")
 @click.option("-n", "--last", "count", type=int, default=None, help="Show last N runs.")
-@click.option("-a", "--all", "show_all", is_flag=True, help="Include rotated log files.")
+@click.option("-a", "--all", "show_all", is_flag=True, help="Include older runs (all run files, not just the latest).")
 @click.option("--local", is_flag=True, help="Read local logs instead of fetching from Pi.")
 @click.pass_context
 def logs_group(
@@ -258,7 +259,8 @@ def _list_runs_local(
         return
 
     if not show_all:
-        current_file = str(resolved / "libstp.log")
+        current = current_log_file(resolved)
+        current_file = str(current) if current else ""
         runs = [r for r in runs if r.file_path == current_file] or runs
 
     if count:
@@ -532,10 +534,10 @@ def _tail_local(
     grep_pattern: Optional[str],
 ) -> None:
     log_dir = _resolve_log_dir(ctx, ctx.obj.get("log_dir_override"))
-    log_file = log_dir / "libstp.log"
+    log_file = current_log_file(log_dir)
 
-    if not log_file.exists():
-        console.print("[red]No libstp.log found.[/red]")
+    if log_file is None:
+        console.print("[red]No libstp log files found.[/red]")
         raise SystemExit(1)
 
     all_entries = parse_log_file(log_file)
@@ -555,6 +557,16 @@ def _tail_local(
     try:
         while True:
             time.sleep(0.3)
+
+            # A new run writes a *new* dated file — switch to it so `-f` keeps
+            # following the live mission instead of the finished run's file.
+            newest = current_log_file(log_dir)
+            if newest is not None and newest != log_file:
+                log_file = newest
+                console.print(f"[dim]── new run: {log_file.name} ──[/dim]")
+                last_size = 0
+                last_count = 0
+
             current_size = log_file.stat().st_size
 
             if current_size == last_size:

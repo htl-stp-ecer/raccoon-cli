@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from raccoon_cli.logs import detect_runs, discover_log_files, parse_log_file
+from raccoon_cli.logs import current_log_file, detect_runs, discover_log_files, parse_log_file
 from raccoon_cli.project import load_project_config
 from raccoon_cli.project_services import load_project_services
 from raccoon_cli.server.auth import require_auth
@@ -32,7 +32,7 @@ def _get_project_path_or_404(project_id: str) -> Path:
 def _get_log_dir_or_404(project_id: str) -> Path:
     project_path = _get_project_path_or_404(project_id)
     log_dir = project_path / ".raccoon" / "logs"
-    if not log_dir.is_dir() or not (log_dir / "libstp.log").exists():
+    if not log_dir.is_dir() or current_log_file(log_dir) is None:
         raise HTTPException(status_code=404, detail="No logs directory found for this project")
     return log_dir
 
@@ -40,7 +40,7 @@ def _get_log_dir_or_404(project_id: str) -> Path:
 def _load_runs(log_dir: Path, include_rotated: bool = False):
     files = discover_log_files(log_dir)
     if not include_rotated:
-        current = log_dir / "libstp.log"
+        current = current_log_file(log_dir)
         files = [f for f in files if f == current]
     all_entries = []
     for f in files:
