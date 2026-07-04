@@ -6,7 +6,14 @@ from textwrap import dedent
 
 import pytest
 
-from raccoon_cli.logs.parser import LogEntry, parse_log_line, detect_runs, parse_log_file
+from raccoon_cli.logs.parser import (
+    LogEntry,
+    detect_runs,
+    humanize_source,
+    parse_log_file,
+    parse_log_line,
+    single_run,
+)
 
 
 class TestParseLogLine:
@@ -36,6 +43,62 @@ class TestParseLogLine:
     def test_invalid_line(self):
         assert parse_log_line("not a log line") is None
         assert parse_log_line("") is None
+
+
+class TestHumanizeSource:
+    def test_cpp_sources_unchanged(self):
+        # Already tidy (parent.file.ext) — left alone.
+        assert humanize_source("d.drive.cpp") == "d.drive.cpp"
+        assert humanize_source("c.CalibrationStore.cpp") == "c.CalibrationStore.cpp"
+        assert humanize_source("h.Digital.cpp") == "h.Digital.cpp"
+
+    def test_python_install_path_trimmed(self):
+        # /home/tobias/.venv/lib/python/site-packages/raccoon/robot/api.py
+        assert humanize_source("h.t...l.p.s.r.r.api.py") == "r.api.py"
+        assert humanize_source("h.t...l.p.s.r.s.base.py") == "s.base.py"
+        assert humanize_source("h.t...l.p.s.r.__init__.py") == "r.__init__.py"
+
+    def test_short_and_empty_unchanged(self):
+        assert humanize_source("") == ""
+        assert humanize_source("api.py") == "api.py"
+        assert humanize_source("r.api.py") == "r.api.py"
+
+    def test_applied_during_parse(self):
+        line = (
+            "2026-07-01 10:12:58 |     0.009s | info     | "
+            "h.t...l.p.s.r.r.api.py         | [Robot]: Starting robot"
+        )
+        entry = parse_log_line(line)
+        assert entry is not None
+        assert entry.source == "r.api.py"
+
+
+class TestSingleRun:
+    def _entry(self, elapsed: float, message: str = "test") -> LogEntry:
+        return LogEntry(
+            timestamp=datetime(2026, 7, 1, 10, 0, 0),
+            elapsed=elapsed,
+            level="info",
+            source="test.cpp",
+            message=message,
+            file_path="/logs/libstp-2026-07-01_10-00-00.log",
+        )
+
+    def test_whole_file_is_one_run(self):
+        # An elapsed reset mid-file must NOT split a per-run file.
+        entries = [
+            self._entry(0.0, "Logging to directory: /logs"),
+            self._entry(5.0),
+            self._entry(0.0, "timer restarted"),
+            self._entry(1.0),
+        ]
+        run = single_run(entries)
+        assert run is not None
+        assert run.line_count == 4
+        assert run.file_path == "/logs/libstp-2026-07-01_10-00-00.log"
+
+    def test_empty_returns_none(self):
+        assert single_run([]) is None
 
 
 class TestDetectRuns:
