@@ -27,6 +27,34 @@ _LOG_RE = re.compile(
 _RUN_START_RE = re.compile(r"^Logging to directory:")
 
 
+def humanize_source(source: str) -> str:
+    """Shorten a log ``source`` to its last two components (parent + file).
+
+    The library's log formatter abbreviates every parent directory of a source
+    file to its first character. For C++ files (built from the repo) that yields
+    a tidy ``m.file.cpp``. For the *installed* Python package, though, it
+    abbreviates the whole absolute path, so a source shows up as noise like
+    ``h.t...l.p.s.r.r.api.py`` (home / .venv / lib / python / site-packages /
+    raccoon / robot / api.py).
+
+    We can't recover the abbreviated names, but the last two dotted components
+    (``<parent-initial>.<filename>``) are the useful, disambiguating part — and
+    already-tidy C++ sources (``d.drive.cpp``) are left unchanged. Keeping just
+    those drops the venv/site-packages noise uniformly.
+    """
+    if not source:
+        return source
+    segments = source.split(".")
+    # ``name.ext`` is the last two segments; anything before is directory
+    # abbreviations. Three or fewer segments is already ``parent.name.ext`` (or
+    # shorter), so leave it alone.
+    if len(segments) <= 3:
+        return source
+    parent = segments[-3]
+    filename = f"{segments[-2]}.{segments[-1]}"
+    return f"{parent}.{filename}"
+
+
 @dataclass
 class LogEntry:
     """A single parsed log line."""
@@ -86,7 +114,7 @@ def parse_log_line(line: str, line_number: int = 0, file_path: str = "") -> Opti
         timestamp=datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S"),
         elapsed=float(elapsed_str),
         level=level.strip(),
-        source=source.strip(),
+        source=humanize_source(source.strip()),
         message=message.strip(),
         line_number=line_number,
         file_path=file_path,
@@ -147,6 +175,17 @@ def detect_runs(entries: List[LogEntry]) -> List[LogRun]:
         run.index = i + 1
 
     return runs
+
+
+def single_run(entries: List[LogEntry], index: int = 0) -> Optional[LogRun]:
+    """Build exactly one run from all entries (for per-run log files).
+
+    The new logging scheme writes one file per program run, so the whole file is
+    a single run — no boundary detection needed. Returns None for empty input.
+    """
+    if not entries:
+        return None
+    return _make_run(entries, index=index)
 
 
 def _make_run(entries: List[LogEntry], index: int) -> LogRun:

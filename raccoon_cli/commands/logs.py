@@ -7,6 +7,7 @@ Use --local only when explicitly working with local log files.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from datetime import datetime
@@ -23,10 +24,17 @@ from raccoon_cli.logs import (
     LogEntry,
     LogRun,
     current_log_file,
-    detect_runs,
     discover_log_files,
     find_log_dir,
+    is_run_file,
+    load_runs,
     parse_log_file,
+)
+from raccoon_cli.logs.cmd_trace import (
+    load_cmd_trace,
+    resolve_cmd_trace_path,
+    run_window_us,
+    slice_cmd_trace,
 )
 
 # ── Colour palette ──────────────────────────────────────────────────
@@ -176,13 +184,13 @@ def _resolve_log_dir(ctx: click.Context, log_dir: Optional[str]) -> Path:
     return found
 
 
-def _load_all_runs(log_dir: Path) -> List[LogRun]:
-    """Parse all log files and return detected runs (most recent = index 1)."""
-    files = discover_log_files(log_dir)
-    all_entries: List[LogEntry] = []
-    for f in files:
-        all_entries.extend(parse_log_file(f))
-    return detect_runs(all_entries)
+def _load_all_runs(log_dir: Path, include_legacy: bool = True) -> List[LogRun]:
+    """Load runs from log files (most recent = index 1).
+
+    Each per-run file is a single run; see ``logs.load_runs``. *include_legacy*
+    controls whether pre-per-run rotation files are included.
+    """
+    return load_runs(discover_log_files(log_dir, include_legacy=include_legacy))
 
 
 def _filter_entries(
@@ -215,7 +223,7 @@ def _filter_entries(
 @click.group(name="logs", invoke_without_command=True)
 @click.option("--dir", "log_dir", default=None, help="Path to a local .raccoon/logs/ directory (implies --local).")
 @click.option("-n", "--last", "count", type=int, default=None, help="Show last N runs.")
-@click.option("-a", "--all", "show_all", is_flag=True, help="Include older runs (all run files, not just the latest).")
+@click.option("-a", "--all", "show_all", is_flag=True, help="Also include legacy rotated log files (from before the per-run scheme).")
 @click.option("--local", is_flag=True, help="Read local logs instead of fetching from Pi.")
 @click.pass_context
 def logs_group(
@@ -252,16 +260,14 @@ def _list_runs_local(
     ctx: click.Context, console: Console, log_dir: Optional[str], show_all: bool, count: Optional[int],
 ) -> None:
     resolved = _resolve_log_dir(ctx, log_dir)
-    runs = _load_all_runs(resolved)
+    # Every run is its own file now, so the default lists all recent runs; the
+    # library caps the per-run files kept on disk. --all also folds in legacy
+    # rotation files from before the per-run scheme.
+    runs = _load_all_runs(resolved, include_legacy=show_all)
 
     if not runs:
         console.print("[dim]No log runs found.[/dim]")
         return
-
-    if not show_all:
-        current = current_log_file(resolved)
-        current_file = str(current) if current else ""
-        runs = [r for r in runs if r.file_path == current_file] or runs
 
     if count:
         runs = sorted(runs, key=lambda r: r.index)[:count]
@@ -486,6 +492,242 @@ async def _show_run_remote(
             console.print(Panel(header, style="bold"))
             for entry in entries:
                 console.print(_render_entry_from_dict(entry))
+
+
+# ── download ────────────────────────────────────────────────────────
+
+
+def _bundle_output_dir(explicit: Optional[str], run_index: int, start_time: datetime) -> Path:
+    """Resolve the directory to write a bundle into.
+
+    Defaults to ``.raccoon/downloads/run<idx>_<YYYYmmdd-HHMMSS>/`` under the
+    current project (or CWD), named from the run's start time so re-downloading
+    the same run is stable and the folder self-documents which mission it holds.
+    """
+    if explicit:
+        return Path(explicit)
+
+    from raccoon_cli.project import find_project_root, ProjectError
+
+    try:
+        base = find_project_root()
+    except ProjectError:
+        base = Path.cwd()
+
+    stamp = start_time.strftime("%Y%m%d-%H%M%S")
+    return base / ".raccoon" / "downloads" / f"run{run_index}_{stamp}"
+
+
+def _write_bundle(
+    console: Console,
+    output_dir: Path,
+    log_file_name: str,
+    log_content: str,
+    run_meta: dict,
+    cmd_trace: dict,
+    *,
+    single_run_file: bool = True,
+) -> None:
+    """Write the log file, filtered cmd_trace, and a manifest into *output_dir*."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    log_path = output_dir / log_file_name
+    log_path.write_text(log_content, encoding="utf-8")
+
+    trace_entries = cmd_trace.get("entries", [])
+    trace_path = output_dir / "cmd_trace.jsonl"
+    with open(trace_path, "w", encoding="utf-8") as f:
+        for entry in trace_entries:
+            f.write(json.dumps(entry) + "\n")
+
+    manifest = {
+        "run": run_meta,
+        "log_file": log_file_name,
+        "single_run_file": single_run_file,
+        "cmd_trace": {
+            "file": "cmd_trace.jsonl",
+            "source_path": cmd_trace.get("path"),
+            "available": cmd_trace.get("available", False),
+            "total_lines": cmd_trace.get("total_lines", 0),
+            "matched_lines": cmd_trace.get("matched_lines", 0),
+            "window_start_us": cmd_trace.get("window_start_us"),
+            "window_end_us": cmd_trace.get("window_end_us"),
+            "pad_secs": cmd_trace.get("pad_secs"),
+        },
+    }
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    # Summary
+    start = str(run_meta.get("start_time", "")).replace("T", " ")[:19]
+    header = (
+        f"Run #{run_meta.get('index')}  |  {start}  |  "
+        f"{_format_duration(run_meta.get('duration_secs', 0))}  |  "
+        f"{run_meta.get('line_count', 0)} log lines"
+    )
+    console.print(Panel(header, style="bold", title="Downloaded bundle"))
+    console.print(f"  [cyan]{log_path}[/cyan]")
+
+    if not cmd_trace.get("available"):
+        console.print(
+            f"  [yellow]cmd_trace.jsonl not found[/yellow] "
+            f"[dim]({cmd_trace.get('path')})[/dim] — wrote empty trace."
+        )
+    elif cmd_trace.get("matched_lines", 0) == 0:
+        console.print(
+            f"  [yellow]0 of {cmd_trace.get('total_lines', 0)} cmd_trace lines[/yellow] "
+            f"fell in the run window [dim](reader likely restarted after the run)[/dim]."
+        )
+    else:
+        console.print(
+            f"  [cyan]{trace_path}[/cyan] "
+            f"[dim]({cmd_trace.get('matched_lines')} of "
+            f"{cmd_trace.get('total_lines')} cmd_trace lines in window)[/dim]"
+        )
+
+    if not single_run_file:
+        console.print(
+            "  [dim]Note: legacy multi-run log file — the .log holds more than this run; "
+            "the cmd_trace slice is still windowed to run "
+            f"#{run_meta.get('index')}.[/dim]"
+        )
+    console.print(f"\n[green]Bundle written to[/green] [bold]{output_dir}[/bold]")
+
+
+@logs_group.command(name="download")
+@click.argument("run_id", type=int, default=1)
+@click.option("-o", "--output", "output_dir", default=None, help="Directory to write the bundle into (default: .raccoon/downloads/run<#>_<time>/).")
+@click.option("--pad", "pad_secs", type=float, default=2.0, show_default=True, help="Seconds of cmd_trace padding around the run's time window.")
+@click.option("--cmd-trace", "cmd_trace_path", default=None, help="[--local only] Path to cmd_trace.jsonl (default: reader's WOMBAT_CMD_TRACE / packaged path).")
+@click.pass_context
+def download_cmd(
+    ctx: click.Context,
+    run_id: int,
+    output_dir: Optional[str],
+    pad_secs: float,
+    cmd_trace_path: Optional[str],
+) -> None:
+    """Download a run's log + the STM32 cmd_trace slice for that timeframe.
+
+    Bundles the selected run's raw libstp log file together with the
+    stm32-data-reader command trace (cmd_trace.jsonl) filtered to the run's
+    wall-clock time window, so a mission can be reconstructed offline for
+    debugging.
+
+    RUN_ID is the run number from 'raccoon logs' (default: 1 = most recent).
+    """
+    console: Console = ctx.obj.get("console", Console())
+
+    if ctx.obj.get("force_local"):
+        _download_local(ctx, console, run_id, output_dir, pad_secs, cmd_trace_path)
+    else:
+        if cmd_trace_path:
+            console.print("[yellow]--cmd-trace is only used with --local; ignoring.[/yellow]")
+        remote = _get_remote_context(console)
+        asyncio.run(_download_remote(console, remote, run_id, output_dir, pad_secs))
+
+
+def _download_local(
+    ctx: click.Context,
+    console: Console,
+    run_id: int,
+    output_dir: Optional[str],
+    pad_secs: float,
+    cmd_trace_path: Optional[str],
+) -> None:
+    log_dir = _resolve_log_dir(ctx, ctx.obj.get("log_dir_override"))
+    runs = _load_all_runs(log_dir)
+
+    run = next((r for r in runs if r.index == run_id), None)
+    if run is None:
+        console.print(f"[red]Run #{run_id} not found.[/red] Available: 1–{len(runs)}")
+        raise SystemExit(1)
+
+    log_path = Path(run.file_path) if run.file_path else None
+    if log_path is not None and log_path.is_file():
+        log_content = log_path.read_text(encoding="utf-8", errors="replace")
+        log_file_name = log_path.name
+        single_run_file = is_run_file(log_path)
+    else:
+        log_content = ""
+        log_file_name = f"run-{run_id}.log"
+        single_run_file = False
+
+    start_us, end_us = run_window_us(run.start_time, run.end_time, pad_secs)
+    trace_path = Path(cmd_trace_path) if cmd_trace_path else resolve_cmd_trace_path()
+    cmd_trace: dict = {
+        "path": str(trace_path),
+        "available": False,
+        "total_lines": 0,
+        "matched_lines": 0,
+        "window_start_us": start_us,
+        "window_end_us": end_us,
+        "pad_secs": pad_secs,
+        "entries": [],
+    }
+    if trace_path.is_file():
+        records = load_cmd_trace(trace_path)
+        matched = slice_cmd_trace(records, start_us, end_us)
+        cmd_trace.update(
+            available=True,
+            total_lines=len(records),
+            matched_lines=len(matched),
+            entries=matched,
+        )
+
+    run_meta = {
+        "index": run.index,
+        "start_time": run.start_time.isoformat(),
+        "end_time": run.end_time.isoformat(),
+        "duration_secs": run.duration_secs,
+        "line_count": run.line_count,
+    }
+    out = _bundle_output_dir(output_dir, run.index, run.start_time)
+    _write_bundle(
+        console, out, log_file_name, log_content, run_meta, cmd_trace,
+        single_run_file=single_run_file,
+    )
+
+
+async def _download_remote(
+    console: Console,
+    remote: tuple,
+    run_id: int,
+    output_dir: Optional[str],
+    pad_secs: float,
+) -> None:
+    """Fetch and write a run bundle from the Pi."""
+    from raccoon_cli.client.api import create_api_client
+
+    state, project_uuid = remote
+    console.print(
+        f"[dim]Downloading run #{run_id} bundle from "
+        f"{state.pi_hostname or state.pi_address}...[/dim]"
+    )
+
+    async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
+        try:
+            data = await client.download_log_bundle(project_uuid, run_id, pad_secs)
+        except Exception as e:
+            console.print(f"[red]Failed to download run: {e}[/red]")
+            raise SystemExit(1)
+
+    run_meta = data.get("run", {})
+    start_iso = run_meta.get("start_time", "")
+    try:
+        start_dt = datetime.fromisoformat(start_iso)
+    except ValueError:
+        start_dt = datetime.now()
+
+    out = _bundle_output_dir(output_dir, run_meta.get("index", run_id), start_dt)
+    _write_bundle(
+        console,
+        out,
+        data.get("log_file_name", f"run-{run_id}.log"),
+        data.get("log_content", ""),
+        run_meta,
+        data.get("cmd_trace", {}),
+        single_run_file=data.get("single_run_file", True),
+    )
 
 
 # ── tail ────────────────────────────────────────────────────────────

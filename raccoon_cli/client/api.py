@@ -518,6 +518,19 @@ class RaccoonApiClient:
         response.raise_for_status()
         return response.json()
 
+    async def download_log_bundle(
+        self, project_id: str, run_index: int, pad_secs: float = 2.0
+    ) -> dict:
+        """Fetch a run's raw log + windowed STM32 cmd_trace slice from the Pi."""
+        client = self._get_client()
+        response = await client.get(
+            f"{self.base_url}/api/v1/logs/{project_id}/runs/{run_index}/bundle",
+            params={"pad": str(pad_secs)},
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def list_project_services(self, project_id: str) -> dict:
         """List project services with their current systemd status."""
         client = self._get_client()
