@@ -4,10 +4,11 @@ from typing import Callable, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from raccoon_cli.ide.repositories.project_repository import ProjectRepository
 from raccoon_cli.ide.services.project_service import ProjectService
+from raccoon_cli.table_map import TableMapRequest, TableMapVersionError, parse_v2
 
 
 router = APIRouter()
@@ -84,106 +85,6 @@ class StartPoseRequest(BaseModel):
     """Request to update start pose."""
 
     start_pose: StartPose
-
-
-class TableMapLine(BaseModel):
-    """A single line or wall segment on the table map."""
-
-    kind: str  # 'line' or 'wall'
-    startX: float
-    startY: float
-    endX: float
-    endY: float
-    widthCm: float
-
-
-class TableMapTransitionEdge(BaseModel):
-    startX: float
-    startY: float
-    endX: float
-    endY: float
-
-
-class TableMapTransition(BaseModel):
-    """An inter-layer transition (ramp/portal) connecting two edges."""
-
-    id: str
-    name: Optional[str] = None
-    fromLayer: str
-    toLayer: str
-    from_: TableMapTransitionEdge = Field(alias="from")
-    to: TableMapTransitionEdge
-    bidirectional: Optional[bool] = True
-    costMultiplier: Optional[float] = 1.0
-    widthCm: Optional[float] = None
-
-    model_config = {"populate_by_name": True}
-
-
-class TableMapLayer(BaseModel):
-    """A single stacked level."""
-
-    id: str
-    name: str
-    zCm: Optional[float] = None
-    lines: list[TableMapLine]
-
-
-class TableMapRequest(BaseModel):
-    """Request to set table map.
-
-    Accepts both legacy v1 (flat ``lines[]``) and v2 (``layers[]`` +
-    ``transitions[]``) payloads. ``_normalize_v2`` returns a canonical v2 dict
-    regardless of input shape.
-    """
-
-    format: str = "flowchart-table-map"
-    version: int = 2
-    table: dict  # { widthCm, heightCm }
-    # v2 fields (preferred)
-    layers: Optional[list[TableMapLayer]] = None
-    transitions: Optional[list[TableMapTransition]] = None
-    activeLayerId: Optional[str] = None
-    # v1 fallback
-    lines: Optional[list[TableMapLine]] = None
-
-    def to_v2_dict(self) -> dict:
-        """Return canonical v2 representation, migrating from v1 if needed."""
-        if self.layers:
-            layers_payload = [
-                {
-                    "id": layer.id,
-                    "name": layer.name,
-                    "zCm": layer.zCm if layer.zCm is not None else idx * 10,
-                    "lines": [line.model_dump() for line in layer.lines],
-                }
-                for idx, layer in enumerate(self.layers)
-            ]
-            transitions_payload = [
-                t.model_dump(by_alias=True, exclude_none=False)
-                for t in (self.transitions or [])
-            ]
-            active_id = self.activeLayerId or layers_payload[0]["id"]
-        else:
-            # Migrate v1: wrap flat lines[] into a single default layer.
-            v1_lines = [line.model_dump() for line in (self.lines or [])]
-            layers_payload = [{
-                "id": "ground",
-                "name": "Ground",
-                "zCm": 0,
-                "lines": v1_lines,
-            }]
-            transitions_payload = []
-            active_id = "ground"
-
-        return {
-            "format": "flowchart-table-map",
-            "version": 2,
-            "table": self.table,
-            "layers": layers_payload,
-            "transitions": transitions_payload,
-            "activeLayerId": active_id,
-        }
 
 
 class KinematicsRequest(BaseModel):
@@ -437,56 +338,14 @@ async def update_kinematics(
     return _build_device_info(updated)
 
 
-def _migrate_table_map_to_v2(payload: dict | None) -> dict | None:
-    """Normalize any on-disk .ftmap shape to v2 (layers+transitions).
-
-    v1 (flat ``lines``) gets wrapped into one default layer. v2 payloads pass
-    through with defensive defaults filled in.
-    """
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("format") != "flowchart-table-map":
-        return None
-
-    table = payload.get("table") or {"widthCm": 0, "heightCm": 0}
-    version = payload.get("version", 1)
-
-    if version == 2 and isinstance(payload.get("layers"), list) and payload["layers"]:
-        layers = []
-        for idx, raw_layer in enumerate(payload["layers"]):
-            if not isinstance(raw_layer, dict):
-                continue
-            layers.append({
-                "id": raw_layer.get("id") or f"layer-{idx}",
-                "name": raw_layer.get("name") or f"Layer {idx + 1}",
-                "zCm": raw_layer.get("zCm") if isinstance(raw_layer.get("zCm"), (int, float)) else idx * 10,
-                "lines": raw_layer.get("lines") if isinstance(raw_layer.get("lines"), list) else [],
-            })
-        if not layers:
-            layers = [{"id": "ground", "name": "Ground", "zCm": 0, "lines": []}]
-        active_id = payload.get("activeLayerId")
-        if not isinstance(active_id, str) or not any(l["id"] == active_id for l in layers):
-            active_id = layers[0]["id"]
-        transitions = payload.get("transitions") if isinstance(payload.get("transitions"), list) else []
-        return {
-            "format": "flowchart-table-map",
-            "version": 2,
-            "table": table,
-            "layers": layers,
-            "transitions": transitions,
-            "activeLayerId": active_id,
-        }
-
-    # Treat anything else as v1 and wrap it.
-    v1_lines = payload.get("lines") if isinstance(payload.get("lines"), list) else []
-    return {
-        "format": "flowchart-table-map",
-        "version": 2,
-        "table": table,
-        "layers": [{"id": "ground", "name": "Ground", "zCm": 0, "lines": v1_lines}],
-        "transitions": [],
-        "activeLayerId": "ground",
-    }
+def _table_map_v2_or_422(payload: object) -> dict:
+    """Validate a raw table map as v2, raising HTTP 422 on any v1/invalid map."""
+    try:
+        return parse_v2(payload)
+    except TableMapVersionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
 
 
 @router.get("/{project_uuid}/table-map")
@@ -494,11 +353,11 @@ async def get_table_map(
     project_uuid: UUID,
     svc: ProjectService = Depends(get_project_service),
 ):
-    """Get table map for a project (always returned in v2 form).
+    """Get table map for a project (always v2).
 
     If physical.table_map is a file path, reads and returns the file content.
-    If it is inline data, returns it directly. Legacy v1 payloads are migrated
-    in-memory; on-disk files are not touched until the next save.
+    If it is inline data, returns it directly. v1 (legacy) maps are rejected
+    with 422 — v1 support was dropped, the map must be re-saved as v2.
     """
     import json
 
@@ -518,9 +377,11 @@ async def get_table_map(
                 raw = json.load(f)
         except Exception:
             return {"map": None}
-        return {"map": _migrate_table_map_to_v2(raw)}
+        return {"map": _table_map_v2_or_422(raw)}
 
-    return {"map": _migrate_table_map_to_v2(table_map)}
+    if table_map is None:
+        return {"map": None}
+    return {"map": _table_map_v2_or_422(table_map)}
 
 
 @router.put("/{project_uuid}/table-map")
@@ -543,8 +404,8 @@ async def update_table_map(
     physical = config.get("robot", {}).get("physical", {})
     existing_map_ref = physical.get("table_map")
 
-    # Always persist in canonical v2 shape, regardless of input version.
-    v2_payload = request.to_v2_dict()
+    # Always persist in canonical v2 shape (request is v2-only by schema).
+    v2_payload = request.to_dict()
     has_content = any(layer.get("lines") for layer in v2_payload["layers"]) or v2_payload["transitions"]
 
     if isinstance(existing_map_ref, str):

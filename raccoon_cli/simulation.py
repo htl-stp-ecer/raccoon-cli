@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from raccoon_cli.table_map import TableMapVersionError, parse_v2
+
 logger = logging.getLogger(__name__)
 
 #: Scene used when a project declares no ``table_map`` (and no explicit
@@ -197,45 +199,20 @@ def materialize_inline_ftmap(
     We always rewrite — the file is cheap and stale data would silently
     desync from the Web-IDE's table editor.
 
-    v2 layered maps are flattened to the active layer's lines because the
-    libstp runner currently understands only flat ``lines[]``. Multi-layer
-    simulation will be added once libstp supports layered scenes.
+    The runner is v2-only: the map is validated and written as canonical v2
+    (layers + ramp transitions preserved, so multi-plane scenes simulate
+    correctly). Legacy v1 maps (flat ``lines[]``) are rejected — the caller
+    falls back to the default scene in that case.
     """
+    try:
+        payload = parse_v2(table_map)
+    except TableMapVersionError as exc:
+        logger.warning("Ignoring non-v2 inline table_map: %s", exc)
+        return None
     try:
         sim_dir = project_root / ".raccoon" / "sim"
         sim_dir.mkdir(parents=True, exist_ok=True)
         target = sim_dir / "scene.ftmap"
-        table = table_map.get("table") or {"widthCm": 200, "heightCm": 100}
-
-        flat_lines: list[Any] = []
-        if isinstance(table_map.get("layers"), list):
-            active_id = table_map.get("activeLayerId")
-            active = None
-            if active_id:
-                active = next(
-                    (
-                        l
-                        for l in table_map["layers"]
-                        if isinstance(l, dict) and l.get("id") == active_id
-                    ),
-                    None,
-                )
-            if active is None:
-                active = next(
-                    (l for l in table_map["layers"] if isinstance(l, dict)),
-                    None,
-                )
-            if active and isinstance(active.get("lines"), list):
-                flat_lines = active["lines"]
-        elif isinstance(table_map.get("lines"), list):
-            flat_lines = table_map["lines"]
-
-        payload = {
-            "format": table_map.get("format", "flowchart-table-map"),
-            "version": 1,
-            "table": table,
-            "lines": flat_lines,
-        }
         target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return target
     except Exception as exc:  # noqa: BLE001 — non-fatal, caller falls back
