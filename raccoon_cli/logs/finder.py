@@ -19,6 +19,11 @@ _RUN_GLOB = "libstp-*.log"
 # library builds. Ordered oldest → newest.
 _LEGACY_ROTATED_NAMES = ["libstp.3.log", "libstp.2.log", "libstp.1.log", "libstp.log"]
 
+# Default cap for the run list: parse at most this many of the newest files so
+# `raccoon logs` stays fast when a project has accumulated hundreds of runs.
+# Older runs remain accessible by explicit index or with a larger ``-n``.
+DEFAULT_LIST_LIMIT = 25
+
 
 def find_log_dir(start: Optional[Path] = None) -> Optional[Path]:
     """Find the ``.raccoon/logs/`` directory by searching upward from *start*.
@@ -91,16 +96,26 @@ def is_run_file(path: Path) -> bool:
     return fnmatch.fnmatch(path.name, _RUN_GLOB)
 
 
-def load_runs(files: List[Path]) -> List[LogRun]:
+def load_runs(files: List[Path], limit: Optional[int] = None) -> List[LogRun]:
     """Load runs from *files* (oldest → newest), treating each file separately.
 
     Each per-run file (``libstp-<timestamp>.log``) is exactly one run — no
     boundary heuristic. Legacy single files may contain several runs, so those
     are still split with ``detect_runs``. Runs are never merged across files and
     are re-indexed globally (most recent = 1).
+
+    Parsing every line of every file is the slow part, so *limit* caps how many
+    of the **newest** files are actually parsed (the rest are skipped entirely).
+    Because indices are always counted from the newest run, the returned indices
+    are identical to an unlimited load — you just get fewer, older runs. Use
+    :func:`load_run_by_index` to fetch a single run without parsing the rest.
     """
+    parse_files = files
+    if limit is not None and limit > 0 and len(files) > limit:
+        parse_files = files[-limit:]
+
     runs: List[LogRun] = []
-    for f in files:
+    for f in parse_files:
         entries = parse_log_file(f)
         if not entries:
             continue
@@ -111,7 +126,32 @@ def load_runs(files: List[Path]) -> List[LogRun]:
         else:
             runs.extend(detect_runs(entries))
 
-    # Re-index across all files: newest run = 1 (files came oldest-first).
+    # Re-index across parsed files: newest run = 1 (files came oldest-first).
     for i, run in enumerate(reversed(runs)):
         run.index = i + 1
     return runs
+
+
+def load_run_by_index(files: List[Path], index: int) -> Optional[LogRun]:
+    """Load a single run by its (newest = 1) index, parsing as little as possible.
+
+    When every file is a per-run file (the common case), run *index* maps
+    directly to a single file from the newest end, so only that one file is
+    parsed. If any legacy multi-run file is present the mapping no longer holds,
+    so this falls back to a full :func:`load_runs`.
+    """
+    if index < 1 or not files:
+        return None
+
+    if all(is_run_file(f) for f in files):
+        if index > len(files):
+            return None
+        target = files[-index]  # newest = 1 → last file
+        run = single_run(parse_log_file(target))
+        if run is not None:
+            run.index = index
+        return run
+
+    # Legacy files break the 1-file-per-run mapping; parse everything.
+    runs = load_runs(files)
+    return next((r for r in runs if r.index == index), None)

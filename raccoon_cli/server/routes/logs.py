@@ -11,9 +11,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from raccoon_cli.logs import (
+    DEFAULT_LIST_LIMIT,
     current_log_file,
     discover_log_files,
     is_run_file,
+    load_run_by_index,
     load_runs,
 )
 from raccoon_cli.logs.cmd_trace import (
@@ -48,11 +50,14 @@ def _get_log_dir_or_404(project_id: str) -> Path:
     return log_dir
 
 
-def _load_runs(log_dir: Path, include_rotated: bool = False):
+def _load_runs(log_dir: Path, include_rotated: bool = False, limit: Optional[int] = None):
     # Every run is its own file now, so the default returns all recent runs.
     # ``include_rotated`` additionally folds in legacy rotation files from
-    # before the per-run scheme.
-    return load_runs(discover_log_files(log_dir, include_legacy=include_rotated))
+    # before the per-run scheme. ``limit`` caps how many of the newest files are
+    # parsed so listing stays fast on projects with many runs.
+    return load_runs(
+        discover_log_files(log_dir, include_legacy=include_rotated), limit=limit
+    )
 
 
 @router.get("/{project_id}/runs")
@@ -63,7 +68,14 @@ async def list_runs(
 ):
     """List detected log runs for a project."""
     log_dir = _get_log_dir_or_404(project_id)
-    runs = _load_runs(log_dir, include_rotated=include_rotated)
+
+    # Parse only the newest files: an explicit ``n`` (what the caller will show)
+    # or the default cap. Older runs are still reachable by explicit index.
+    total_files = len(discover_log_files(log_dir, include_legacy=include_rotated))
+    parse_limit = count if count else DEFAULT_LIST_LIMIT
+    runs = await asyncio.to_thread(
+        _load_runs, log_dir, include_rotated, parse_limit
+    )
 
     if count:
         runs = sorted(runs, key=lambda r: r.index)[:count]
@@ -71,6 +83,8 @@ async def list_runs(
     return {
         "project_id": project_id,
         "log_dir": str(log_dir),
+        "total_runs": total_files,
+        "loaded_runs": len(runs),
         "runs": [
             {
                 "index": r.index,
@@ -99,9 +113,8 @@ async def get_run(
     import re as re_mod
 
     log_dir = _get_log_dir_or_404(project_id)
-    runs = _load_runs(log_dir, include_rotated=include_rotated)
-
-    run = next((r for r in runs if r.index == run_index), None)
+    files = discover_log_files(log_dir, include_legacy=include_rotated)
+    run = await asyncio.to_thread(load_run_by_index, files, run_index)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run #{run_index} not found")
 
@@ -160,9 +173,8 @@ async def get_run_bundle(
     """
     log_dir = _get_log_dir_or_404(project_id)
     # Include legacy files so any listed run index resolves to a bundle.
-    runs = _load_runs(log_dir, include_rotated=True)
-
-    run = next((r for r in runs if r.index == run_index), None)
+    files = discover_log_files(log_dir, include_legacy=True)
+    run = await asyncio.to_thread(load_run_by_index, files, run_index)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run #{run_index} not found")
 

@@ -21,12 +21,14 @@ from rich.table import Table
 from rich.text import Text
 
 from raccoon_cli.logs import (
+    DEFAULT_LIST_LIMIT,
     LogEntry,
     LogRun,
     current_log_file,
     discover_log_files,
     find_log_dir,
     is_run_file,
+    load_run_by_index,
     load_runs,
     parse_log_file,
 )
@@ -184,13 +186,19 @@ def _resolve_log_dir(ctx: click.Context, log_dir: Optional[str]) -> Path:
     return found
 
 
-def _load_all_runs(log_dir: Path, include_legacy: bool = True) -> List[LogRun]:
+def _load_all_runs(
+    log_dir: Path, include_legacy: bool = True, limit: Optional[int] = None
+) -> List[LogRun]:
     """Load runs from log files (most recent = index 1).
 
     Each per-run file is a single run; see ``logs.load_runs``. *include_legacy*
-    controls whether pre-per-run rotation files are included.
+    controls whether pre-per-run rotation files are included. *limit* caps how
+    many of the newest files are parsed (indices are unaffected — they always
+    count from the newest run).
     """
-    return load_runs(discover_log_files(log_dir, include_legacy=include_legacy))
+    return load_runs(
+        discover_log_files(log_dir, include_legacy=include_legacy), limit=limit
+    )
 
 
 def _filter_entries(
@@ -260,10 +268,12 @@ def _list_runs_local(
     ctx: click.Context, console: Console, log_dir: Optional[str], show_all: bool, count: Optional[int],
 ) -> None:
     resolved = _resolve_log_dir(ctx, log_dir)
-    # Every run is its own file now, so the default lists all recent runs; the
-    # library caps the per-run files kept on disk. --all also folds in legacy
-    # rotation files from before the per-run scheme.
-    runs = _load_all_runs(resolved, include_legacy=show_all)
+    # Parsing every line of every run file is slow, and the list only needs a
+    # summary — so parse just the newest files (an explicit -n, or the default
+    # cap). Older runs stay reachable by explicit index (e.g. `logs show 40`).
+    total_files = len(discover_log_files(resolved, include_legacy=show_all))
+    parse_limit = count if count else DEFAULT_LIST_LIMIT
+    runs = _load_all_runs(resolved, include_legacy=show_all, limit=parse_limit)
 
     if not runs:
         console.print("[dim]No log runs found.[/dim]")
@@ -272,7 +282,7 @@ def _list_runs_local(
     if count:
         runs = sorted(runs, key=lambda r: r.index)[:count]
 
-    _render_run_table_local(console, runs, str(resolved))
+    _render_run_table_local(console, runs, str(resolved), total_runs=total_files)
 
 
 async def _list_runs_remote(
@@ -293,10 +303,12 @@ async def _list_runs_remote(
         return
 
     log_dir_label = f"{state.pi_hostname or state.pi_address}:{data.get('log_dir', 'logs/')}"
-    _render_run_table_from_dicts(console, runs, log_dir_label)
+    _render_run_table_from_dicts(console, runs, log_dir_label, total_runs=data.get("total_runs"))
 
 
-def _render_run_table_local(console: Console, runs: List[LogRun], title: str) -> None:
+def _render_run_table_local(
+    console: Console, runs: List[LogRun], title: str, total_runs: Optional[int] = None,
+) -> None:
     """Display a table of local LogRun objects."""
     table = Table(
         title=f"Log runs — {title}",
@@ -327,12 +339,26 @@ def _render_run_table_local(console: Console, runs: List[LogRun], title: str) ->
         )
 
     console.print(table)
-    console.print(
-        f"\n[dim]  {len(runs)} run(s) found. Use [bold]raccoon logs show <#>[/bold] to view a run.[/dim]"
-    )
+    _render_run_table_footer(console, len(runs), total_runs)
 
 
-def _render_run_table_from_dicts(console: Console, runs: list[dict], title: str) -> None:
+def _render_run_table_footer(console: Console, shown: int, total: Optional[int]) -> None:
+    """Footer line for the run list; notes when older runs weren't loaded."""
+    if total is not None and total > shown:
+        console.print(
+            f"\n[dim]  Showing the {shown} most recent of {total} run(s). "
+            f"Use [bold]-n <N>[/bold] for more, or [bold]raccoon logs show <#>[/bold] "
+            f"for an older run.[/dim]"
+        )
+    else:
+        console.print(
+            f"\n[dim]  {shown} run(s) found. Use [bold]raccoon logs show <#>[/bold] to view a run.[/dim]"
+        )
+
+
+def _render_run_table_from_dicts(
+    console: Console, runs: list[dict], title: str, total_runs: Optional[int] = None,
+) -> None:
     """Display a table of runs from API response dicts."""
     table = Table(
         title=f"Log runs — {title}",
@@ -363,9 +389,7 @@ def _render_run_table_from_dicts(console: Console, runs: list[dict], title: str)
         )
 
     console.print(table)
-    console.print(
-        f"\n[dim]  {len(runs)} run(s) found. Use [bold]raccoon logs show <#>[/bold] to view a run.[/dim]"
-    )
+    _render_run_table_footer(console, len(runs), total_runs)
 
 
 # ── show ────────────────────────────────────────────────────────────
@@ -412,11 +436,10 @@ def _show_run_local(
     no_pager: bool,
 ) -> None:
     log_dir = _resolve_log_dir(ctx, ctx.obj.get("log_dir_override"))
-    runs = _load_all_runs(log_dir)
-
-    run = next((r for r in runs if r.index == run_id), None)
+    files = discover_log_files(log_dir, include_legacy=ctx.obj.get("show_all", False))
+    run = load_run_by_index(files, run_id)
     if run is None:
-        console.print(f"[red]Run #{run_id} not found.[/red] Available: 1–{len(runs)}")
+        console.print(f"[red]Run #{run_id} not found.[/red] Available: 1–{len(files)}")
         raise SystemExit(1)
 
     entries = _filter_entries(run.entries, level, source, grep_pattern)
@@ -635,11 +658,10 @@ def _download_local(
     cmd_trace_path: Optional[str],
 ) -> None:
     log_dir = _resolve_log_dir(ctx, ctx.obj.get("log_dir_override"))
-    runs = _load_all_runs(log_dir)
-
-    run = next((r for r in runs if r.index == run_id), None)
+    files = discover_log_files(log_dir, include_legacy=ctx.obj.get("show_all", False))
+    run = load_run_by_index(files, run_id)
     if run is None:
-        console.print(f"[red]Run #{run_id} not found.[/red] Available: 1–{len(runs)}")
+        console.print(f"[red]Run #{run_id} not found.[/red] Available: 1–{len(files)}")
         raise SystemExit(1)
 
     log_path = Path(run.file_path) if run.file_path else None
@@ -874,9 +896,8 @@ def sources_cmd(ctx: click.Context, run_id: int) -> None:
 
 def _sources_local(ctx: click.Context, console: Console, run_id: int) -> None:
     log_dir = _resolve_log_dir(ctx, ctx.obj.get("log_dir_override"))
-    runs = _load_all_runs(log_dir)
-
-    run = next((r for r in runs if r.index == run_id), None)
+    files = discover_log_files(log_dir, include_legacy=ctx.obj.get("show_all", False))
+    run = load_run_by_index(files, run_id)
     if run is None:
         console.print(f"[red]Run #{run_id} not found.[/red]")
         raise SystemExit(1)

@@ -8,8 +8,10 @@ from raccoon_cli.logs import (
     discover_log_files,
     find_log_dir,
     is_run_file,
+    load_run_by_index,
     load_runs,
 )
+from raccoon_cli.logs import finder as finder_mod
 from raccoon_cli.logs.finder import _is_log_dir
 
 
@@ -148,6 +150,102 @@ class TestLoadRuns:
         empty = tmp_path / "empty"
         empty.mkdir()
         assert load_runs(discover_log_files(empty)) == []
+
+
+def _make_n_run_files(log_dir: Path, n: int) -> None:
+    """Create *n* per-run files with distinct, chronologically-sortable names."""
+    for i in range(n):
+        started = f"2026-07-01 {10 + i:02d}:00:00"
+        (log_dir / f"libstp-2026-07-01_{10 + i:02d}-00-00.log").write_text(
+            _run_body(started)
+        )
+
+
+class TestLoadRunsLimit:
+    def test_limit_parses_only_newest_files(self, tmp_path: Path, monkeypatch):
+        log_dir = _make_logs_dir(tmp_path)
+        _make_n_run_files(log_dir, 5)
+
+        parsed: list[str] = []
+        real_parse = finder_mod.parse_log_file
+
+        def _spy(path):
+            parsed.append(Path(path).name)
+            return real_parse(path)
+
+        monkeypatch.setattr(finder_mod, "parse_log_file", _spy)
+
+        runs = load_runs(discover_log_files(log_dir), limit=2)
+
+        # Only the two newest files are read from disk...
+        assert parsed == [
+            "libstp-2026-07-01_13-00-00.log",
+            "libstp-2026-07-01_14-00-00.log",
+        ]
+        # ...and they carry the same newest=1 indices as an unlimited load.
+        assert [r.index for r in sorted(runs, key=lambda r: r.index)] == [1, 2]
+
+    def test_limit_indices_match_unlimited(self, tmp_path: Path):
+        log_dir = _make_logs_dir(tmp_path)
+        _make_n_run_files(log_dir, 5)
+        files = discover_log_files(log_dir)
+
+        newest_unlimited = next(r for r in load_runs(files) if r.index == 1)
+        newest_limited = next(r for r in load_runs(files, limit=2) if r.index == 1)
+        assert newest_limited.start_time == newest_unlimited.start_time
+
+    def test_limit_larger_than_count_is_noop(self, tmp_path: Path):
+        log_dir = _make_logs_dir(tmp_path)
+        _make_n_run_files(log_dir, 3)
+        files = discover_log_files(log_dir)
+        assert len(load_runs(files, limit=99)) == 3
+
+
+class TestLoadRunByIndex:
+    def test_parses_only_the_target_file(self, tmp_path: Path, monkeypatch):
+        log_dir = _make_logs_dir(tmp_path)
+        _make_n_run_files(log_dir, 5)
+
+        parsed: list[str] = []
+        real_parse = finder_mod.parse_log_file
+
+        def _spy(path):
+            parsed.append(Path(path).name)
+            return real_parse(path)
+
+        monkeypatch.setattr(finder_mod, "parse_log_file", _spy)
+
+        run = load_run_by_index(discover_log_files(log_dir), 1)
+        assert run is not None
+        assert run.index == 1
+        # newest = 1 → only the newest file is read.
+        assert parsed == ["libstp-2026-07-01_14-00-00.log"]
+
+    def test_index_maps_from_newest(self, tmp_path: Path):
+        log_dir = _make_logs_dir(tmp_path)
+        _make_n_run_files(log_dir, 5)
+        files = discover_log_files(log_dir)
+        # Index 3 is the 3rd-newest file (12:00).
+        run = load_run_by_index(files, 3)
+        assert run is not None
+        assert run.start_time.hour == 12
+
+    def test_out_of_range_returns_none(self, tmp_path: Path):
+        log_dir = _make_logs_dir(tmp_path)
+        _make_n_run_files(log_dir, 2)
+        files = discover_log_files(log_dir)
+        assert load_run_by_index(files, 0) is None
+        assert load_run_by_index(files, 99) is None
+
+    def test_legacy_falls_back_to_full_load(self, tmp_path: Path):
+        log_dir = _make_logs_dir(tmp_path)
+        # A legacy file holding two runs; index 2 must resolve via full load.
+        body = _run_body("2026-07-01 08:00:00") + _run_body("2026-07-01 09:00:00")
+        (log_dir / "libstp.log").write_text(body)
+        files = discover_log_files(log_dir)
+        run = load_run_by_index(files, 2)
+        assert run is not None
+        assert run.index == 2
 
 
 class TestFindLogDir:
