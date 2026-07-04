@@ -7,9 +7,12 @@ Use --local only when explicitly working with local log files.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
+import shutil
 import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -27,7 +30,6 @@ from raccoon_cli.logs import (
     current_log_file,
     discover_log_files,
     find_log_dir,
-    is_run_file,
     load_run_by_index,
     load_runs,
     parse_log_file,
@@ -37,6 +39,12 @@ from raccoon_cli.logs.cmd_trace import (
     resolve_cmd_trace_path,
     run_window_us,
     slice_cmd_trace,
+)
+from raccoon_cli.logs.journal import (
+    bundle_journal_units,
+    collect_journals,
+    journal_manifest_section,
+    write_journal_file,
 )
 
 # ── Colour palette ──────────────────────────────────────────────────
@@ -194,26 +202,21 @@ def _resolve_log_dir(ctx: click.Context, log_dir: Optional[str]) -> Path:
     found = find_log_dir()
     if not found:
         console.print(
-            "[red]No .raccoon/logs/ directory found.[/red]\n"
+            "[red]No .raccoon/runs/ directory with runs found.[/red]\n"
             "[dim]Pass --dir explicitly.[/dim]"
         )
         raise SystemExit(1)
     return found
 
 
-def _load_all_runs(
-    log_dir: Path, include_legacy: bool = True, limit: Optional[int] = None
-) -> List[LogRun]:
-    """Load runs from log files (most recent = index 1).
+def _load_all_runs(log_dir: Path, limit: Optional[int] = None) -> List[LogRun]:
+    """Load runs from JSONL log files (most recent = index 1).
 
-    Each per-run file is a single run; see ``logs.load_runs``. *include_legacy*
-    controls whether pre-per-run rotation files are included. *limit* caps how
+    Each run is a single JSONL file; see ``logs.load_runs``. *limit* caps how
     many of the newest files are parsed (indices are unaffected — they always
     count from the newest run).
     """
-    return load_runs(
-        discover_log_files(log_dir, include_legacy=include_legacy), limit=limit
-    )
+    return load_runs(discover_log_files(log_dir), limit=limit)
 
 
 def _filter_entries(
@@ -244,7 +247,7 @@ def _filter_entries(
 
 
 @click.group(name="logs", invoke_without_command=True)
-@click.option("--dir", "log_dir", default=None, help="Path to a local .raccoon/logs/ directory (implies --local).")
+@click.option("--dir", "log_dir", default=None, help="Path to a local .raccoon/runs/ directory (implies --local).")
 @click.option("-n", "--last", "count", type=int, default=None, help="Show last N runs.")
 @click.option("-a", "--all", "show_all", is_flag=True, help="Also include legacy rotated log files (from before the per-run scheme).")
 @click.option("--local", is_flag=True, help="Read local logs instead of fetching from Pi.")
@@ -286,9 +289,9 @@ def _list_runs_local(
     # Parsing every line of every run file is slow, and the list only needs a
     # summary — so parse just the newest files (an explicit -n, or the default
     # cap). Older runs stay reachable by explicit index (e.g. `logs show 40`).
-    total_files = len(discover_log_files(resolved, include_legacy=show_all))
+    total_files = len(discover_log_files(resolved))
     parse_limit = count if count else DEFAULT_LIST_LIMIT
-    runs = _load_all_runs(resolved, include_legacy=show_all, limit=parse_limit)
+    runs = _load_all_runs(resolved, limit=parse_limit)
 
     if not runs:
         console.print("[dim]No log runs found.[/dim]")
@@ -467,7 +470,7 @@ def _show_run_local(
     no_pager: bool,
 ) -> None:
     log_dir = _resolve_log_dir(ctx, ctx.obj.get("log_dir_override"))
-    files = discover_log_files(log_dir, include_legacy=ctx.obj.get("show_all", False))
+    files = discover_log_files(log_dir)
     run = load_run_by_index(files, run_id)
     if run is None:
         console.print(f"[red]Run #{run_id} not found.[/red] Available: 1–{len(files)}")
@@ -572,79 +575,140 @@ def _bundle_output_dir(explicit: Optional[str], run_index: int, start_time: date
     return base / ".raccoon" / "downloads" / f"run{run_index}_{stamp}"
 
 
-def _write_bundle(
-    console: Console,
-    output_dir: Path,
-    log_file_name: str,
-    log_content: str,
-    run_meta: dict,
-    cmd_trace: dict,
-    *,
-    single_run_file: bool = True,
-) -> None:
-    """Write the log file, filtered cmd_trace, and a manifest into *output_dir*."""
-    output_dir.mkdir(parents=True, exist_ok=True)
+# Canonical artifacts a unified run dir may hold. Presence is discovered at
+# download time; the bundle manifest records name/size/present for each (plus
+# any extra files found, e.g. per-mission ``profile.<Mission>.json``).
+_RUN_ARTIFACTS = ("libstp.jsonl", "localization.jsonl", "profile.json", "run.json")
 
-    log_path = output_dir / log_file_name
-    log_path.write_text(log_content, encoding="utf-8")
 
-    trace_entries = cmd_trace.get("entries", [])
+def _artifact_entries(sizes: dict[str, int]) -> list[dict]:
+    """Manifest artifact list from a name→size map of files in the bundle.
+
+    Canonical run artifacts always appear (present/absent); any extra present
+    files (``profile.M050.json``, ``cmd_trace.jsonl``, …) are appended.
+    """
+    entries: list[dict] = []
+    listed: set[str] = set()
+    for name in _RUN_ARTIFACTS:
+        entries.append(
+            {"name": name, "size": sizes.get(name, 0), "present": name in sizes}
+        )
+        listed.add(name)
+    for name in sorted(sizes):
+        if name not in listed:
+            entries.append({"name": name, "size": sizes[name], "present": True})
+    return entries
+
+
+def _cmd_trace_manifest_section(cmd_trace: dict) -> dict:
+    """The ``cmd_trace`` block of a bundle manifest (no raw entries)."""
+    return {
+        "file": "cmd_trace.jsonl",
+        "source_path": cmd_trace.get("path") or cmd_trace.get("source_path"),
+        "available": cmd_trace.get("available", False),
+        "total_lines": cmd_trace.get("total_lines", 0),
+        "matched_lines": cmd_trace.get("matched_lines", 0),
+        "window_start_us": cmd_trace.get("window_start_us"),
+        "window_end_us": cmd_trace.get("window_end_us"),
+        "pad_secs": cmd_trace.get("pad_secs"),
+    }
+
+
+def _write_cmd_trace_file(output_dir: Path, cmd_trace: dict) -> int:
+    """Write the windowed cmd_trace slice to ``cmd_trace.jsonl``; return its size."""
     trace_path = output_dir / "cmd_trace.jsonl"
     with open(trace_path, "w", encoding="utf-8") as f:
-        for entry in trace_entries:
+        for entry in cmd_trace.get("entries", []):
             f.write(json.dumps(entry) + "\n")
+    return trace_path.stat().st_size
 
-    manifest = {
-        "run": run_meta,
-        "log_file": log_file_name,
-        "single_run_file": single_run_file,
-        "cmd_trace": {
-            "file": "cmd_trace.jsonl",
-            "source_path": cmd_trace.get("path"),
-            "available": cmd_trace.get("available", False),
-            "total_lines": cmd_trace.get("total_lines", 0),
-            "matched_lines": cmd_trace.get("matched_lines", 0),
-            "window_start_us": cmd_trace.get("window_start_us"),
-            "window_end_us": cmd_trace.get("window_end_us"),
-            "pad_secs": cmd_trace.get("pad_secs"),
-        },
-    }
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    # Summary
+def _print_bundle_summary(
+    console: Console,
+    output_dir: Path,
+    run_meta: dict,
+    artifacts: list[dict],
+    cmd_trace: dict,
+    journals: Optional[list[dict]] = None,
+) -> None:
+    """Print a per-file summary (name + size / absent) plus cmd_trace + journals."""
     start = str(run_meta.get("start_time", "")).replace("T", " ")[:19]
+    run_id = run_meta.get("run_id") or ""
     header = (
-        f"Run #{run_meta.get('index')}  |  {start}  |  "
+        f"Run #{run_meta.get('index')}"
+        + (f" ({run_id})" if run_id else "")
+        + f"  |  {start}  |  "
         f"{_format_duration(run_meta.get('duration_secs', 0))}  |  "
         f"{run_meta.get('line_count', 0)} log lines"
     )
     console.print(Panel(header, style="bold", title="Downloaded bundle"))
-    console.print(f"  [cyan]{log_path}[/cyan]")
 
-    if not cmd_trace.get("available"):
+    for art in artifacts:
+        name = art.get("name")
+        if name == "cmd_trace.jsonl" or (name or "").startswith("journal."):
+            continue  # summarised separately below
+        if art.get("present"):
+            console.print(
+                f"  [cyan]{output_dir / name}[/cyan] "
+                f"[dim]({_human_size(art.get('size', 0))})[/dim]"
+            )
+        else:
+            console.print(f"  [dim]{name} — not present[/dim]")
+
+    available = cmd_trace.get("available")
+    matched = cmd_trace.get("matched_lines", 0)
+    total = cmd_trace.get("total_lines", 0)
+    src = cmd_trace.get("path") or cmd_trace.get("source_path")
+    if not available:
         console.print(
             f"  [yellow]cmd_trace.jsonl not found[/yellow] "
-            f"[dim]({cmd_trace.get('path')})[/dim] — wrote empty trace."
+            f"[dim]({src})[/dim] — wrote empty trace."
         )
-    elif cmd_trace.get("matched_lines", 0) == 0:
+    elif matched == 0:
         console.print(
-            f"  [yellow]0 of {cmd_trace.get('total_lines', 0)} cmd_trace lines[/yellow] "
-            f"fell in the run window [dim](reader likely restarted after the run)[/dim]."
+            f"  [yellow]0 of {total} cmd_trace lines[/yellow] fell in the run "
+            f"window [dim](reader likely restarted after the run)[/dim]."
         )
     else:
         console.print(
-            f"  [cyan]{trace_path}[/cyan] "
-            f"[dim]({cmd_trace.get('matched_lines')} of "
-            f"{cmd_trace.get('total_lines')} cmd_trace lines in window)[/dim]"
+            f"  [cyan]{output_dir / 'cmd_trace.jsonl'}[/cyan] "
+            f"[dim]({matched} of {total} cmd_trace lines in window)[/dim]"
         )
 
-    if not single_run_file:
-        console.print(
-            "  [dim]Note: legacy multi-run log file — the .log holds more than this run; "
-            "the cmd_trace slice is still windowed to run "
-            f"#{run_meta.get('index')}.[/dim]"
-        )
+    for section in journals or []:
+        _print_journal_line(console, output_dir, section)
+
     console.print(f"\n[green]Bundle written to[/green] [bold]{output_dir}[/bold]")
+
+
+def _print_journal_line(console: Console, output_dir: Path, section: dict) -> None:
+    """One summary line for a bundled service journal."""
+    label = section.get("label", section.get("unit", "service"))
+    file = section.get("file", "")
+    count = section.get("entry_count", 0)
+    if not section.get("available", False):
+        err = section.get("error") or "unavailable"
+        console.print(
+            f"  [yellow]journal {label} unavailable[/yellow] [dim]({err})[/dim]"
+        )
+    elif count == 0:
+        console.print(
+            f"  [dim]journal {label} — no entries in window[/dim] "
+            f"[dim]({output_dir / file})[/dim]"
+        )
+    else:
+        console.print(
+            f"  [cyan]{output_dir / file}[/cyan] "
+            f"[dim]({count} {label} journal lines in window)[/dim]"
+        )
+
+
+def _human_size(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
 
 
 @logs_group.command(name="download")
@@ -660,10 +724,12 @@ def download_cmd(
     pad_secs: float,
     cmd_trace_path: Optional[str],
 ) -> None:
-    """Download a run's log + the STM32 cmd_trace slice for that timeframe.
+    """Download a run's logs + the STM32 cmd_trace slice for that timeframe.
 
     Bundles the selected run's raw libstp log file together with the
-    stm32-data-reader command trace (cmd_trace.jsonl) filtered to the run's
+    stm32-data-reader command trace (cmd_trace.jsonl) and the journald output of
+    every service raccoon manages — the raccoon-server, the stm32-data-reader,
+    and each service declared in raccoon.project.yml — all filtered to the run's
     wall-clock time window, so a mission can be reconstructed offline for
     debugging.
 
@@ -689,22 +755,61 @@ def _download_local(
     cmd_trace_path: Optional[str],
 ) -> None:
     log_dir = _resolve_log_dir(ctx, ctx.obj.get("log_dir_override"))
-    files = discover_log_files(log_dir, include_legacy=ctx.obj.get("show_all", False))
+    files = discover_log_files(log_dir)
     run = load_run_by_index(files, run_id)
     if run is None:
         console.print(f"[red]Run #{run_id} not found.[/red] Available: 1–{len(files)}")
         raise SystemExit(1)
 
-    log_path = Path(run.file_path) if run.file_path else None
-    if log_path is not None and log_path.is_file():
-        log_content = log_path.read_text(encoding="utf-8", errors="replace")
-        log_file_name = log_path.name
-        single_run_file = is_run_file(log_path)
-    else:
-        log_content = ""
-        log_file_name = f"run-{run_id}.log"
-        single_run_file = False
+    if not run.run_dir:
+        console.print(
+            f"[red]Run #{run_id} has no unified run directory "
+            f"(.raccoon/runs/<run_id>/) to download.[/red]"
+        )
+        raise SystemExit(1)
+    run_dir = Path(run.run_dir)
 
+    cmd_trace = _build_cmd_trace_slice(run, pad_secs, cmd_trace_path)
+    journals = _build_journals_local(run, pad_secs)
+
+    run_meta = {
+        "index": run.index,
+        "run_id": run.run_id,
+        "start_time": run.start_time.isoformat(),
+        "end_time": run.end_time.isoformat(),
+        "duration_secs": run.duration_secs,
+        "line_count": run.line_count,
+    }
+
+    out = _bundle_output_dir(output_dir, run.index, run.start_time)
+    out.mkdir(parents=True, exist_ok=True)
+
+    # Copy every artifact present in the run dir, then add the cmd_trace slice
+    # and the windowed service journals.
+    sizes: dict[str, int] = {}
+    for f in sorted(run_dir.iterdir()):
+        # Skip hidden sidecars (e.g. the .libstp.jsonl.meta.json summary cache).
+        if f.is_file() and not f.name.startswith("."):
+            dest = out / f.name
+            shutil.copy2(f, dest)
+            sizes[f.name] = dest.stat().st_size
+    sizes["cmd_trace.jsonl"] = _write_cmd_trace_file(out, cmd_trace)
+    for section in journals:
+        sizes[section["file"]] = write_journal_file(out, section)
+
+    artifacts = _artifact_entries(sizes)
+    manifest = {
+        "run": run_meta,
+        "artifacts": artifacts,
+        "cmd_trace": _cmd_trace_manifest_section(cmd_trace),
+        "journals": [journal_manifest_section(s) for s in journals],
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    _print_bundle_summary(console, out, run_meta, artifacts, cmd_trace, journals)
+
+
+def _build_cmd_trace_slice(run, pad_secs: float, cmd_trace_path: Optional[str]) -> dict:
+    """Load and window the STM32 cmd_trace to *run*'s wall-clock time window."""
     start_us, end_us = run_window_us(run.start_time, run.end_time, pad_secs)
     trace_path = Path(cmd_trace_path) if cmd_trace_path else resolve_cmd_trace_path()
     cmd_trace: dict = {
@@ -726,19 +831,26 @@ def _download_local(
             matched_lines=len(matched),
             entries=matched,
         )
+    return cmd_trace
 
-    run_meta = {
-        "index": run.index,
-        "start_time": run.start_time.isoformat(),
-        "end_time": run.end_time.isoformat(),
-        "duration_secs": run.duration_secs,
-        "line_count": run.line_count,
-    }
-    out = _bundle_output_dir(output_dir, run.index, run.start_time)
-    _write_bundle(
-        console, out, log_file_name, log_content, run_meta, cmd_trace,
-        single_run_file=single_run_file,
-    )
+
+def _build_journals_local(run, pad_secs: float) -> list[dict]:
+    """Collect windowed journald slices for raccoon-managed services.
+
+    Only meaningful when downloading on the Pi itself (``--local`` there) — off
+    the robot journalctl won't know these units and each section is simply
+    recorded as unavailable, keeping the bundle self-documenting.
+    """
+    from raccoon_cli.project import find_project_root, ProjectError
+
+    try:
+        project_path = find_project_root()
+    except ProjectError:
+        project_path = None
+
+    start_us, end_us = run_window_us(run.start_time, run.end_time, pad_secs)
+    units = bundle_journal_units(project_path)
+    return collect_journals(units, start_us, end_us)
 
 
 async def _download_remote(
@@ -759,27 +871,45 @@ async def _download_remote(
 
     async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
         try:
-            data = await client.download_log_bundle(project_uuid, run_id, pad_secs)
+            zip_bytes = await client.download_log_bundle(project_uuid, run_id, pad_secs)
         except Exception as e:
             console.print(f"[red]Failed to download run: {e}[/red]")
             raise SystemExit(1)
 
-    run_meta = data.get("run", {})
-    start_iso = run_meta.get("start_time", "")
     try:
-        start_dt = datetime.fromisoformat(start_iso)
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile:
+        console.print("[red]Server returned an invalid bundle (not a zip).[/red]")
+        raise SystemExit(1)
+
+    names = zf.namelist()
+    manifest = json.loads(zf.read("manifest.json")) if "manifest.json" in names else {}
+    run_meta = manifest.get("run", {})
+    try:
+        start_dt = datetime.fromisoformat(run_meta.get("start_time", ""))
     except ValueError:
         start_dt = datetime.now()
 
     out = _bundle_output_dir(output_dir, run_meta.get("index", run_id), start_dt)
-    _write_bundle(
+    out.mkdir(parents=True, exist_ok=True)
+    zf.extractall(out)
+
+    # Prefer the manifest the server built; fall back to what actually landed.
+    artifacts = manifest.get("artifacts")
+    if not artifacts:
+        sizes = {
+            p.name: p.stat().st_size
+            for p in out.iterdir()
+            if p.is_file() and p.name != "manifest.json"
+        }
+        artifacts = _artifact_entries(sizes)
+    _print_bundle_summary(
         console,
         out,
-        data.get("log_file_name", f"run-{run_id}.log"),
-        data.get("log_content", ""),
         run_meta,
-        data.get("cmd_trace", {}),
-        single_run_file=data.get("single_run_file", True),
+        artifacts,
+        manifest.get("cmd_trace", {}),
+        manifest.get("journals", []),
     )
 
 
@@ -927,7 +1057,7 @@ def sources_cmd(ctx: click.Context, run_id: int) -> None:
 
 def _sources_local(ctx: click.Context, console: Console, run_id: int) -> None:
     log_dir = _resolve_log_dir(ctx, ctx.obj.get("log_dir_override"))
-    files = discover_log_files(log_dir, include_legacy=ctx.obj.get("show_all", False))
+    files = discover_log_files(log_dir)
     run = load_run_by_index(files, run_id)
     if run is None:
         console.print(f"[red]Run #{run_id} not found.[/red]")

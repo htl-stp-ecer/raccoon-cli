@@ -29,7 +29,11 @@ from raccoon_cli.run_configurations import (
     RunConfiguration,
     load_run_configurations,
 )
-from raccoon_cli.run_recording import make_run_id, recording_rel_path
+from raccoon_cli.run_recording import (
+    build_run_env,
+    make_run_id,
+    write_run_manifest,
+)
 
 logger = logging.getLogger("raccoon")
 
@@ -78,11 +82,35 @@ def _extract_skip_missions(args: tuple) -> tuple[tuple, set[int]]:
     return tuple(remaining), skip
 
 
-def _allocate_recording_path(record_localization: bool) -> tuple[str | None, str | None]:
-    if not record_localization:
-        return None, None
-    run_id = make_run_id()
-    return recording_rel_path(run_id), run_id
+def _missions_from_args(args: tuple) -> list[str]:
+    """Positional (non-flag) args a user passed to ``raccoon run`` — the missions.
+
+    ``raccoon run M050 M060`` → ``["M050", "M060"]``. Flags (``--dev`` etc.) and
+    their values are already stripped upstream, so anything not starting with
+    ``-`` is a mission selector recorded in the manifest.
+    """
+    return [a for a in args if not a.startswith("-")]
+
+
+def _announce_run_dir(
+    console: Console,
+    run_dir: Path,
+    *,
+    remote: bool,
+    record_localization: bool,
+    profile: bool,
+) -> None:
+    """Tell the user where artifacts land and what's being recorded."""
+    where = "on Pi → " if remote else ""
+    parts = ["log"]
+    if record_localization:
+        parts.append("localization")
+    if profile:
+        parts.append("profile")
+    console.print(
+        f"[cyan]Run artifacts {where}{run_dir}[/cyan] "
+        f"[dim](recording: {', '.join(parts)})[/dim]"
+    )
 
 
 _WARN_ERROR_RE = re.compile(r"\b(WARNING|WARN|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
@@ -438,20 +466,24 @@ def _run_local_with_tui(
     project_root: Path,
     env: dict,
     console: Console,
+    log_path: Path | None = None,
 ) -> int:
     """Run the child with its stdout suppressed and stream its JSONL log live.
 
-    The child writes ``.raccoon/logs/libstp-<ts>.jsonl`` (full detail) and only
-    warn/error to stdout; we send stdout to /dev/null and render the JSONL in a
-    live TUI instead. stderr is captured to a temp file (a pipe could deadlock
-    if a traceback fills the buffer) and its tail is shown on a non-zero exit.
+    The child writes its run log to ``<run_dir>/libstp.jsonl`` with full detail
+    and only warn/error to stdout; we send stdout to /dev/null and render the
+    JSONL in a live TUI instead. stderr is captured to a temp file (a pipe could
+    deadlock if a traceback fills the buffer) and its tail is shown on a non-zero
+    exit.
+
+    When *log_path* is given (the exact ``<run_dir>/libstp.jsonl`` this run will
+    write), the streamer tails it directly — race-free, no newest-file discovery.
     """
     import tempfile
 
     from raccoon_cli.logs.live_stream import stream_run_logs
 
-    log_dir = project_root / ".raccoon" / "logs"
-    existing = set(log_dir.glob("libstp-*.jsonl")) if log_dir.is_dir() else set()
+    runs_dir = project_root / ".raccoon" / "runs"
     title = project_root.name
 
     err_file = tempfile.TemporaryFile(mode="w+b")
@@ -478,11 +510,11 @@ def _run_local_with_tui(
     try:
         try:
             streamed = stream_run_logs(
-                log_dir,
+                runs_dir,
                 is_running=lambda: proc.poll() is None,
                 console=console,
                 title=title,
-                existing=existing,
+                log_path=log_path,
             )
         except Exception as exc:  # never let a TUI glitch kill the run
             console.print(f"[yellow]Live log view unavailable ({exc}); waiting…[/yellow]")
@@ -496,7 +528,7 @@ def _run_local_with_tui(
 
     if not streamed:
         console.print(
-            "[dim]No .raccoon/logs/*.jsonl appeared for this run "
+            "[dim]No .raccoon/runs/*/libstp.jsonl appeared for this run "
             "(use [cyan]--raw[/cyan] to see the program's stdout directly).[/dim]"
         )
 
@@ -533,13 +565,17 @@ def _run_local(
     no_checkpoints: bool = False,
     debug: bool = False,
     skip_missions: set[int] | None = None,
-    record_localization: bool = False,
+    record_localization: bool = True,
+    profile: bool = True,
     record_hz: float | None = None,
     extra_env: dict | None = None,
     raw: bool = False,
+    run_id: str | None = None,
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
+    if run_id is None:
+        run_id = make_run_id()
 
     if config.get("auto_checkpoints", True):
         result = create_checkpoint(project_root, label="pre-run")
@@ -603,16 +639,32 @@ def _run_local(
         for key, value in extra_env.items():
             env.setdefault(key, str(value))
 
-    rec_path, rec_ts = _allocate_recording_path(record_localization)
-    if rec_path is not None:
-        (project_root / rec_path).parent.mkdir(parents=True, exist_ok=True)
-        env["LIBSTP_RECORD_LOCALIZATION"] = "1"
-        env["LIBSTP_RECORDING_PATH"] = rec_path
-        if record_hz is not None:
-            env["LIBSTP_RECORDING_HZ"] = str(record_hz)
-        console.print(
-            f"[cyan]Recording localization → {rec_path}[/cyan] (run id: {rec_ts})"
-        )
+    # Unified per-run artifact dir: write the manifest, then point raccoon-lib's
+    # log / localization / profile writers at .raccoon/runs/<run_id>/. The log
+    # dir is absolute so it's robust regardless of the child's cwd.
+    run_dir = write_run_manifest(
+        project_root,
+        run_id,
+        missions=_missions_from_args(args),
+        args=list(args),
+        record_localization=record_localization,
+        profile=profile,
+        project=config.get("name") if isinstance(config, dict) else None,
+    )
+    for key, value in build_run_env(
+        run_id,
+        absolute=True,
+        project_path=project_root,
+        record_localization=record_localization,
+        profile=profile,
+        record_hz=record_hz,
+    ).items():
+        env[key] = value
+    _announce_run_dir(
+        console, run_dir, remote=False,
+        record_localization=record_localization, profile=profile,
+    )
+    run_log_path = run_dir / "libstp.jsonl"
 
     # On Windows, Ctrl+C doesn't reliably propagate to child processes.
     # Use Popen so we can catch SIGINT ourselves and terminate the child.
@@ -624,12 +676,14 @@ def _run_local(
     # activate — FORCE_COLOR alone only helps libraries that check that env var.
     # Prefer the live JSONL TUI on an interactive terminal: the child's stdout
     # now carries only warn/error, while the full run detail is streamed from
-    # .raccoon/logs/libstp-*.jsonl into a scrolling viewer. --raw (or a non-TTY)
-    # falls back to inheriting the child's stdout directly.
+    # .raccoon/runs/<run_id>/libstp.jsonl into a scrolling viewer. --raw (or a
+    # non-TTY) falls back to inheriting the child's stdout directly.
     use_tui = sys.stdout.isatty() and not raw and os.environ.get("RACCOON_RUN_RAW") != "1"
 
     if use_tui:
-        returncode = _run_local_with_tui(cmd_parts, project_root, env, console)
+        returncode = _run_local_with_tui(
+            cmd_parts, project_root, env, console, log_path=run_log_path
+        )
     elif sys.platform == "win32" or sys.stdout.isatty():
         with _active_program_lock():
             _ensure_single_active_program(project_root, console)
@@ -708,12 +762,16 @@ async def _run_remote(
     no_checkpoints: bool = False,
     debug: bool = False,
     skip_missions: set[int] | None = None,
-    record_localization: bool = False,
+    record_localization: bool = True,
+    profile: bool = True,
     record_hz: float | None = None,
     extra_env: dict | None = None,
+    run_id: str | None = None,
 ) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
+    if run_id is None:
+        run_id = make_run_id()
 
     if config.get("auto_checkpoints", True):
         result = create_checkpoint(project_root, label="pre-run")
@@ -780,16 +838,31 @@ async def _run_remote(
             if extra_env:
                 for key, value in extra_env.items():
                     env.setdefault(key, str(value))
-            rec_path, rec_ts = _allocate_recording_path(record_localization)
-            if rec_path is not None:
-                env["LIBSTP_RECORD_LOCALIZATION"] = "1"
-                env["LIBSTP_RECORDING_PATH"] = rec_path
-                if record_hz is not None:
-                    env["LIBSTP_RECORDING_HZ"] = str(record_hz)
-                console.print(
-                    f"[cyan]Recording localization on Pi → {rec_path}[/cyan] "
-                    f"(run id: {rec_ts}; pulled back after run)"
-                )
+            # Unified per-run artifact dir. The Pi writes into the synced
+            # project's .raccoon/runs/<run_id>/ (relative paths — the abs
+            # laptop path is meaningless there); we pre-create the same dir
+            # locally with the manifest so the pull-back sync merges cleanly.
+            run_dir = write_run_manifest(
+                project_root,
+                run_id,
+                missions=_missions_from_args(args),
+                args=list(args),
+                record_localization=record_localization,
+                profile=profile,
+                project=project_name,
+            )
+            for key, value in build_run_env(
+                run_id,
+                absolute=False,
+                record_localization=record_localization,
+                profile=profile,
+                record_hz=record_hz,
+            ).items():
+                env[key] = value
+            _announce_run_dir(
+                console, run_dir, remote=True,
+                record_localization=record_localization, profile=profile,
+            )
             result = await client.run_project(project_uuid, args=list(args), env=env)
         except Exception as e:
             console.print(f"[red]Failed to start run on Pi: {e}[/red]")
@@ -937,13 +1010,23 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
 @click.option(
     "--record-localization",
     is_flag=True,
-    help="Record particle filter state during the run to .raccoon/runs/<ts>/localization.jsonl for replay in the Web-IDE.",
+    help="(Default on) Record particle-filter state to .raccoon/runs/<run_id>/localization.jsonl. Kept for compatibility; use --no-record to disable.",
+)
+@click.option(
+    "--no-record",
+    is_flag=True,
+    help="Disable localization recording for this run (recording is on by default).",
+)
+@click.option(
+    "--no-profile",
+    is_flag=True,
+    help="Disable step profiling for this run (profiling is on by default).",
 )
 @click.option(
     "--record-hz",
     type=float,
     default=None,
-    help="Recorder downsample rate in Hz (default 20). Only effective with --record-localization.",
+    help="Localization recorder downsample rate in Hz (default 20).",
 )
 @click.option(
     "--raw",
@@ -962,6 +1045,8 @@ def run_command(
     no_checkpoints: bool,
     debug: bool,
     record_localization: bool,
+    no_record: bool,
+    no_profile: bool,
     record_hz: float | None,
     raw: bool,
 ) -> None:
@@ -978,6 +1063,12 @@ def run_command(
     Use --no-mN (e.g. --no-m0 --no-m2) to skip missions at those order indices.
     """
     console: Console = ctx.obj["console"]
+
+    # Localization recording and step profiling are ON BY DEFAULT; --no-record
+    # and --no-profile opt out. (--record-localization is kept for compat and is
+    # a no-op now that recording defaults on.)
+    record_localization = not no_record
+    profile = not no_profile
 
     # Parse --no-mN flags out of the raw args before forwarding the rest
     args, skip_missions = _extract_skip_missions(args)
@@ -1011,7 +1102,10 @@ def run_command(
             debug = debug or run_cfg.debug
             no_codegen = no_codegen or run_cfg.no_codegen
             no_sync = no_sync or run_cfg.no_sync
-            record_localization = record_localization or run_cfg.record_localization
+            # A run config can opt out of either (its fields default True), but it
+            # never re-enables what the CLI --no-* flags disabled.
+            record_localization = record_localization and run_cfg.record_localization
+            profile = profile and run_cfg.profile
             if record_hz is None and run_cfg.record_hz is not None:
                 record_hz = run_cfg.record_hz
             if run_cfg.target == "local":
@@ -1023,6 +1117,10 @@ def run_command(
             extra_env = dict(run_cfg.env)
 
         _warn_if_migrations_pending(console, project_root)
+
+        # One run_id for this invocation — names the unified artifact dir
+        # .raccoon/runs/<run_id>/ for the log, localization, profile, manifest.
+        run_id = make_run_id()
 
         # Check if we should run remotely
         if not local:
@@ -1080,8 +1178,10 @@ def run_command(
                         debug=debug,
                         skip_missions=skip_missions,
                         record_localization=record_localization,
+                        profile=profile,
                         record_hz=record_hz,
                         extra_env=extra_env,
+                        run_id=run_id,
                     )
                 )
                 return
@@ -1107,9 +1207,11 @@ def run_command(
             debug=debug,
             skip_missions=skip_missions,
             record_localization=record_localization,
+            profile=profile,
             record_hz=record_hz,
             extra_env=extra_env,
             raw=raw,
+            run_id=run_id,
         )
 
     except ProjectError as exc:

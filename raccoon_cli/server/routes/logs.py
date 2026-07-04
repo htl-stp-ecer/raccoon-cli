@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import subprocess
+import zipfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from raccoon_cli.logs import (
     DEFAULT_LIST_LIMIT,
     current_log_file,
     discover_log_files,
-    is_run_file,
     load_run_by_index,
     load_runs,
 )
@@ -23,6 +24,13 @@ from raccoon_cli.logs.cmd_trace import (
     resolve_cmd_trace_path,
     run_window_us,
     slice_cmd_trace,
+)
+from raccoon_cli.logs.journal import (
+    bundle_journal_units,
+    collect_journals,
+    journal_file_body,
+    journal_manifest_section,
+    journalctl_lines,
 )
 from raccoon_cli.project import load_project_config
 from raccoon_cli.project_services import load_project_services
@@ -44,26 +52,25 @@ def _get_project_path_or_404(project_id: str) -> Path:
 
 def _get_log_dir_or_404(project_id: str) -> Path:
     project_path = _get_project_path_or_404(project_id)
-    log_dir = project_path / ".raccoon" / "logs"
-    if not log_dir.is_dir() or current_log_file(log_dir) is None:
-        raise HTTPException(status_code=404, detail="No logs directory found for this project")
+    # Every run lives in .raccoon/runs/<run_id>/ (unified per-run dirs), each with
+    # its own libstp.jsonl. 404 only when there are no runs at all.
+    log_dir = project_path / ".raccoon" / "runs"
+    if current_log_file(log_dir) is None:
+        raise HTTPException(status_code=404, detail="No logs found for this project")
     return log_dir
 
 
-def _load_runs(log_dir: Path, include_rotated: bool = False, limit: Optional[int] = None):
-    # Every run is its own file now, so the default returns all recent runs.
-    # ``include_rotated`` additionally folds in legacy rotation files from
-    # before the per-run scheme. ``limit`` caps how many of the newest files are
-    # parsed so listing stays fast on projects with many runs.
-    return load_runs(
-        discover_log_files(log_dir, include_legacy=include_rotated), limit=limit
-    )
+def _load_runs(log_dir: Path, limit: Optional[int] = None):
+    # Every run is its own JSONL file now, so this returns all recent runs.
+    # ``limit`` caps how many of the newest files are parsed so listing stays
+    # fast on projects with many runs.
+    return load_runs(discover_log_files(log_dir), limit=limit)
 
 
 @router.get("/{project_id}/runs")
 async def list_runs(
     project_id: str,
-    include_rotated: bool = Query(False, alias="all"),
+    include_rotated: bool = Query(False, alias="all"),  # retained for the ?all= alias
     count: Optional[int] = Query(None, alias="n"),
 ):
     """List detected log runs for a project."""
@@ -71,11 +78,9 @@ async def list_runs(
 
     # Parse only the newest files: an explicit ``n`` (what the caller will show)
     # or the default cap. Older runs are still reachable by explicit index.
-    total_files = len(discover_log_files(log_dir, include_legacy=include_rotated))
+    total_files = len(discover_log_files(log_dir))
     parse_limit = count if count else DEFAULT_LIST_LIMIT
-    runs = await asyncio.to_thread(
-        _load_runs, log_dir, include_rotated, parse_limit
-    )
+    runs = await asyncio.to_thread(_load_runs, log_dir, parse_limit)
 
     if count:
         runs = sorted(runs, key=lambda r: r.index)[:count]
@@ -113,7 +118,7 @@ async def get_run(
     import re as re_mod
 
     log_dir = _get_log_dir_or_404(project_id)
-    files = discover_log_files(log_dir, include_legacy=include_rotated)
+    files = discover_log_files(log_dir)
     run = await asyncio.to_thread(load_run_by_index, files, run_index)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run #{run_index} not found")
@@ -158,42 +163,109 @@ async def get_run(
     }
 
 
+_CANONICAL_ARTIFACTS = ("libstp.jsonl", "localization.jsonl", "profile.json", "run.json")
+
+
+def _artifact_entries(sizes: dict[str, int]) -> list[dict]:
+    """Bundle-manifest artifact list from a name→size map (canonical + extras)."""
+    entries: list[dict] = []
+    listed: set[str] = set()
+    for name in _CANONICAL_ARTIFACTS:
+        entries.append(
+            {"name": name, "size": sizes.get(name, 0), "present": name in sizes}
+        )
+        listed.add(name)
+    for name in sorted(sizes):
+        if name not in listed:
+            entries.append({"name": name, "size": sizes[name], "present": True})
+    return entries
+
+
+def _build_run_bundle_zip(
+    run, run_dir: Path, cmd_trace: dict, journals: list[dict]
+) -> bytes:
+    """Zip the run dir + cmd_trace slice + service journals + manifest; bytes."""
+    trace_body = "".join(
+        json.dumps(entry) + "\n" for entry in cmd_trace.get("entries", [])
+    )
+    run_meta = {
+        "index": run.index,
+        "run_id": run.run_id,
+        "start_time": run.start_time.isoformat(),
+        "end_time": run.end_time.isoformat(),
+        "duration_secs": run.duration_secs,
+        "line_count": run.line_count,
+    }
+
+    buf = io.BytesIO()
+    sizes: dict[str, int] = {}
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(run_dir.iterdir()):
+            # Skip hidden sidecars (e.g. the .libstp.jsonl.meta.json cache).
+            if f.is_file() and not f.name.startswith("."):
+                data = f.read_bytes()
+                zf.writestr(f.name, data)
+                sizes[f.name] = len(data)
+        zf.writestr("cmd_trace.jsonl", trace_body)
+        sizes["cmd_trace.jsonl"] = len(trace_body.encode("utf-8"))
+
+        for section in journals:
+            body = journal_file_body(section)
+            zf.writestr(section["file"], body)
+            sizes[section["file"]] = len(body.encode("utf-8"))
+
+        manifest = {
+            "run": run_meta,
+            "artifacts": _artifact_entries(sizes),
+            "cmd_trace": {
+                "file": "cmd_trace.jsonl",
+                "source_path": cmd_trace.get("path"),
+                "available": cmd_trace.get("available", False),
+                "total_lines": cmd_trace.get("total_lines", 0),
+                "matched_lines": cmd_trace.get("matched_lines", 0),
+                "window_start_us": cmd_trace.get("window_start_us"),
+                "window_end_us": cmd_trace.get("window_end_us"),
+                "pad_secs": cmd_trace.get("pad_secs"),
+            },
+            "journals": [journal_manifest_section(s) for s in journals],
+        }
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+    return buf.getvalue()
+
+
 @router.get("/{project_id}/runs/{run_index}/bundle")
 async def get_run_bundle(
     project_id: str,
     run_index: int,
     pad_secs: float = Query(2.0, alias="pad", ge=0, le=60),
 ):
-    """Bundle a run's raw log file with the STM32 cmd_trace slice for its window.
+    """Zip a run's whole artifact directory + the STM32 cmd_trace slice.
 
-    Returns the selected run's raw libstp log content together with the
-    stm32-data-reader command trace (``cmd_trace.jsonl``) filtered to the run's
-    wall-clock time window, so a mission can be reconstructed offline for
-    debugging. The trace is truncated on each reader restart, so it only overlaps
-    the run when the reader wasn't restarted afterwards; ``matched_lines`` reports
-    how much actually fell inside the window.
+    Returns ``application/zip`` containing every file in the run's
+    ``.raccoon/runs/<run_id>/`` directory (log, localization, profile, manifest)
+    plus the stm32-data-reader command trace (``cmd_trace.jsonl``) filtered to
+    the run's wall-clock window and a ``manifest.json`` describing the bundle.
+    The trace is truncated on each reader restart, so it only overlaps the run
+    when the reader wasn't restarted afterwards; ``matched_lines`` reports how
+    much actually fell inside the window.
+
+    The bundle also carries the journald output — sliced to the same window — of
+    every service raccoon manages: the raccoon-server, the stm32-data-reader, and
+    each service declared in the project's ``raccoon.project.yml``. Each lands as
+    ``journal.<service>.jsonl`` with a ``journals`` manifest section.
     """
+    project_path = _get_project_path_or_404(project_id)
     log_dir = _get_log_dir_or_404(project_id)
-    # Include legacy files so any listed run index resolves to a bundle.
-    files = discover_log_files(log_dir, include_legacy=True)
+    files = discover_log_files(log_dir)
     run = await asyncio.to_thread(load_run_by_index, files, run_index)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run #{run_index} not found")
-
-    # Per-run files hold exactly one run == the whole file, so the raw content is
-    # faithful. Legacy multi-run files are shipped whole (the client is told via
-    # ``single_run_file``); the cmd_trace slice below is still windowed to the run.
-    log_path = Path(run.file_path) if run.file_path else None
-    if log_path is not None and log_path.is_file():
-        log_content = await asyncio.to_thread(
-            log_path.read_text, encoding="utf-8", errors="replace"
+    if not run.run_dir:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Run #{run_index} has no unified run directory to bundle",
         )
-        log_file_name = log_path.name
-        single_run_file = is_run_file(log_path)
-    else:
-        log_content = ""
-        log_file_name = f"run-{run_index}.log"
-        single_run_file = False
+    run_dir = Path(run.run_dir)
 
     start_us, end_us = run_window_us(run.start_time, run.end_time, pad_secs)
     trace_path = resolve_cmd_trace_path()
@@ -217,20 +289,18 @@ async def get_run_bundle(
             entries=matched,
         )
 
-    return {
-        "project_id": project_id,
-        "run": {
-            "index": run.index,
-            "start_time": run.start_time.isoformat(),
-            "end_time": run.end_time.isoformat(),
-            "duration_secs": run.duration_secs,
-            "line_count": run.line_count,
-        },
-        "log_file_name": log_file_name,
-        "single_run_file": single_run_file,
-        "log_content": log_content,
-        "cmd_trace": cmd_trace,
-    }
+    units = bundle_journal_units(project_path)
+    journals = await asyncio.to_thread(collect_journals, units, start_us, end_us)
+
+    zip_bytes = await asyncio.to_thread(
+        _build_run_bundle_zip, run, run_dir, cmd_trace, journals
+    )
+    filename = f"run-{run.run_id or run_index}.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.delete("/{project_id}")
@@ -264,18 +334,6 @@ _SYSTEMCTL_PROPS = (
     "Id,ActiveState,SubState,LoadState,MainPID,NRestarts,"
     "ActiveEnterTimestamp,ActiveExitTimestamp"
 )
-
-# journald PRIORITY → log level name (RFC 5424)
-_JOURNAL_PRIORITY = {
-    "0": "EMERG",
-    "1": "ALERT",
-    "2": "CRITICAL",
-    "3": "ERROR",
-    "4": "WARN",
-    "5": "NOTICE",
-    "6": "INFO",
-    "7": "DEBUG",
-}
 
 
 def _load_configured_services(project_path: Path):
@@ -333,57 +391,6 @@ async def list_services(project_id: str):
     return {"project_id": project_id, "services": result}
 
 
-def _journalctl(unit: str, lines: int) -> list[dict]:
-    """Fetch the last N journal entries for a unit as parsed JSON dicts."""
-    proc = subprocess.run(
-        [
-            "journalctl",
-            "-u",
-            unit,
-            "-n",
-            str(lines),
-            "--no-pager",
-            "-o",
-            "json",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or f"journalctl exited {proc.returncode}")
-
-    entries: list[dict] = []
-    for raw in proc.stdout.splitlines():
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            obj = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        ts_us = obj.get("__REALTIME_TIMESTAMP")
-        try:
-            ts_iso = ""
-            if ts_us:
-                from datetime import datetime, timezone
-
-                ts_iso = datetime.fromtimestamp(
-                    int(ts_us) / 1_000_000, tz=timezone.utc
-                ).isoformat()
-        except (ValueError, TypeError):
-            ts_iso = ""
-        entries.append(
-            {
-                "timestamp": ts_iso,
-                "level": _JOURNAL_PRIORITY.get(str(obj.get("PRIORITY", "6")), "INFO"),
-                "message": obj.get("MESSAGE", ""),
-                "pid": obj.get("_PID", ""),
-                "identifier": obj.get("SYSLOG_IDENTIFIER", ""),
-            }
-        )
-    return entries
-
-
 @router.get("/{project_id}/services/{service_name}/journal")
 async def get_service_journal(
     project_id: str,
@@ -401,7 +408,7 @@ async def get_service_journal(
         )
 
     try:
-        entries = await asyncio.to_thread(_journalctl, svc.systemd_name, lines)
+        entries = await asyncio.to_thread(journalctl_lines, svc.systemd_name, lines)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

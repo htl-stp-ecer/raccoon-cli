@@ -1,8 +1,7 @@
-"""Tests for log-file discovery (per-run dated files + legacy fallback)."""
+"""Tests for run discovery under ``.raccoon/runs/`` (one JSONL log per run dir)."""
 
 import json
 from pathlib import Path
-from textwrap import dedent
 
 from raccoon_cli.logs import (
     current_log_file,
@@ -16,10 +15,10 @@ from raccoon_cli.logs import finder as finder_mod
 from raccoon_cli.logs.finder import _is_log_dir
 
 
-def _make_logs_dir(root: Path) -> Path:
-    log_dir = root / ".raccoon" / "logs"
-    log_dir.mkdir(parents=True)
-    return log_dir
+def _make_runs_dir(root: Path) -> Path:
+    runs_dir = root / ".raccoon" / "runs"
+    runs_dir.mkdir(parents=True)
+    return runs_dir
 
 
 def _jsonl_body(iso_prefix: str) -> str:
@@ -33,40 +32,51 @@ def _jsonl_body(iso_prefix: str) -> str:
     return "\n".join(json.dumps(x) for x in lines) + "\n"
 
 
-def _run_body(started: str) -> str:
-    """A minimal per-run log body: run-start marker + a couple of lines."""
-    return dedent(
-        f"""\
-        {started} |     0.000s | info     |                                | Logging to directory: /logs
-        {started} |     0.001s | info     | p.Motor.cpp                    | Motor init
-        {started} |     0.500s | warning  | test.cpp                       | low battery
-        """
-    )
+def _run_body(iso_prefix: str) -> str:
+    """A 3-record per-run JSONL body (INFO, INFO, WARN)."""
+    lines = [
+        {"t": f"{iso_prefix}.000", "elapsed": 0.0, "seq": 0, "level": "info",
+         "file": "/x/api.py", "line": 1, "func": "Robot.start", "msg": "start"},
+        {"t": f"{iso_prefix}.001", "elapsed": 0.001, "seq": 1, "level": "info",
+         "file": "/x/motor.py", "line": 2, "func": "Motor.init", "msg": "init"},
+        {"t": f"{iso_prefix}.500", "elapsed": 0.5, "seq": 2, "level": "warning",
+         "file": "/x/test.py", "line": 3, "func": "t", "msg": "low battery"},
+    ]
+    return "\n".join(json.dumps(x) for x in lines) + "\n"
 
 
-class TestDiscoverPerRunFiles:
-    def test_sorted_chronologically(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        # Written out of order on disk; must come back oldest → newest.
-        for name in (
-            "libstp-2026-07-01_10-00-00.log",
-            "libstp-2026-06-29_23-59-59.log",
-            "libstp-2026-07-01_09-00-00.log",
-        ):
-            (log_dir / name).write_text("x")
+def _make_run(root: Path, run_id: str, iso_prefix: str, *, body=None) -> Path:
+    """Create a ``.raccoon/runs/<run_id>/`` dir with a libstp.jsonl log."""
+    run_dir = root / ".raccoon" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "libstp.jsonl").write_text((body or _jsonl_body)(iso_prefix))
+    (run_dir / "localization.jsonl").write_text('{"t_ns":0}\n')
+    (run_dir / "run.json").write_text(f'{{"run_id":"{run_id}"}}\n')
+    return run_dir
 
-        assert [p.name for p in discover_log_files(log_dir)] == [
-            "libstp-2026-06-29_23-59-59.log",
-            "libstp-2026-07-01_09-00-00.log",
-            "libstp-2026-07-01_10-00-00.log",
+
+def _runs_dir(root: Path) -> Path:
+    return root / ".raccoon" / "runs"
+
+
+class TestDiscover:
+    def test_run_dirs_sorted_chronologically(self, tmp_path: Path):
+        # Created out of order; must come back oldest → newest by run_id.
+        _make_run(tmp_path, "20260701T100000Z", "2026-07-01T10:00:00")
+        _make_run(tmp_path, "20260629T235959Z", "2026-06-29T23:59:59")
+        _make_run(tmp_path, "20260701T090000Z", "2026-07-01T09:00:00")
+
+        assert [p.parent.name for p in discover_log_files(_runs_dir(tmp_path))] == [
+            "20260629T235959Z",
+            "20260701T090000Z",
+            "20260701T100000Z",
         ]
 
     def test_current_is_newest(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        (log_dir / "libstp-2026-06-29_00-00-00.log").write_text("x")
-        (log_dir / "libstp-2026-07-01_12-00-00.log").write_text("x")
-
-        assert current_log_file(log_dir).name == "libstp-2026-07-01_12-00-00.log"
+        _make_run(tmp_path, "20260629T000000Z", "2026-06-29T00:00:00")
+        _make_run(tmp_path, "20260701T120000Z", "2026-07-01T12:00:00")
+        cur = current_log_file(_runs_dir(tmp_path))
+        assert cur is not None and cur.parent.name == "20260701T120000Z"
 
     def test_current_none_when_empty(self, tmp_path: Path):
         empty = tmp_path / "empty"
@@ -74,151 +84,60 @@ class TestDiscoverPerRunFiles:
         assert current_log_file(empty) is None
         assert discover_log_files(empty) == []
 
+    def test_missing_runs_dir_is_empty(self, tmp_path: Path):
+        # No .raccoon/runs at all.
+        assert discover_log_files(tmp_path / ".raccoon" / "runs") == []
 
-class TestDiscoverJsonl:
-    def test_jsonl_files_discovered_and_sorted(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        for name in (
-            "libstp-2026-07-04_10-00-00.jsonl",
-            "libstp-2026-07-03_23-59-59.jsonl",
-            "libstp-2026-07-04_09-00-00.jsonl",
-        ):
-            (log_dir / name).write_text("{}\n")
+    def test_run_dir_without_log_is_skipped(self, tmp_path: Path):
+        run_dir = tmp_path / ".raccoon" / "runs" / "20260704T130000Z"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text("{}\n")  # manifest but no libstp.jsonl
+        assert discover_log_files(_runs_dir(tmp_path)) == []
 
-        assert [p.name for p in discover_log_files(log_dir)] == [
-            "libstp-2026-07-03_23-59-59.jsonl",
-            "libstp-2026-07-04_09-00-00.jsonl",
-            "libstp-2026-07-04_10-00-00.jsonl",
-        ]
-        assert current_log_file(log_dir).name == "libstp-2026-07-04_10-00-00.jsonl"
-
-    def test_mixed_jsonl_and_log_sorted_by_timestamp(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        (log_dir / "libstp-2026-07-04_09-00-00.log").write_text("x")
-        (log_dir / "libstp-2026-07-04_10-00-00.jsonl").write_text("{}\n")
-        (log_dir / "libstp-2026-07-04_08-00-00.jsonl").write_text("{}\n")
-
-        assert [p.name for p in discover_log_files(log_dir)] == [
-            "libstp-2026-07-04_08-00-00.jsonl",
-            "libstp-2026-07-04_09-00-00.log",
-            "libstp-2026-07-04_10-00-00.jsonl",
-        ]
-
-    def test_jsonl_preferred_on_same_timestamp(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        # Same run has both a legacy .log and the new .jsonl — .jsonl is "current".
-        (log_dir / "libstp-2026-07-04_10-00-00.log").write_text("x")
-        (log_dir / "libstp-2026-07-04_10-00-00.jsonl").write_text("{}\n")
-
-        assert current_log_file(log_dir).name == "libstp-2026-07-04_10-00-00.jsonl"
-
-    def test_jsonl_is_run_file(self):
-        assert is_run_file(Path("libstp-2026-07-04_10-00-00.jsonl"))
-        assert is_run_file(Path("/x/y/libstp-2026-07-04_10-00-00.jsonl"))
-
-    def test_load_runs_from_jsonl(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        (log_dir / "libstp-2026-07-04_09-00-00.jsonl").write_text(
-            _jsonl_body("2026-07-04T09:00:00")
-        )
-        (log_dir / "libstp-2026-07-04_10-00-00.jsonl").write_text(
-            _jsonl_body("2026-07-04T10:00:00")
-        )
-
-        runs = load_runs(discover_log_files(log_dir))
-        assert len(runs) == 2
-        newest = load_run_by_index(discover_log_files(log_dir), 1)
-        assert newest is not None
-        assert newest.index == 1
-        assert newest.line_count == 2
-        assert newest.start_time.hour == 10
-        # Sources are the file basenames; levels normalise "warning" → WARN.
-        assert newest.sources == {"api.py", "motor.py"}
-        assert newest.level_counts.get("WARN") == 1
-
-
-class TestLegacyFallback:
-    def test_legacy_rotation_ordered_oldest_first(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        for name in ("libstp.log", "libstp.1.log", "libstp.2.log"):
-            (log_dir / name).write_text("x")
-
-        assert [p.name for p in discover_log_files(log_dir)] == [
-            "libstp.2.log",
-            "libstp.1.log",
-            "libstp.log",
-        ]
-
-    def test_legacy_precedes_new_runs(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        (log_dir / "libstp.log").write_text("x")
-        (log_dir / "libstp-2026-07-01_10-00-00.log").write_text("x")
-
-        files = discover_log_files(log_dir)
-        assert files[0].name == "libstp.log"
-        assert files[-1].name == "libstp-2026-07-01_10-00-00.log"
-        # Newest overall is still the dated per-run file.
-        assert current_log_file(log_dir).name == "libstp-2026-07-01_10-00-00.log"
-
-    def test_include_legacy_false_excludes_rotation_files(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        (log_dir / "libstp.log").write_text("x")
-        (log_dir / "libstp.1.log").write_text("x")
-        (log_dir / "libstp-2026-07-01_10-00-00.log").write_text("x")
-
-        names = [p.name for p in discover_log_files(log_dir, include_legacy=False)]
-        assert names == ["libstp-2026-07-01_10-00-00.log"]
+    def test_invalid_run_id_dir_ignored(self, tmp_path: Path):
+        bad = tmp_path / ".raccoon" / "runs" / "not-a-run-id"
+        bad.mkdir(parents=True)
+        (bad / "libstp.jsonl").write_text(_jsonl_body("2026-07-04T13:00:00"))
+        assert discover_log_files(_runs_dir(tmp_path)) == []
 
 
 class TestIsRunFile:
-    def test_per_run_files(self):
-        assert is_run_file(Path("libstp-2026-07-01_10-00-00.log"))
-        assert is_run_file(Path("/x/y/libstp-2026-07-01_10-00-00.log"))
+    def test_run_dir_logs_are_run_files(self):
+        assert is_run_file(Path("/p/.raccoon/runs/20260704T100000Z/libstp.jsonl"))
 
-    def test_legacy_files_are_not_run_files(self):
+    def test_other_files_are_not_run_files(self):
         assert not is_run_file(Path("libstp.log"))
-        assert not is_run_file(Path("libstp.1.log"))
+        assert not is_run_file(Path("libstp-2026-07-01_10-00-00.jsonl"))
+        assert not is_run_file(Path("/p/.raccoon/runs/badid/libstp.jsonl"))
 
 
 class TestLoadRuns:
-    def test_each_file_is_one_run(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        (log_dir / "libstp-2026-07-01_09-00-00.log").write_text(_run_body("2026-07-01 09:00:00"))
-        (log_dir / "libstp-2026-07-01_10-00-00.log").write_text(_run_body("2026-07-01 10:00:00"))
+    def test_each_run_dir_is_one_run(self, tmp_path: Path):
+        _make_run(tmp_path, "20260701T090000Z", "2026-07-01T09:00:00", body=_run_body)
+        _make_run(tmp_path, "20260701T100000Z", "2026-07-01T10:00:00", body=_run_body)
 
-        runs = load_runs(discover_log_files(log_dir))
+        runs = load_runs(discover_log_files(_runs_dir(tmp_path)))
         assert len(runs) == 2
-        # Newest = index 1.
-        assert runs[-1].index == 1
+        assert runs[-1].index == 1  # newest
         assert runs[0].index == 2
         for run in runs:
             assert run.line_count == 3
+            assert run.run_id is not None
 
-    def test_per_run_file_not_split_on_elapsed_reset(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        # Two "Logging to directory" markers + an elapsed reset in ONE file must
-        # still be a single run under the new scheme.
-        body = dedent(
-            """\
-            2026-07-01 10:00:00 |     0.000s | info     |                                | Logging to directory: /logs
-            2026-07-01 10:00:05 |     5.000s | info     | p.Motor.cpp                    | mid run
-            2026-07-01 10:00:06 |     0.000s | info     |                                | Logging to directory: /logs
-            2026-07-01 10:00:07 |     1.000s | info     | p.Motor.cpp                    | still same file
-            """
-        )
-        (log_dir / "libstp-2026-07-01_10-00-00.log").write_text(body)
+    def test_run_dir_annotated_and_summarised(self, tmp_path: Path):
+        _make_run(tmp_path, "20260704T090000Z", "2026-07-04T09:00:00")
+        _make_run(tmp_path, "20260704T130000Z", "2026-07-04T13:00:00")
 
-        runs = load_runs(discover_log_files(log_dir))
-        assert len(runs) == 1
-        assert runs[0].line_count == 4
-
-    def test_legacy_file_still_splits_into_runs(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        body = _run_body("2026-07-01 08:00:00") + _run_body("2026-07-01 09:00:00")
-        (log_dir / "libstp.log").write_text(body)
-
-        runs = load_runs(discover_log_files(log_dir))
-        assert len(runs) == 2
+        files = discover_log_files(_runs_dir(tmp_path))
+        assert all(is_run_file(f) for f in files)
+        newest = load_run_by_index(files, 1)
+        assert newest is not None
+        assert newest.index == 1
+        assert newest.run_id == "20260704T130000Z"
+        assert newest.run_dir == str(tmp_path / ".raccoon" / "runs" / "20260704T130000Z")
+        assert newest.line_count == 2
+        assert newest.sources == {"api.py", "motor.py"}
+        assert newest.level_counts.get("WARN") == 1
 
     def test_empty(self, tmp_path: Path):
         empty = tmp_path / "empty"
@@ -226,116 +145,89 @@ class TestLoadRuns:
         assert load_runs(discover_log_files(empty)) == []
 
 
-def _make_n_run_files(log_dir: Path, n: int) -> None:
-    """Create *n* per-run files with distinct, chronologically-sortable names."""
+def _make_n_runs(root: Path, n: int) -> None:
+    """Create *n* run dirs with chronologically-sortable run_ids (10:00 … )."""
     for i in range(n):
-        started = f"2026-07-01 {10 + i:02d}:00:00"
-        (log_dir / f"libstp-2026-07-01_{10 + i:02d}-00-00.log").write_text(
-            _run_body(started)
-        )
+        rid = f"20260701T{10 + i:02d}0000Z"
+        _make_run(root, rid, f"2026-07-01T{10 + i:02d}:00:00", body=_run_body)
 
 
 class TestLoadRunsLimit:
-    def test_limit_parses_only_newest_files(self, tmp_path: Path, monkeypatch):
-        log_dir = _make_logs_dir(tmp_path)
-        _make_n_run_files(log_dir, 5)
+    def test_limit_parses_only_newest_runs(self, tmp_path: Path, monkeypatch):
+        _make_n_runs(tmp_path, 5)
 
         parsed: list[str] = []
         real_parse = finder_mod.parse_log_file
 
         def _spy(path):
-            parsed.append(Path(path).name)
+            parsed.append(Path(path).parent.name)
             return real_parse(path)
 
         monkeypatch.setattr(finder_mod, "parse_log_file", _spy)
 
-        runs = load_runs(discover_log_files(log_dir), limit=2)
-
-        # Only the two newest files are read from disk...
-        assert parsed == [
-            "libstp-2026-07-01_13-00-00.log",
-            "libstp-2026-07-01_14-00-00.log",
-        ]
-        # ...and they carry the same newest=1 indices as an unlimited load.
+        runs = load_runs(discover_log_files(_runs_dir(tmp_path)), limit=2)
+        assert parsed == ["20260701T130000Z", "20260701T140000Z"]
         assert [r.index for r in sorted(runs, key=lambda r: r.index)] == [1, 2]
 
     def test_limit_indices_match_unlimited(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        _make_n_run_files(log_dir, 5)
-        files = discover_log_files(log_dir)
-
+        _make_n_runs(tmp_path, 5)
+        files = discover_log_files(_runs_dir(tmp_path))
         newest_unlimited = next(r for r in load_runs(files) if r.index == 1)
         newest_limited = next(r for r in load_runs(files, limit=2) if r.index == 1)
-        assert newest_limited.start_time == newest_unlimited.start_time
+        assert newest_limited.run_id == newest_unlimited.run_id
 
     def test_limit_larger_than_count_is_noop(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        _make_n_run_files(log_dir, 3)
-        files = discover_log_files(log_dir)
+        _make_n_runs(tmp_path, 3)
+        files = discover_log_files(_runs_dir(tmp_path))
         assert len(load_runs(files, limit=99)) == 3
 
 
 class TestLoadRunByIndex:
-    def test_parses_only_the_target_file(self, tmp_path: Path, monkeypatch):
-        log_dir = _make_logs_dir(tmp_path)
-        _make_n_run_files(log_dir, 5)
+    def test_parses_only_the_target_run(self, tmp_path: Path, monkeypatch):
+        _make_n_runs(tmp_path, 5)
 
         parsed: list[str] = []
         real_parse = finder_mod.parse_log_file
 
         def _spy(path):
-            parsed.append(Path(path).name)
+            parsed.append(Path(path).parent.name)
             return real_parse(path)
 
         monkeypatch.setattr(finder_mod, "parse_log_file", _spy)
 
-        run = load_run_by_index(discover_log_files(log_dir), 1)
-        assert run is not None
-        assert run.index == 1
-        # newest = 1 → only the newest file is read.
-        assert parsed == ["libstp-2026-07-01_14-00-00.log"]
+        run = load_run_by_index(discover_log_files(_runs_dir(tmp_path)), 1)
+        assert run is not None and run.index == 1
+        assert parsed == ["20260701T140000Z"]  # newest only
 
     def test_index_maps_from_newest(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        _make_n_run_files(log_dir, 5)
-        files = discover_log_files(log_dir)
-        # Index 3 is the 3rd-newest file (12:00).
-        run = load_run_by_index(files, 3)
-        assert run is not None
-        assert run.start_time.hour == 12
+        _make_n_runs(tmp_path, 5)
+        files = discover_log_files(_runs_dir(tmp_path))
+        run = load_run_by_index(files, 3)  # 3rd-newest run (12:00)
+        assert run is not None and run.run_id == "20260701T120000Z"
 
     def test_out_of_range_returns_none(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        _make_n_run_files(log_dir, 2)
-        files = discover_log_files(log_dir)
+        _make_n_runs(tmp_path, 2)
+        files = discover_log_files(_runs_dir(tmp_path))
         assert load_run_by_index(files, 0) is None
         assert load_run_by_index(files, 99) is None
 
-    def test_legacy_falls_back_to_full_load(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        # A legacy file holding two runs; index 2 must resolve via full load.
-        body = _run_body("2026-07-01 08:00:00") + _run_body("2026-07-01 09:00:00")
-        (log_dir / "libstp.log").write_text(body)
-        files = discover_log_files(log_dir)
-        run = load_run_by_index(files, 2)
-        assert run is not None
-        assert run.index == 2
-
 
 class TestFindLogDir:
-    def test_finds_dir_with_per_run_file(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        (log_dir / "libstp-2026-07-01_10-00-00.log").write_text("x")
-        assert find_log_dir(tmp_path) == log_dir
+    def test_finds_runs_dir(self, tmp_path: Path):
+        _make_run(tmp_path, "20260701T100000Z", "2026-07-01T10:00:00")
+        assert find_log_dir(tmp_path) == _runs_dir(tmp_path)
 
     def test_walks_up_to_parent(self, tmp_path: Path):
-        log_dir = _make_logs_dir(tmp_path)
-        (log_dir / "libstp-2026-07-01_10-00-00.log").write_text("x")
+        _make_run(tmp_path, "20260701T100000Z", "2026-07-01T10:00:00")
         nested = tmp_path / "a" / "b"
         nested.mkdir(parents=True)
-        assert find_log_dir(nested) == log_dir
+        assert find_log_dir(nested) == _runs_dir(tmp_path)
 
-    def test_empty_dir_is_not_a_log_dir(self, tmp_path: Path):
-        empty = _make_logs_dir(tmp_path)
+    def test_empty_runs_dir_is_not_a_log_dir(self, tmp_path: Path):
+        empty = _make_runs_dir(tmp_path)
         assert not _is_log_dir(empty)
+        assert find_log_dir(tmp_path) is None
+
+    def test_none_without_runs(self, tmp_path: Path):
+        # No .raccoon/runs at all.
         assert find_log_dir(tmp_path) is None

@@ -48,7 +48,8 @@ class RunConfiguration:
     debug: bool = False
     no_codegen: bool = False
     no_sync: bool = False
-    record_localization: bool = False
+    record_localization: bool = True
+    profile: bool = True
     record_hz: Optional[float] = None
     args: List[str] = field(default_factory=list)
     env: Dict[str, str] = field(default_factory=dict)
@@ -68,8 +69,8 @@ class RunConfiguration:
             )
         allowed = {
             "description", "target", "dev", "no_calibrate", "no_checkpoints",
-            "debug", "no_codegen", "no_sync", "record_localization", "record_hz",
-            "args", "env",
+            "debug", "no_codegen", "no_sync", "record_localization", "profile",
+            "record_hz", "args", "env",
         }
         kwargs: Dict[str, Any] = {"name": name}
         for key, value in data.items():

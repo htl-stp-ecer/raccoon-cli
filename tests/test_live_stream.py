@@ -74,12 +74,15 @@ def test_parse_record_tolerates_missing_and_bad_fields():
 # ── newest_jsonl / wait_for_new_jsonl ──────────────────────────────
 
 
-def test_newest_jsonl_picks_last_by_name(tmp_path: Path):
-    assert newest_jsonl(tmp_path) is None
-    (tmp_path / "libstp-2026-07-04_10-00-00.jsonl").write_text("")
-    (tmp_path / "libstp-2026-07-04_12-00-00.jsonl").write_text("")
-    (tmp_path / "unrelated.txt").write_text("")
-    assert newest_jsonl(tmp_path).name == "libstp-2026-07-04_12-00-00.jsonl"
+def test_newest_jsonl_picks_newest_run_dir(tmp_path: Path):
+    runs = tmp_path / ".raccoon" / "runs"
+    assert newest_jsonl(runs) is None
+    for rid in ("20260704T100000Z", "20260704T120000Z"):
+        (runs / rid).mkdir(parents=True)
+        (runs / rid / "libstp.jsonl").write_text("{}\n")
+    (runs / "junk").mkdir()  # invalid run_id — ignored
+    got = newest_jsonl(runs)
+    assert got is not None and got.parent.name == "20260704T120000Z"
 
 
 def test_wait_for_new_jsonl_excludes_existing(tmp_path: Path):
@@ -177,8 +180,8 @@ def test_view_body_caps_to_visible_rows():
 
 
 def test_stream_run_logs_streams_a_file(tmp_path: Path):
-    log_dir = tmp_path / ".raccoon" / "logs"
-    log_dir.mkdir(parents=True)
+    # No explicit log_path → exercises the wait-for-new-file discovery fallback.
+    log_dir = tmp_path
     logf = log_dir / "libstp-2026-07-04_12-00-00.jsonl"
     lines = [_rec(seq=i, msg=f"record {i}", level="info") for i in range(5)]
     lines.append(_rec(seq=5, msg="a warning", level="warning"))
@@ -198,9 +201,43 @@ def test_stream_run_logs_streams_a_file(tmp_path: Path):
     assert ok is True
 
 
-def test_stream_run_logs_returns_false_without_file(tmp_path: Path):
-    log_dir = tmp_path / ".raccoon" / "logs"
+def test_stream_run_logs_tails_explicit_path(tmp_path: Path):
+    """When given an exact log path, the streamer tails it (no discovery race)."""
+    log_dir = tmp_path / ".raccoon" / "runs" / "20260704T120000Z"
     log_dir.mkdir(parents=True)
+    logf = log_dir / "libstp.jsonl"
+    logf.write_text("\n".join(_rec(seq=i, msg=f"r{i}") for i in range(3)) + "\n")
+
+    state = {"n": 0}
+
+    def is_running():
+        state["n"] += 1
+        return state["n"] < 2
+
+    ok = stream_run_logs(
+        tmp_path / ".raccoon" / "runs",
+        is_running=is_running,
+        console=_headless_console(),
+        title="proj",
+        log_path=logf,
+    )
+    assert ok is True
+
+
+def test_stream_run_logs_explicit_path_missing_returns_false(tmp_path: Path):
+    ok = stream_run_logs(
+        tmp_path / ".raccoon" / "runs",
+        is_running=lambda: False,
+        console=_headless_console(),
+        title="proj",
+        log_path=tmp_path / "never" / "libstp.jsonl",
+        startup_timeout=0.2,
+    )
+    assert ok is False
+
+
+def test_stream_run_logs_returns_false_without_file(tmp_path: Path):
+    log_dir = tmp_path
     con = _headless_console()
     ok = stream_run_logs(
         log_dir,

@@ -409,6 +409,150 @@ class TestEdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# Defs attribute access — runtime AttributeError prevention
+# ---------------------------------------------------------------------------
+
+def _write_config(project: Path, definitions: dict | None = None) -> None:
+    config: dict = {"name": "TestProject", "uuid": "test-uuid", "format_version": 2}
+    if definitions is not None:
+        config["definitions"] = definitions
+    (project / "raccoon.project.yml").write_text(yaml.dump(config), encoding="utf-8")
+
+
+def _write_defs_py(project: Path, attr_names: list[str]) -> None:
+    """Write a minimal generated src/hardware/defs.py declaring attr_names."""
+    hardware = project / "src" / "hardware"
+    hardware.mkdir(parents=True, exist_ok=True)
+    lines = ["class Defs:"]
+    for name in attr_names:
+        lines.append(f"    {name} = object()")
+    lines.append("")
+    lines.append("defs = Defs()")
+    (hardware / "defs.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_mission(project: Path, filename: str, body_lines: list[str]) -> None:
+    missions = project / "src" / "missions"
+    missions.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "from raccoon import *",
+        "",
+        "from src.hardware.defs import Defs",
+        "",
+        "",
+        "class SomeMission(Mission):",
+        "    def sequence(self):",
+    ]
+    lines.extend(f"        {ln}" for ln in body_lines)
+    (missions / filename).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+class TestDefsAttributeAccess:
+    def test_unknown_defs_attribute_is_error(self, tmp_path):
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.motor_right"])
+        result = validate_project(tmp_path)
+        assert result.has_errors
+        assert "defs_unknown_attribute" in _codes(result)
+
+    def test_known_defs_attribute_from_config_passes(self, tmp_path):
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.motor_left"])
+        result = validate_project(tmp_path)
+        assert "defs_unknown_attribute" not in _codes(result)
+
+    def test_known_defs_attribute_from_generated_file_passes(self, tmp_path):
+        """Attribute present in generated defs.py but not (yet) in config still ok."""
+        _write_config(tmp_path, definitions=None)
+        _write_defs_py(tmp_path, ["imu", "arm", "analog_sensors"])
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.arm"])
+        result = validate_project(tmp_path)
+        assert "defs_unknown_attribute" not in _codes(result)
+
+    def test_error_message_names_file_line_and_attr(self, tmp_path):
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.wheel"])
+        result = validate_project(tmp_path)
+        err = next(i for i in result.errors if i.code == "defs_unknown_attribute")
+        assert "Defs.wheel" in err.message
+        assert "m010_go_mission.py" in err.message
+
+    def test_close_match_is_suggested(self, tmp_path):
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.motor_lef"])
+        result = validate_project(tmp_path)
+        err = next(i for i in result.errors if i.code == "defs_unknown_attribute")
+        assert err.hint is not None and "motor_left" in err.hint
+
+    def test_lowercase_defs_instance_is_also_checked(self, tmp_path):
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        _write_mission(tmp_path, "m010_go_mission.py", ["return defs.ghost"])
+        result = validate_project(tmp_path)
+        assert "defs_unknown_attribute" in _codes(result)
+
+    def test_dunder_access_is_ignored(self, tmp_path):
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.__class__"])
+        result = validate_project(tmp_path)
+        assert "defs_unknown_attribute" not in _codes(result)
+
+    def test_imu_and_analog_sensors_are_always_valid(self, tmp_path):
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        _write_mission(
+            tmp_path,
+            "m010_go_mission.py",
+            ["x = Defs.imu", "return Defs.analog_sensors"],
+        )
+        result = validate_project(tmp_path)
+        assert "defs_unknown_attribute" not in _codes(result)
+
+    def test_auto_sensor_pair_group_prefix_is_valid(self, tmp_path):
+        """left/right analog pair auto-creates a group attribute — accept it."""
+        _write_config(
+            tmp_path,
+            {
+                "tophat_left_line": {"type": "AnalogSensor", "port": 0},
+                "tophat_right_line": {"type": "AnalogSensor", "port": 1},
+            },
+        )
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.tophat"])
+        result = validate_project(tmp_path)
+        assert "defs_unknown_attribute" not in _codes(result)
+
+    def test_files_not_importing_defs_are_not_scanned(self, tmp_path):
+        """A file that never imports Defs is skipped even if it has Defs.x text."""
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        missions = tmp_path / "src" / "missions"
+        missions.mkdir(parents=True, exist_ok=True)
+        # Local class named Defs, no import from a *.defs module.
+        (missions / "m010_go_mission.py").write_text(
+            "class Defs:\n    pass\n\nx = Defs.anything\n", encoding="utf-8"
+        )
+        result = validate_project(tmp_path)
+        assert "defs_unknown_attribute" not in _codes(result)
+
+    def test_defs_check_can_be_disabled(self, tmp_path):
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.ghost"])
+        result = validate_project(tmp_path, defs_check=False)
+        assert "defs_unknown_attribute" not in _codes(result)
+
+    def test_no_config_definitions_and_no_defs_file_skips_check(self, tmp_path):
+        """Without any source of truth for Defs, don't guess — no false errors."""
+        _write_config(tmp_path, definitions=None)
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.whatever"])
+        result = validate_project(tmp_path)
+        assert "defs_unknown_attribute" not in _codes(result)
+
+    def test_generated_hardware_files_are_not_scanned(self, tmp_path):
+        """The generated defs.py itself must not be flagged."""
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+        _write_defs_py(tmp_path, ["motor_left", "imu", "analog_sensors"])
+        result = validate_project(tmp_path)
+        assert "defs_unknown_attribute" not in _codes(result)
+
+
+# ---------------------------------------------------------------------------
 # CLI — raccoon validate exit codes
 # ---------------------------------------------------------------------------
 

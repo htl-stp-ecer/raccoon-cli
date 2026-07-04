@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from raccoon_cli.server.auth import require_auth
+from raccoon_cli.table_map import TableMapRequest
 
 router = APIRouter(prefix="/api/v1/device", tags=["device"])
 
@@ -84,26 +85,6 @@ class StartPoseRequest(BaseModel):
     """Request to update start pose."""
 
     start_pose: StartPose
-
-
-class TableMapLine(BaseModel):
-    """A single line or wall segment on the table map."""
-
-    kind: str  # 'line' or 'wall'
-    startX: float
-    startY: float
-    endX: float
-    endY: float
-    widthCm: float
-
-
-class TableMapRequest(BaseModel):
-    """Request to set table map (vector format)."""
-
-    format: str = "flowchart-table-map"
-    version: int = 1
-    table: dict  # { widthCm, heightCm }
-    lines: list[TableMapLine]
 
 
 class HostnameRequest(BaseModel):
@@ -430,8 +411,10 @@ async def update_table_map(request: TableMapRequest):
     config = _load_project_config(project_path)
     config = _ensure_physical_section(config)
 
-    if request.lines:
-        config["robot"]["physical"]["table_map"] = request.model_dump()
+    v2_payload = request.to_dict()
+    has_content = any(layer.get("lines") for layer in v2_payload["layers"]) or v2_payload["transitions"]
+    if has_content:
+        config["robot"]["physical"]["table_map"] = v2_payload
     elif "table_map" in config["robot"]["physical"]:
         del config["robot"]["physical"]["table_map"]
 

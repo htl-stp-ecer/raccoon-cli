@@ -73,9 +73,15 @@ def _render_codegen_success(
 
 
 def _resolve_ftmap_paths(config: dict, project_root: Path) -> dict:
-    """Replace table_map file-path strings with the parsed .ftmap JSON dict."""
+    """Replace table_map file-path strings with the parsed .ftmap JSON dict.
+
+    The map is validated as canonical v2 — legacy v1 ``.ftmap`` files are
+    rejected (v1 support was dropped).
+    """
     import json
     import copy
+
+    from raccoon_cli.table_map import parse_v2, TableMapVersionError
 
     physical = config.get("robot", {}).get("physical", {})
     table_map = physical.get("table_map")
@@ -88,7 +94,11 @@ def _resolve_ftmap_paths(config: dict, project_root: Path) -> dict:
 
     config = copy.deepcopy(config)
     with open(ftmap_path, encoding="utf-8") as f:
-        config["robot"]["physical"]["table_map"] = json.load(f)
+        raw = json.load(f)
+    try:
+        config["robot"]["physical"]["table_map"] = parse_v2(raw)
+    except TableMapVersionError as exc:
+        raise ProjectError(f"table_map {ftmap_path}: {exc}")
     return config
 
 
