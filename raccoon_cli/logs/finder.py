@@ -7,17 +7,30 @@ from pathlib import Path
 from typing import List, Optional
 
 from .parser import LogRun, detect_runs, parse_log_file, single_run
+from .run_cache import load_cached_run, write_cached_run
 
 
-# New scheme: one file per run, named ``libstp-<timestamp>.log`` (e.g.
-# ``libstp-2026-07-01_14-30-00.log``). The zero-padded timestamp sorts
+# New scheme: one file per run, named ``libstp-<timestamp>.jsonl`` (e.g.
+# ``libstp-2026-07-01_14-30-00.jsonl``). The zero-padded timestamp sorts
 # lexicographically, so sorting file names by string == chronological order.
-_RUN_GLOB = "libstp-*.log"
+# Pre-JSONL builds wrote the same per-run name with a ``.log`` extension (still
+# a single run per file, pipe-delimited text); those are read too.
+_RUN_GLOBS = ("libstp-*.jsonl", "libstp-*.log")
 
 # Legacy spdlog rotation scheme (single growing ``libstp.log`` + numbered
 # rotations). Kept so ``raccoon logs`` still reads log dirs written by older
 # library builds. Ordered oldest → newest.
 _LEGACY_ROTATED_NAMES = ["libstp.3.log", "libstp.2.log", "libstp.1.log", "libstp.log"]
+
+
+def _run_sort_key(path: Path) -> tuple[str, int]:
+    """Sort per-run files chronologically; prefer ``.jsonl`` on a timestamp tie.
+
+    The stem (``libstp-<timestamp>``) sorts chronologically. When a run has both
+    a ``.jsonl`` and a ``.log`` file for the same timestamp, the ``.jsonl`` gets
+    the higher secondary rank so it lands last (== newest / current run).
+    """
+    return (path.stem, 1 if path.suffix == ".jsonl" else 0)
 
 # Default cap for the run list: parse at most this many of the newest files so
 # `raccoon logs` stays fast when a project has accumulated hundreds of runs.
@@ -63,9 +76,10 @@ def _is_log_dir(path: Path) -> bool:
 def discover_log_files(log_dir: Path, include_legacy: bool = True) -> List[Path]:
     """Return log files in chronological order (oldest first).
 
-    Prefers the new per-run scheme (``libstp-<timestamp>.log``). When
-    *include_legacy* is set, older log dirs' rotation files (``libstp.log`` and
-    ``libstp.N.log``) are prepended as the oldest history.
+    Prefers the new per-run scheme (``libstp-<timestamp>.jsonl``, plus the older
+    ``.log`` per-run text files). When *include_legacy* is set, older log dirs'
+    rotation files (``libstp.log`` and ``libstp.N.log``) are prepended as the
+    oldest history.
     """
     files: List[Path] = []
 
@@ -76,9 +90,12 @@ def discover_log_files(log_dir: Path, include_legacy: bool = True) -> List[Path]
             if p.exists():
                 files.append(p)
 
-    # New per-run files, sorted by name (== chronological thanks to the
-    # zero-padded timestamp), oldest first.
-    files.extend(sorted(log_dir.glob(_RUN_GLOB), key=lambda p: p.name))
+    # New per-run files (.jsonl + legacy per-run .log), sorted so the timestamp
+    # orders chronologically and .jsonl wins a same-timestamp tie (oldest first).
+    per_run: List[Path] = []
+    for glob in _RUN_GLOBS:
+        per_run.extend(log_dir.glob(glob))
+    files.extend(sorted(per_run, key=_run_sort_key))
     return files
 
 
@@ -89,11 +106,11 @@ def current_log_file(log_dir: Path) -> Optional[Path]:
 
 
 def is_run_file(path: Path) -> bool:
-    """True if *path* is a per-run file (``libstp-<timestamp>.log``).
+    """True if *path* is a per-run file (``libstp-<timestamp>.jsonl`` or ``.log``).
 
     Per-run files hold exactly one run; legacy ``libstp.log`` may hold several.
     """
-    return fnmatch.fnmatch(path.name, _RUN_GLOB)
+    return any(fnmatch.fnmatch(path.name, glob) for glob in _RUN_GLOBS)
 
 
 def load_runs(files: List[Path], limit: Optional[int] = None) -> List[LogRun]:
@@ -109,6 +126,12 @@ def load_runs(files: List[Path], limit: Optional[int] = None) -> List[LogRun]:
     Because indices are always counted from the newest run, the returned indices
     are identical to an unlimited load — you just get fewer, older runs. Use
     :func:`load_run_by_index` to fetch a single run without parsing the rest.
+
+    Per-run files additionally use a summary sidecar cache (see
+    :mod:`raccoon_cli.logs.run_cache`): a completed file is parsed once, then
+    subsequent listings read its cached summary instead of re-parsing. Only the
+    summary (times, counts, sources) is cached — full entries are never loaded
+    on the list path, which no caller needs there.
     """
     parse_files = files
     if limit is not None and limit > 0 and len(files) > limit:
@@ -116,14 +139,24 @@ def load_runs(files: List[Path], limit: Optional[int] = None) -> List[LogRun]:
 
     runs: List[LogRun] = []
     for f in parse_files:
-        entries = parse_log_file(f)
-        if not entries:
-            continue
         if is_run_file(f):
+            cached = load_cached_run(f)
+            if cached is not None:
+                runs.append(cached)
+                continue
+            entries = parse_log_file(f)
+            if not entries:
+                continue
             run = single_run(entries)
             if run is not None:
+                write_cached_run(f, run)
                 runs.append(run)
         else:
+            # Legacy multi-run files aren't cached — they can hold several runs
+            # and are a rare fallback path.
+            entries = parse_log_file(f)
+            if not entries:
+                continue
             runs.extend(detect_runs(entries))
 
     # Re-index across parsed files: newest run = 1 (files came oldest-first).

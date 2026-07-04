@@ -32,6 +32,7 @@ from raccoon_cli.ide.schemas.mission_detail import ParsedMission, ParsedStep, Ve
 from raccoon_cli.ide.schemas.simulation import SimulationDelta, SimulationStepData, MissionSimulationData
 from raccoon_cli.ide.config import Settings
 from raccoon_cli.run_recording import make_run_id, build_recording_env
+from raccoon_cli import simulation as sim_shared
 import asyncio
 import os
 import sys
@@ -1302,169 +1303,40 @@ class MissionService:
             self._breakpoint_waiters.pop(project_uuid, None)
 
     # Cache the chosen sim interpreter so we don't probe on every run.
-    _sim_python_cache: str | None = None
-
     @classmethod
     def _pick_sim_python(cls) -> str | None:
         """Find a Python interpreter that can import ``raccoon.testing.sim``.
 
-        Order of preference:
-          1. ``RACCOON_SIM_PYTHON`` env var (explicit override)
-          2. The interpreter running the IDE backend
-          3. The system ``python3``
-
-        Returns ``None`` if none work. Result is cached for the process
-        lifetime so the probe runs at most three times.
+        Thin delegation to :func:`raccoon_cli.simulation.pick_sim_python` so
+        the CLI (``raccoon upload``) and the IDE share one code path.
         """
-        if cls._sim_python_cache:
-            return cls._sim_python_cache
-
-        candidates: List[str] = []
-        explicit = os.environ.get("RACCOON_SIM_PYTHON")
-        if explicit:
-            candidates.append(explicit)
-        candidates.append(sys.executable)
-        sys_py = "/usr/bin/python3"
-        if sys_py not in candidates:
-            candidates.append(sys_py)
-
-        # NOTE: raccoon-lib's MockPlatform crashes during interpreter shutdown
-        # ("pure virtual method called") even on a clean import. Use os._exit
-        # to skip Python's normal teardown and report success via exit code 0.
-        probe = (
-            "import os, raccoon.testing.sim as _s; "
-            "assert hasattr(_s, 'SimRobotConfig'); "
-            "os._exit(0)"
-        )
-        import subprocess as _subprocess
-        for cand in candidates:
-            if not cand:
-                continue
-            try:
-                result = _subprocess.run(
-                    [cand, "-c", probe],
-                    stdout=_subprocess.DEVNULL,
-                    stderr=_subprocess.DEVNULL,
-                    timeout=10,
-                )
-            except (OSError, _subprocess.TimeoutExpired):
-                continue
-            if result.returncode == 0:
-                cls._sim_python_cache = cand
-                logger.info("Real-sim interpreter resolved: %s", cand)
-                return cand
-
-        logger.warning("Could not find a python interpreter with raccoon.testing.sim installed")
-        return None
+        return sim_shared.pick_sim_python()
 
     def _resolve_simulation_settings(self, project_path: Path) -> Dict[str, Any]:
         """Pick scene + start pose for a real-sim run.
 
-        Resolution order for the *scene* (first match wins):
-
-          1. ``simulation.scene`` in ``raccoon.project.yml`` (explicit override).
-          2. ``robot.physical.table_map`` — the same map the Web-IDE renders
-             in the Table panel. Two sub-cases:
-              a. A string → treat as a project-relative ``.ftmap`` path.
-              b. An inline dict (``format/table/lines``) → materialize it to
-                 a temp ``.ftmap`` under ``.raccoon/sim/`` so the runner can
-                 hand a real path to ``WorldMap.load_ftmap``.
-          3. Built-in ``SIMULATION_DEFAULT_SCENE`` (currently ``empty_table``).
-
-        Start pose order: ``simulation.start_pose`` → ``robot.physical.start_pose`` → (0,0,0).
+        Thin delegation to
+        :func:`raccoon_cli.simulation.resolve_simulation_settings`, seeded with
+        the IDE's configured default scene. Returns a dict for backward compat
+        with the callers in this module.
         """
-        scene: str = self._settings.SIMULATION_DEFAULT_SCENE
-        start: Dict[str, float] | None = None
-        scene_source = "default"
-
-        try:
-            from raccoon_cli.project import load_project_config
-            cfg = load_project_config(project_path)
-        except Exception as exc:
-            logger.debug("Could not load project config for sim settings: %s", exc)
-            return {"scene": scene, "start": None, "scene_source": scene_source}
-
-        sim_section = cfg.get("simulation") if isinstance(cfg, dict) else None
-        explicit_scene = None
-        if isinstance(sim_section, dict):
-            raw = sim_section.get("scene")
-            if isinstance(raw, str) and raw.strip():
-                explicit_scene = raw.strip()
-            sp = sim_section.get("start_pose")
-            if isinstance(sp, dict):
-                start = {
-                    "x_cm": float(sp.get("x_cm", 0.0)),
-                    "y_cm": float(sp.get("y_cm", 0.0)),
-                    "theta_deg": float(sp.get("theta_deg", 0.0)),
-                }
-
-        if explicit_scene:
-            scene = explicit_scene
-            scene_source = "simulation.scene"
-        else:
-            physical = ((cfg.get("robot") or {}).get("physical") or {}) if isinstance(cfg, dict) else {}
-            table_map = physical.get("table_map")
-            if isinstance(table_map, str) and table_map.strip():
-                scene = table_map.strip()
-                scene_source = "robot.physical.table_map (path)"
-            elif isinstance(table_map, dict) and table_map.get("lines") is not None:
-                materialized = self._materialize_inline_ftmap(project_path, table_map)
-                if materialized is not None:
-                    scene = str(materialized)
-                    scene_source = "robot.physical.table_map (inline)"
-
-        return {"scene": scene, "start": start, "scene_source": scene_source}
+        settings = sim_shared.resolve_simulation_settings(
+            project_path, default_scene=self._settings.SIMULATION_DEFAULT_SCENE
+        )
+        return {
+            "scene": settings.scene,
+            "start": settings.start,
+            "scene_source": settings.scene_source,
+        }
 
     @staticmethod
     def _materialize_inline_ftmap(project_path: Path, table_map: Dict[str, Any]) -> Path | None:
         """Write an inline table_map dict to a temp ``.ftmap`` for the runner.
 
-        Lives under ``.raccoon/sim/scene.ftmap`` inside the project so each
-        run picks up the latest map without leaking files outside the
-        project tree. We always rewrite — the file is cheap and stale data
-        would silently desync from the Web-IDE's table editor.
-
-        v2 layered maps are flattened to the active layer's lines because the
-        libstp runner currently understands only flat ``lines[]``. Multi-layer
-        simulation will be added once libstp supports layered scenes.
+        Thin delegation to
+        :func:`raccoon_cli.simulation.materialize_inline_ftmap`.
         """
-        try:
-            sim_dir = project_path / ".raccoon" / "sim"
-            sim_dir.mkdir(parents=True, exist_ok=True)
-            target = sim_dir / "scene.ftmap"
-            table = table_map.get("table") or {"widthCm": 200, "heightCm": 100}
-
-            # Resolve flat lines from either v2 (layers) or v1 (lines).
-            flat_lines: list = []
-            if isinstance(table_map.get("layers"), list) and table_map["layers"]:
-                active_id = table_map.get("activeLayerId")
-                active = None
-                if active_id:
-                    active = next(
-                        (l for l in table_map["layers"] if isinstance(l, dict) and l.get("id") == active_id),
-                        None,
-                    )
-                if active is None:
-                    active = next(
-                        (l for l in table_map["layers"] if isinstance(l, dict)),
-                        None,
-                    )
-                if active and isinstance(active.get("lines"), list):
-                    flat_lines = active["lines"]
-            elif isinstance(table_map.get("lines"), list):
-                flat_lines = table_map["lines"]
-
-            payload = {
-                "format": table_map.get("format", "flowchart-table-map"),
-                "version": 1,
-                "table": table,
-                "lines": flat_lines,
-            }
-            target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            return target
-        except Exception as exc:
-            logger.warning("Could not materialize inline table_map: %s", exc)
-            return None
+        return sim_shared.materialize_inline_ftmap(project_path, table_map)
 
     async def _simulate_mission_real(
         self,
@@ -1500,36 +1372,18 @@ class MissionService:
             })
             yield _stamped({"type": "exit", "returncode": 1})
             return
-        cmd = [
+        cmd = sim_shared.build_sim_runner_cmd(
             python_exe,
-            "-m",
-            "raccoon_cli.ide.sim.runner",
-            "--project", str(project_path),
-            "--scene", sim_settings["scene"],
-            "--pose-hz", str(self._settings.SIMULATION_POSE_HZ),
-        ]
-        if mission_name:
-            cmd += ["--mission", mission_name]
-        if sim_settings["start"]:
-            sp = sim_settings["start"]
-            cmd += ["--start", f"{sp['x_cm']},{sp['y_cm']},{sp['theta_deg']}"]
-
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        # Skip dev-mode button gating so the sim actually executes the mission
-        # body. Otherwise GenericRobot blocks on WaitForButton and the pose
-        # never changes.
-        env["LIBSTP_DEV_MODE"] = "0"
-        env["LIBSTP_NO_CALIBRATE"] = "1"
-        env["LIBSTP_NO_CHECKPOINTS"] = "1"
-        # Ensure the chosen interpreter sees *this* checkout of raccoon_cli —
-        # the system Python may have an older copy on site-packages that
-        # predates raccoon_cli.ide.sim. Prepending wins over site-packages.
-        toolchain_root = str(Path(__file__).resolve().parents[3])
-        existing_pp = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = (
-            toolchain_root + (os.pathsep + existing_pp if existing_pp else "")
+            project_path,
+            sim_settings["scene"],
+            pose_hz=self._settings.SIMULATION_POSE_HZ,
+            mission=mission_name,
+            start=sim_settings["start"],
         )
+        # Skip dev-mode button gating so the sim actually executes the mission
+        # body, force unbuffered output, and prepend this checkout's toolchain
+        # root to PYTHONPATH — see build_sim_env.
+        env = sim_shared.build_sim_env()
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,

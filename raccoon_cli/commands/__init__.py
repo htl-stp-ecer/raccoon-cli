@@ -19,6 +19,7 @@ from .migrate import migrate_command
 from .validate import validate_command
 from .shell import shell_command
 from .doctor import doctor_command
+from .upload import upload_command
 __all__ = [
     "calibrate_group",
     "codegen_command",
@@ -40,4 +41,5 @@ __all__ = [
     "validate_command",
     "shell_command",
     "doctor_command",
+    "upload_command",
 ]

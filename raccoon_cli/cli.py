@@ -26,6 +26,7 @@ from raccoon_cli.commands import (
     validate_command,
     shell_command,
     doctor_command,
+    upload_command,
 )
 from raccoon_cli.logging_utils import configure_logging, render_banner, render_summary
 
@@ -34,7 +35,7 @@ CONTEXT_SETTINGS = {
 }
 
 # Commands that don't operate on a project — skip auto-validation.
-_SKIP_VALIDATE_COMMANDS = {"validate", "create", "connect", "disconnect", "update", "doctor", "migrate", "web"}
+_SKIP_VALIDATE_COMMANDS = {"validate", "create", "connect", "disconnect", "update", "doctor", "migrate", "web", "upload"}
 
 
 def _normalize_exit_code(code) -> int:
@@ -160,6 +161,7 @@ main.add_command(migrate_command)
 main.add_command(validate_command)
 main.add_command(shell_command)
 main.add_command(doctor_command)
+main.add_command(upload_command)
 
 
 if __name__ == "__main__":

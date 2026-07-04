@@ -482,10 +482,14 @@ class RaccoonApiClient:
             params["all"] = "true"
         if count is not None:
             params["n"] = str(count)
+        # The first (cache-cold) listing parses every run file and warms the
+        # summary sidecars — on a Pi with large logs that can exceed the default
+        # 30s. Give it headroom; subsequent listings hit the cache and are fast.
         response = await client.get(
             f"{self.base_url}/api/v1/logs/{project_id}/runs",
             params=params,
             headers=self._auth_headers(),
+            timeout=90.0,
         )
         response.raise_for_status()
         return response.json()

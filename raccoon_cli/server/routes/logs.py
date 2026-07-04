@@ -149,6 +149,8 @@ async def get_run(
                 "elapsed": e.elapsed,
                 "level": e.level_upper,
                 "source": e.source,
+                "line": e.line_number,
+                "func": e.func,
                 "message": e.message,
             }
             for e in entries

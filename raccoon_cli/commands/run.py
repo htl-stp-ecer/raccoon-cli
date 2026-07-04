@@ -433,6 +433,95 @@ def _run_via_pty(
     return proc.wait()
 
 
+def _run_local_with_tui(
+    cmd_parts: list[str],
+    project_root: Path,
+    env: dict,
+    console: Console,
+) -> int:
+    """Run the child with its stdout suppressed and stream its JSONL log live.
+
+    The child writes ``.raccoon/logs/libstp-<ts>.jsonl`` (full detail) and only
+    warn/error to stdout; we send stdout to /dev/null and render the JSONL in a
+    live TUI instead. stderr is captured to a temp file (a pipe could deadlock
+    if a traceback fills the buffer) and its tail is shown on a non-zero exit.
+    """
+    import tempfile
+
+    from raccoon_cli.logs.live_stream import stream_run_logs
+
+    log_dir = project_root / ".raccoon" / "logs"
+    existing = set(log_dir.glob("libstp-*.jsonl")) if log_dir.is_dir() else set()
+    title = project_root.name
+
+    err_file = tempfile.TemporaryFile(mode="w+b")
+    with _active_program_lock():
+        _ensure_single_active_program(project_root, console)
+        proc = subprocess.Popen(
+            cmd_parts,
+            cwd=project_root,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=err_file,
+            stdin=subprocess.DEVNULL,
+            start_new_session=(os.name == "posix"),
+        )
+        _write_active_program_state(
+            pid=proc.pid,
+            project_root=project_root,
+            cmd_parts=cmd_parts,
+        )
+
+    original_sigint, original_sigterm = _install_termination_handlers()
+    returncode: int | None = None
+    streamed = False
+    try:
+        try:
+            streamed = stream_run_logs(
+                log_dir,
+                is_running=lambda: proc.poll() is None,
+                console=console,
+                title=title,
+                existing=existing,
+            )
+        except Exception as exc:  # never let a TUI glitch kill the run
+            console.print(f"[yellow]Live log view unavailable ({exc}); waiting…[/yellow]")
+        returncode = proc.wait()
+    except KeyboardInterrupt:
+        returncode = _terminate_process_on_interrupt(proc, console)
+    finally:
+        _restore_termination_handlers(original_sigint, original_sigterm)
+        with _active_program_lock():
+            _clear_active_program_state(proc.pid)
+
+    if not streamed:
+        console.print(
+            "[dim]No .raccoon/logs/*.jsonl appeared for this run "
+            "(use [cyan]--raw[/cyan] to see the program's stdout directly).[/dim]"
+        )
+
+    # Surface a crash: dump the tail of captured stderr on a bad exit.
+    if returncode not in (0, None):
+        try:
+            err_file.seek(0)
+            err = err_file.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            err = ""
+        if err:
+            tail = "\n".join(err.splitlines()[-30:])
+            console.print(
+                Panel(
+                    Text(tail, style="red"),
+                    title="stderr (tail)",
+                    border_style="red",
+                )
+            )
+    with suppress(Exception):
+        err_file.close()
+
+    return returncode if returncode is not None else 0
+
+
 def _run_local(
     ctx: click.Context,
     project_root: Path,
@@ -447,6 +536,7 @@ def _run_local(
     record_localization: bool = False,
     record_hz: float | None = None,
     extra_env: dict | None = None,
+    raw: bool = False,
 ) -> None:
     """Run the project locally."""
     console: Console = ctx.obj["console"]
@@ -532,7 +622,15 @@ def _run_local(
     # Pi server executor captures output), allocate a PTY so the child's
     # isatty() check returns True and colour libraries (loguru, colorama, …)
     # activate — FORCE_COLOR alone only helps libraries that check that env var.
-    if sys.platform == "win32" or sys.stdout.isatty():
+    # Prefer the live JSONL TUI on an interactive terminal: the child's stdout
+    # now carries only warn/error, while the full run detail is streamed from
+    # .raccoon/logs/libstp-*.jsonl into a scrolling viewer. --raw (or a non-TTY)
+    # falls back to inheriting the child's stdout directly.
+    use_tui = sys.stdout.isatty() and not raw and os.environ.get("RACCOON_RUN_RAW") != "1"
+
+    if use_tui:
+        returncode = _run_local_with_tui(cmd_parts, project_root, env, console)
+    elif sys.platform == "win32" or sys.stdout.isatty():
         with _active_program_lock():
             _ensure_single_active_program(project_root, console)
             proc = subprocess.Popen(
@@ -847,6 +945,11 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
     default=None,
     help="Recorder downsample rate in Hz (default 20). Only effective with --record-localization.",
 )
+@click.option(
+    "--raw",
+    is_flag=True,
+    help="Local runs: inherit the program's stdout directly instead of the live JSONL log viewer.",
+)
 @click.pass_context
 def run_command(
     ctx: click.Context,
@@ -860,6 +963,7 @@ def run_command(
     debug: bool,
     record_localization: bool,
     record_hz: float | None,
+    raw: bool,
 ) -> None:
     """Run codegen and then execute src.main.
 
@@ -1005,6 +1109,7 @@ def run_command(
             record_localization=record_localization,
             record_hz=record_hz,
             extra_env=extra_env,
+            raw=raw,
         )
 
     except ProjectError as exc:

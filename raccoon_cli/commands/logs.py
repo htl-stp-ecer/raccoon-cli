@@ -51,7 +51,11 @@ _LEVEL_STYLES = {
 
 
 def _level_style(level: str) -> str:
-    return _LEVEL_STYLES.get(level.upper(), "")
+    lvl = (level or "").upper()
+    # spdlog emits "warning"; our palette keys it as WARN.
+    if lvl == "WARNING":
+        lvl = "WARN"
+    return _LEVEL_STYLES.get(lvl, "")
 
 
 def _format_duration(secs: float) -> str:
@@ -119,6 +123,21 @@ def _get_remote_context(console: Console) -> tuple:
     return state, project_uuid
 
 
+def _append_location(line: Text, location: str, func: str) -> None:
+    """Append the fixed-width ``file:line`` + ``func`` columns to *line*.
+
+    Mirrors ``live_stream``'s source/func columns so the post-hoc viewer reads
+    the same. ``func`` (``Class.method`` for Python logs) is only shown when the
+    library provided one — legacy text logs leave it blank.
+    """
+    if location:
+        line.append(f"{location:<30.30} ", style="dim cyan")
+    else:
+        line.append(f"{'':30} ", style="dim")
+    if func:
+        line.append(f"{func:<24.24} ", style="dim italic")
+
+
 def _render_entry_from_dict(entry: dict) -> Text:
     """Render a log entry dict (from API response) as Rich Text."""
     level = entry.get("level", "")
@@ -127,10 +146,9 @@ def _render_entry_from_dict(entry: dict) -> Text:
     line.append(f"{entry.get('elapsed', 0):>9.3f}s ", style="dim")
     line.append(f"{level:<8} ", style=style)
     source = entry.get("source", "")
-    if source:
-        line.append(f"{source:<30} ", style="dim cyan")
-    else:
-        line.append(f"{'':30} ", style="dim")
+    line_no = entry.get("line", 0) or 0
+    location = f"{source}:{line_no}" if source and line_no else source
+    _append_location(line, location, entry.get("func", "") or "")
     line.append(entry.get("message", ""))
     return line
 
@@ -141,10 +159,7 @@ def _render_entry(entry: LogEntry) -> Text:
     line = Text()
     line.append(f"{entry.elapsed:>9.3f}s ", style="dim")
     line.append(f"{entry.level_upper:<8} ", style=style)
-    if entry.source:
-        line.append(f"{entry.source:<30} ", style="dim cyan")
-    else:
-        line.append(f"{'':30} ", style="dim")
+    _append_location(line, entry.location, entry.func)
     line.append(entry.message)
     return line
 
@@ -291,11 +306,27 @@ async def _list_runs_remote(
     """Fetch and render run list from the Pi."""
     from raccoon_cli.client.api import create_api_client
 
+    import httpx
+
     state, project_uuid = remote
     console.print(f"[dim]Fetching logs from {state.pi_hostname or state.pi_address}...[/dim]")
 
     async with create_api_client(state.pi_address, state.pi_port, api_token=state.api_token) as client:
-        data = await client.list_log_runs(project_uuid, include_rotated=show_all, count=count)
+        try:
+            data = await client.list_log_runs(project_uuid, include_rotated=show_all, count=count)
+        except httpx.TimeoutException:
+            console.print(
+                f"[red]Timed out waiting for the log list from "
+                f"{state.pi_hostname or state.pi_address}.[/red]"
+            )
+            console.print(
+                "[dim]The Pi took too long to enumerate its log runs. Try a smaller "
+                "'-n <count>', or check the raccoon-server logs on the Pi.[/dim]"
+            )
+            raise SystemExit(1)
+        except Exception as e:
+            console.print(f"[red]Failed to fetch log runs: {e}[/red]")
+            raise SystemExit(1)
 
     runs = data.get("runs", [])
     if not runs:
