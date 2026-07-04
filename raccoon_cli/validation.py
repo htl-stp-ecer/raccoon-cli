@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import ast
+import difflib
 import logging
 import py_compile
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from raccoon_cli.mission_config import ensure_mission_list, mission_entry_name
 from raccoon_cli.naming import normalize_name
@@ -208,6 +210,197 @@ def _check_python_compile(
 
 
 # ---------------------------------------------------------------------------
+# Defs attribute-access check
+#
+# Missions do ``from src.hardware.defs import Defs`` and reference hardware as
+# ``Defs.motor_left`` etc.  Accessing an attribute that the generated ``Defs``
+# class does not have raises ``AttributeError`` at runtime — something a plain
+# ``py_compile`` syntax check never catches.  We resolve the set of *valid*
+# Defs attributes statically (from ``definitions:`` in the config AND from the
+# generated ``defs.py`` / ``defs.pyi``) and flag any access outside that set.
+# ---------------------------------------------------------------------------
+
+# Names a Defs reference may be bound to (the class and the module singleton).
+_DEFS_ACCESS_NAMES = frozenset({"Defs", "defs"})
+
+# Attributes the generator always emits regardless of config content.
+_ALWAYS_DEFS_ATTRS = frozenset({"imu", "analog_sensors"})
+
+_SENSOR_LEFT_RE = re.compile(r"^(?P<prefix>.+)_left_(?P<suffix>.+)$")
+_SENSOR_RIGHT_RE = re.compile(r"^(?P<prefix>.+)_right_(?P<suffix>.+)$")
+
+
+def _parse_defs_class_attributes(path: Path) -> Optional[Set[str]]:
+    """Return the attribute names declared on ``class Defs`` in a .py/.pyi file.
+
+    Returns None if the file cannot be parsed (a syntax error there is reported
+    separately by the compile check).
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (SyntaxError, OSError, ValueError):
+        return None
+
+    attrs: Set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "Defs":
+            for stmt in node.body:
+                # defs.py: ``name = <expr>``
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name):
+                            attrs.add(target.id)
+                # defs.pyi stub: ``name: Type``
+                elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                    attrs.add(stmt.target.id)
+    return attrs
+
+
+def _defs_names_from_config(definitions: dict) -> Set[str]:
+    """Derive the Defs attribute names that codegen *will* produce from config.
+
+    Mirrors ``DefsGenerator``: every definition key becomes an attribute, plus
+    the always-present extras, auto-created left/right sensor-pair groups, and
+    the wait_for_light companion attributes.  Intentionally over-approximates
+    (accepts a few extra names) so it never produces a false positive.
+    """
+    names: Set[str] = set(_ALWAYS_DEFS_ATTRS)
+    lefts: dict[tuple[str, str], str] = {}
+    rights: dict[tuple[str, str], str] = {}
+    has_wfl = False
+
+    for field_name, hw_cfg in definitions.items():
+        if not isinstance(field_name, str):
+            continue
+        names.add(field_name)
+
+        if field_name == "wait_for_light_sensor":
+            has_wfl = True
+            if isinstance(hw_cfg, dict) and "drop_fraction" in hw_cfg:
+                names.add("wait_for_light_drop_fraction")
+
+        m_left = _SENSOR_LEFT_RE.match(field_name)
+        if m_left:
+            lefts[(m_left.group("prefix"), m_left.group("suffix"))] = field_name
+        m_right = _SENSOR_RIGHT_RE.match(field_name)
+        if m_right:
+            rights[(m_right.group("prefix"), m_right.group("suffix"))] = field_name
+
+    if has_wfl:
+        names.add("wait_for_light_mode")
+
+    for key in lefts:
+        if key in rights and key[0].isidentifier():
+            names.add(key[0])  # ``<prefix>_left_x`` + ``<prefix>_right_x`` → ``<prefix>``
+
+    return names
+
+
+def _collect_valid_defs_attributes(
+    config: dict,
+    project_root: Path,
+) -> Optional[Set[str]]:
+    """Union of valid Defs attributes from config and generated hardware files.
+
+    Returns None when neither source is available, in which case the
+    attribute-access check is skipped rather than guessed.
+    """
+    names: Set[str] = set()
+    found_source = False
+
+    hardware_dir = project_root / "src" / "hardware"
+    for fname in ("defs.py", "defs.pyi"):
+        parsed = _parse_defs_class_attributes(hardware_dir / fname)
+        if parsed is not None and (hardware_dir / fname).exists():
+            names |= parsed
+            found_source = True
+
+    definitions = config.get("definitions")
+    if isinstance(definitions, dict):
+        names |= _defs_names_from_config(definitions)
+        found_source = True
+
+    if not found_source:
+        return None
+
+    names |= _ALWAYS_DEFS_ATTRS
+    return names
+
+
+def _file_imports_defs(tree: ast.AST) -> bool:
+    """True if the module imports ``Defs`` or ``defs`` from a ``*.defs`` module."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module.split(".")[-1] == "defs":
+                if any(alias.name in _DEFS_ACCESS_NAMES for alias in node.names):
+                    return True
+    return False
+
+
+def _check_defs_attribute_access(
+    result: ValidationResult,
+    project_root: Path,
+    valid_names: Set[str],
+) -> None:
+    """ERROR for any ``Defs.<attr>`` access where ``<attr>`` is not a real
+    hardware object — this would raise ``AttributeError`` at runtime."""
+    src_root = project_root / "src"
+    if not src_root.exists():
+        return
+
+    for py_file in sorted(src_root.rglob("*.py")):
+        if "__pycache__" in py_file.parts:
+            continue
+        # The generated hardware files define Defs; don't scan them.
+        rel_parts = py_file.relative_to(src_root).parts
+        if rel_parts[:1] == ("hardware",):
+            continue
+
+        try:
+            tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        except (SyntaxError, OSError, ValueError):
+            continue  # syntax errors are surfaced by the compile check
+
+        if not _file_imports_defs(tree):
+            continue
+
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in _DEFS_ACCESS_NAMES
+            ):
+                continue
+
+            attr = node.attr
+            if attr.startswith("_"):
+                continue  # dunder / private access — not a hardware object
+            if attr in valid_names:
+                continue
+
+            base = node.value.id
+            rel = py_file.relative_to(project_root)
+            suggestion = difflib.get_close_matches(attr, valid_names, n=1)
+            if suggestion:
+                hint = f"Did you mean '{base}.{suggestion[0]}'?"
+            else:
+                hint = (
+                    f"Add '{attr}' under 'definitions:' in raccoon.project.yml "
+                    "and run 'raccoon codegen'."
+                )
+            result.add(ValidationIssue(
+                severity=Severity.ERROR,
+                code="defs_unknown_attribute",
+                message=(
+                    f"{rel}:{node.lineno} accesses '{base}.{attr}' "
+                    "which does not exist on Defs"
+                ),
+                hint=hint,
+            ))
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -215,6 +408,7 @@ def validate_project(
     project_root: Path,
     *,
     python_compile: bool = True,
+    defs_check: bool = True,
 ) -> ValidationResult:
     """Run all project consistency checks and return a structured result.
 
@@ -224,6 +418,8 @@ def validate_project(
     - Mission files on disk → config entries
     - main.py imports → files + config
     - Python compile check for src/**/*.py (optional)
+    - Defs attribute access — flags ``Defs.<attr>`` references that would
+      raise ``AttributeError`` at runtime (optional)
     """
     result = ValidationResult()
 
@@ -256,6 +452,11 @@ def validate_project(
     if python_compile:
         _check_python_compile(result, project_root)
 
+    if defs_check:
+        valid_defs = _collect_valid_defs_attributes(config, project_root)
+        if valid_defs is not None:
+            _check_defs_attribute_access(result, project_root, valid_defs)
+
     return result
 
 
@@ -264,13 +465,16 @@ def run_validation_or_exit(
     project_root: Path,
     *,
     python_compile: bool = True,
+    defs_check: bool = True,
     # Accepted for API compatibility but intentionally ignored:
     # codegen_probe belongs in `raccoon codegen --dry-run`, not here.
     config=None,
     codegen_probe: bool = False,
 ) -> None:
     """Run validation and abort with SystemExit(1) if any errors are found."""
-    result = validate_project(project_root, python_compile=python_compile)
+    result = validate_project(
+        project_root, python_compile=python_compile, defs_check=defs_check
+    )
 
     for issue in result.warnings:
         console.print(f"[yellow]⚠ validate: {issue.message}[/yellow]")

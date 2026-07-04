@@ -1,12 +1,10 @@
 """Parse libstp log files and detect run boundaries.
 
-The library (raccoon-lib) writes one **JSONL** file per run under
-``.raccoon/logs/libstp-<timestamp>.jsonl`` — one JSON object per line carrying
-all metadata (``t``, ``elapsed``, ``seq``, ``level``, ``logger``, ``thread``,
-``pid``, ``file``, ``line``, ``func``, ``msg``). Older builds wrote a
-pipe-delimited text ``libstp-<timestamp>.log`` (and, older still, a rotating
-``libstp.log``); both legacy text formats are still parsed so historical logs
-keep opening. :func:`parse_log_file` dispatches on the file extension.
+The library (raccoon-lib) writes one **JSONL** file per run at
+``.raccoon/runs/<run_id>/libstp.jsonl`` — one JSON object per line carrying all
+metadata (``t``, ``elapsed``, ``seq``, ``level``, ``logger``, ``thread``,
+``pid``, ``file``, ``line``, ``func``, ``msg``). JSONL is the only supported
+format; :func:`parse_log_file` parses every file as JSONL.
 
 The JSONL field handling here is the single source of truth: the live
 ``raccoon run`` TUI (:mod:`raccoon_cli.logs.live_stream`) builds its
@@ -27,20 +25,6 @@ from typing import List, Optional
 # files always carry one, but a truncated/garbled line must not crash the parse.
 _EPOCH = datetime(1970, 1, 1)
 
-
-# Log line format:
-# 2026-04-12 18:15:04 |     3.444s | info     | p.Motor.cpp                    | Mock Motor ...
-_LOG_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"  # timestamp
-    r" \|\s+"
-    r"(\d+\.\d+)s"                                # elapsed seconds
-    r" \|\s+"
-    r"(\w+)"                                       # level
-    r"\s+\|\s+"
-    r"(.*?)"                                       # source (may be empty)
-    r"\s*\|\s+"                                    # delimiter
-    r"(.*)$"                                       # message
-)
 
 # The "Logging to directory" message marks the start of a new run.
 _RUN_START_RE = re.compile(r"^Logging to directory:")
@@ -129,6 +113,14 @@ class LogRun:
     entries: List[LogEntry] = field(default_factory=list)
     file_path: str = ""
 
+    # Unified per-run artifact directory (``.raccoon/runs/<run_id>/``). ``run_id``
+    # is the ``YYYYMMDDThhmmssZ`` directory name. Both are set by the finder after
+    # the run is built; the log this run parses from is ``file_path``
+    # (``<run_dir>/libstp.jsonl``). Downloads use ``run_dir`` to bundle
+    # localization/profile too.
+    run_dir: Optional[str] = None
+    run_id: Optional[str] = None
+
     # When a run is loaded from the metadata sidecar cache its raw ``entries``
     # aren't parsed (that's the whole point — parsing a multi-MB file is the
     # bottleneck). These hold the precomputed summary so the list view is
@@ -159,29 +151,6 @@ class LogRun:
         if self.summary_sources is not None:
             return set(self.summary_sources)
         return {e.source for e in self.entries if e.source.strip()}
-
-
-def parse_log_line(line: str, line_number: int = 0, file_path: str = "") -> Optional[LogEntry]:
-    """Parse a single legacy pipe-delimited log line. None if it doesn't match.
-
-    *line_number* is the ordinal line in the log file; it is intentionally not
-    stored as ``LogEntry.line_number`` (that field means the *source* line, which
-    the legacy text format doesn't carry) — surfacing it would render a
-    misleading ``source:<log-line>`` location.
-    """
-    m = _LOG_RE.match(line.strip())
-    if not m:
-        return None
-    ts_str, elapsed_str, level, source, message = m.groups()
-    return LogEntry(
-        timestamp=datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S"),
-        elapsed=float(elapsed_str),
-        level=level.strip(),
-        source=humanize_source(source.strip()),
-        message=message.strip(),
-        line_number=0,
-        file_path=file_path,
-    )
 
 
 def _coerce_float(value: object, default: float = 0.0) -> float:
@@ -259,25 +228,12 @@ def _parse_jsonl_file(path: Path) -> List[LogEntry]:
 
 
 def parse_log_file(path: Path) -> List[LogEntry]:
-    """Parse all valid log entries from a file (JSONL or legacy pipe text).
+    """Parse all valid log entries from a run's JSONL log file.
 
-    Dispatches on the extension: ``.jsonl`` uses the JSON decoder, anything else
-    falls back to the legacy pipe-delimited text parser.
+    Every run log is JSONL now (one JSON object per line); non-object lines are
+    skipped by :func:`parse_jsonl_line`.
     """
-    if str(path).endswith(".jsonl"):
-        return _parse_jsonl_file(path)
-
-    entries: List[LogEntry] = []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        for line_no, raw in enumerate(f, 1):
-            # Handle concatenated lines (rotation boundary where newline is missing)
-            # Split on date pattern that appears mid-line
-            segments = re.split(r"(?=\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \|)", raw)
-            for seg in segments:
-                entry = parse_log_line(seg, line_number=line_no, file_path=str(path))
-                if entry:
-                    entries.append(entry)
-    return entries
+    return _parse_jsonl_file(path)
 
 
 def detect_runs(entries: List[LogEntry]) -> List[LogRun]:

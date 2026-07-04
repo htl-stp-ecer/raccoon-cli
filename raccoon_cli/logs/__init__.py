@@ -7,7 +7,6 @@ from .parser import (
     humanize_source,
     parse_jsonl_line,
     parse_log_file,
-    parse_log_line,
     single_run,
 )
 from .finder import (
@@ -15,15 +14,17 @@ from .finder import (
     current_log_file,
     discover_log_files,
     find_log_dir,
+    is_run_dir_log,
     is_run_file,
     load_run_by_index,
     load_runs,
+    run_dir_of,
+    run_id_of,
 )
 
 __all__ = [
     "LogEntry",
     "LogRun",
-    "parse_log_line",
     "parse_jsonl_line",
     "parse_log_file",
     "detect_runs",
@@ -33,6 +34,9 @@ __all__ = [
     "discover_log_files",
     "current_log_file",
     "is_run_file",
+    "is_run_dir_log",
+    "run_dir_of",
+    "run_id_of",
     "load_runs",
     "load_run_by_index",
     "DEFAULT_LIST_LIMIT",

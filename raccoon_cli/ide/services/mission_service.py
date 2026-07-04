@@ -1514,7 +1514,7 @@ class MissionService:
         events.  If *since_unix* is given only rows with ``timestamp_unix >=``
         that value are returned; otherwise all rows are returned.
         """
-        db_path = project_path / ".raccoon" / "logs" / "step_timing.db"
+        db_path = project_path / ".raccoon" / "step_timing.db"
         if not db_path.exists():
             return []
 

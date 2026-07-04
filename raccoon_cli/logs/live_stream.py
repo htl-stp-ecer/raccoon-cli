@@ -1,7 +1,7 @@
 """Live TUI that streams a running program's JSONL log instead of raw stdout.
 
-The library (raccoon-lib) writes one JSONL file per run under
-``.raccoon/logs/libstp-<timestamp>.jsonl`` — one JSON object per line with all
+The library (raccoon-lib) writes one JSONL file per run at
+``.raccoon/runs/<run_id>/libstp.jsonl`` — one JSON object per line with all
 metadata (``t``, ``elapsed``, ``seq``, ``level``, ``logger``, ``thread``,
 ``pid``, ``file``, ``line``, ``func``, ``msg``). Its stdout now carries only
 warn/error. So during ``raccoon run`` we suppress the child's stdout and render
@@ -102,12 +102,16 @@ def parse_record(line: str) -> Optional[LiveRecord]:
     )
 
 
-def newest_jsonl(log_dir: Path) -> Optional[Path]:
-    """Return the newest per-run JSONL file in *log_dir*, or ``None``."""
-    if not log_dir.is_dir():
-        return None
-    files = sorted(log_dir.glob(JSONL_GLOB), key=lambda p: p.name)
-    return files[-1] if files else None
+def newest_jsonl(runs_dir: Path) -> Optional[Path]:
+    """Return the newest run's JSONL log under ``.raccoon/runs/``, or ``None``.
+
+    *runs_dir* is the ``.raccoon/runs/`` directory; the newest run dir's
+    ``libstp.jsonl`` wins — so a standalone live view still finds the current run.
+    """
+    from .finder import discover_log_files
+
+    candidates = discover_log_files(runs_dir)
+    return candidates[-1] if candidates else None
 
 
 def wait_for_new_jsonl(
@@ -313,6 +317,27 @@ class LiveLogView:
         return Group(self._header(), self._body(), self._footer())
 
 
+def wait_for_path(
+    path: Path,
+    should_continue: Callable[[], bool],
+    timeout: float = 12.0,
+    poll: float = 0.1,
+) -> bool:
+    """Poll until *path* exists, the process dies, or *timeout* elapses.
+
+    Returns ``True`` once the file exists (giving the writer one last check after
+    the process exits), ``False`` otherwise.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.is_file():
+            return True
+        if not should_continue():
+            return path.is_file()
+        time.sleep(poll)
+    return path.is_file()
+
+
 def stream_run_logs(
     log_dir: Path,
     is_running: Callable[[], bool],
@@ -320,12 +345,16 @@ def stream_run_logs(
     title: str,
     existing: Optional[set[Path]] = None,
     startup_timeout: float = 12.0,
+    log_path: Optional[Path] = None,
 ) -> bool:
     """Stream the current run's JSONL log into a live TUI.
 
-    Waits for a fresh ``libstp-*.jsonl`` (one not already in *existing*) to
-    appear, then tails it into a :class:`LiveLogView` until ``is_running()``
-    goes false and the file is fully drained.
+    When *log_path* is given (``raccoon run`` knows the exact
+    ``<run_dir>/libstp.jsonl`` the child will write), the streamer waits for that
+    file specifically — race-free. Otherwise it waits for a fresh
+    ``libstp-*.jsonl`` (one not already in *existing*) to appear. Either way it
+    then tails the file into a :class:`LiveLogView` until ``is_running()`` goes
+    false and the file is fully drained.
 
     Returns ``True`` if a log file was found and streamed, ``False`` if none
     appeared before the process exited / the timeout elapsed (so the caller can
@@ -334,11 +363,15 @@ def stream_run_logs(
     from rich.live import Live
 
     existing = existing or set()
-    log_path = wait_for_new_jsonl(
-        log_dir, exclude=existing, should_continue=is_running, timeout=startup_timeout
-    )
-    if log_path is None:
-        return False
+    if log_path is not None:
+        if not wait_for_path(log_path, should_continue=is_running, timeout=startup_timeout):
+            return False
+    else:
+        log_path = wait_for_new_jsonl(
+            log_dir, exclude=existing, should_continue=is_running, timeout=startup_timeout
+        )
+        if log_path is None:
+            return False
 
     view = LiveLogView(console, title=title, log_path=log_path)
     with Live(

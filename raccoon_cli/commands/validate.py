@@ -15,8 +15,15 @@ from raccoon_cli.validation import Severity, validate_project
     is_flag=True,
     help="Skip Python bytecode compile checks for project source files.",
 )
+@click.option(
+    "--no-defs-check",
+    is_flag=True,
+    help="Skip checking Defs.<attr> accesses against the defined hardware.",
+)
 @click.pass_context
-def validate_command(ctx: click.Context, no_python_compile: bool) -> None:
+def validate_command(
+    ctx: click.Context, no_python_compile: bool, no_defs_check: bool
+) -> None:
     """Check that config, mission files, and imports are consistent."""
     console: Console = ctx.obj["console"]
 
@@ -26,7 +33,11 @@ def validate_command(ctx: click.Context, no_python_compile: bool) -> None:
         console.print(f"[red]✗ {exc}[/red]")
         raise SystemExit(1) from exc
 
-    result = validate_project(project_root, python_compile=not no_python_compile)
+    result = validate_project(
+        project_root,
+        python_compile=not no_python_compile,
+        defs_check=not no_defs_check,
+    )
 
     if not result.issues:
         console.print("[green]✓ Project is consistent — no issues found.[/green]")

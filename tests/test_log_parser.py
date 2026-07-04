@@ -3,7 +3,6 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from textwrap import dedent
 
 import pytest
 
@@ -13,7 +12,6 @@ from raccoon_cli.logs.parser import (
     humanize_source,
     parse_jsonl_line,
     parse_log_file,
-    parse_log_line,
     single_run,
 )
 
@@ -34,35 +32,6 @@ def _jsonl(**kw) -> str:
     }
     base.update(kw)
     return json.dumps(base)
-
-
-class TestParseLogLine:
-    def test_basic_line(self):
-        line = "2026-04-12 18:15:04 |     3.444s | info     | p.Motor.cpp                    | Mock Motor port=0 setVelocity=9 inverted=false"
-        entry = parse_log_line(line)
-        assert entry is not None
-        assert entry.timestamp == datetime(2026, 4, 12, 18, 15, 4)
-        assert entry.elapsed == pytest.approx(3.444)
-        assert entry.level == "info"
-        assert entry.source == "p.Motor.cpp"
-        assert entry.message == "Mock Motor port=0 setVelocity=9 inverted=false"
-
-    def test_empty_source(self):
-        line = "2026-04-12 21:29:30 |     0.000s | info     |                                | Logging to directory: /some/path"
-        entry = parse_log_line(line)
-        assert entry is not None
-        assert entry.source == ""
-        assert entry.message == "Logging to directory: /some/path"
-
-    def test_warning_level(self):
-        line = "2026-04-12 21:36:34 |     0.002s | warning  | o.stm32_odometry.cpp           | Stm32Odometry::reset"
-        entry = parse_log_line(line)
-        assert entry is not None
-        assert entry.level_upper == "WARN"
-
-    def test_invalid_line(self):
-        assert parse_log_line("not a log line") is None
-        assert parse_log_line("") is None
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -165,15 +134,6 @@ class TestHumanizeSource:
         assert humanize_source("api.py") == "api.py"
         assert humanize_source("r.api.py") == "r.api.py"
 
-    def test_applied_during_parse(self):
-        line = (
-            "2026-07-01 10:12:58 |     0.009s | info     | "
-            "h.t...l.p.s.r.r.api.py         | [Robot]: Starting robot"
-        )
-        entry = parse_log_line(line)
-        assert entry is not None
-        assert entry.source == "r.api.py"
-
 
 class TestSingleRun:
     def _entry(self, elapsed: float, message: str = "test") -> LogEntry:
@@ -266,28 +226,7 @@ class TestDetectRuns:
 
 
 class TestParseLogFile:
-    def test_parse_file(self, tmp_path: Path):
-        log = tmp_path / "libstp.log"
-        log.write_text(dedent("""\
-            2026-04-12 18:15:04 |     0.000s | info     |                                | Logging to directory: /tmp/logs
-            2026-04-12 18:15:04 |     0.001s | info     | p.Motor.cpp                    | Motor init
-            2026-04-12 18:15:04 |     0.002s | warning  | test.cpp                       | low battery
-        """))
-        entries = parse_log_file(log)
-        assert len(entries) == 3
-        assert entries[2].level_upper == "WARN"
-
-    def test_concatenated_lines(self, tmp_path: Path):
-        """Lines can be concatenated at rotation boundaries."""
-        log = tmp_path / "libstp.log"
-        log.write_text(
-            "2026-04-12 18:15:04 |     3.000s | info     | p.Motor.cpp                    | end of run"
-            "2026-04-12 18:15:05 |     0.000s | info     |                                | Logging to directory: /tmp"
-        )
-        entries = parse_log_file(log)
-        assert len(entries) == 2
-
-    def test_parse_jsonl_file_dispatch(self, tmp_path: Path):
+    def test_parse_jsonl_file(self, tmp_path: Path):
         log = tmp_path / "libstp-2026-07-04_15-32-26.jsonl"
         log.write_text(
             _jsonl(seq=0, level="info", msg="init")

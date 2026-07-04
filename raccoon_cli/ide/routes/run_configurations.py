@@ -47,7 +47,8 @@ class RunConfigurationPayload(BaseModel):
     no_checkpoints: bool = False
     no_codegen: bool = False
     no_sync: bool = False
-    record_localization: bool = False
+    record_localization: bool = True
+    profile: bool = True
     record_hz: Optional[float] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
@@ -65,6 +66,7 @@ def _serialize(cfg: RunConfiguration) -> Dict[str, Any]:
         "no_codegen": cfg.no_codegen,
         "no_sync": cfg.no_sync,
         "record_localization": cfg.record_localization,
+        "profile": cfg.profile,
         "record_hz": cfg.record_hz,
         "args": list(cfg.args),
         "env": dict(cfg.env),
@@ -131,6 +133,7 @@ async def upsert_run_configuration_endpoint(
         no_codegen=payload.no_codegen,
         no_sync=payload.no_sync,
         record_localization=payload.record_localization,
+        profile=payload.profile,
         record_hz=payload.record_hz,
         args=list(payload.args),
         env=dict(payload.env),

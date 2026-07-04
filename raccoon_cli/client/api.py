@@ -524,16 +524,23 @@ class RaccoonApiClient:
 
     async def download_log_bundle(
         self, project_id: str, run_index: int, pad_secs: float = 2.0
-    ) -> dict:
-        """Fetch a run's raw log + windowed STM32 cmd_trace slice from the Pi."""
+    ) -> bytes:
+        """Fetch a run's artifact bundle from the Pi as a zip (raw bytes).
+
+        The server zips the whole ``.raccoon/runs/<run_id>/`` directory (log +
+        localization + profile + manifest) together with the windowed STM32
+        cmd_trace slice and a ``manifest.json``. Localization/profile files can be
+        large, so the transfer is a zip stream rather than inline JSON.
+        """
         client = self._get_client()
         response = await client.get(
             f"{self.base_url}/api/v1/logs/{project_id}/runs/{run_index}/bundle",
             params={"pad": str(pad_secs)},
             headers=self._auth_headers(),
+            timeout=90.0,
         )
         response.raise_for_status()
-        return response.json()
+        return response.content
 
     async def list_project_services(self, project_id: str) -> dict:
         """List project services with their current systemd status."""
