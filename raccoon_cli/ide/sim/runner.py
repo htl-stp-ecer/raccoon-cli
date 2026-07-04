@@ -57,20 +57,27 @@ def _resolve_scene(scene: str, project_root: Path) -> Path:
     candidate = Path(scene).expanduser()
     if candidate.is_absolute() and candidate.exists():
         return candidate
-    # Project-local
+    # Project-local — the normal case: robot.physical.table_map is a
+    # project-relative .ftmap path.
     local = project_root / candidate
     if local.exists():
         return local
-    # Fall back to the shared scene library inside the raccoon-lib repo when
-    # available — the toolchain currently has no canonical install path for
-    # `.ftmap` files, so this is best-effort.
-    for guess in (
-        Path("/media/tobias/TobiasSSD1/projects/Botball/raccoon/raccoon-lib/scenes"),
-    ):
-        bundled = guess / candidate
+    # Optional shared scene library (e.g. raccoon-lib/scenes for the built-in
+    # empty_table fallback). No hard-coded path — point RACCOON_SIM_SCENE_DIR
+    # (os.pathsep-separated) at it if you rely on bundled scenes.
+    import os
+
+    for entry in os.environ.get("RACCOON_SIM_SCENE_DIR", "").split(os.pathsep):
+        if not entry.strip():
+            continue
+        bundled = Path(entry).expanduser() / candidate
         if bundled.exists():
             return bundled
-    raise SystemExit(f"Scene not found: {scene}")
+    raise SystemExit(
+        f"Scene not found: {scene!r}. Looked in {project_root} and "
+        f"$RACCOON_SIM_SCENE_DIR. Configure robot.physical.table_map to a "
+        f"project-relative .ftmap, or set RACCOON_SIM_SCENE_DIR."
+    )
 
 
 def _build_sim_robot_config(project_cfg: dict[str, Any]):

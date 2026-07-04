@@ -1,0 +1,5 @@
+{"t":"2026-07-04T15:32:26.692","elapsed":0.000,"seq":0,"level":"info","logger":"core","thread":471302,"pid":471302,"file":"/repo/python/raccoon/robot/api.py","line":40,"func":"Robot.start","msg":"Starting robot"}
+{"t":"2026-07-04T15:32:26.693","elapsed":0.001,"seq":1,"level":"debug","logger":"core","thread":471302,"pid":471302,"file":"/repo/python/raccoon/step/base.py","line":14,"func":"DriveStep._execute_step","msg":"starting drive"}
+{"t":"2026-07-04T15:32:27.100","elapsed":0.408,"seq":2,"level":"warning","logger":"core","thread":471302,"pid":471302,"file":"/repo/modules/libstp-motion/drive.cpp","line":88,"func":"","msg":"velocity saturated, clamping to max"}
+{"t":"2026-07-04T15:32:27.905","elapsed":1.213,"seq":3,"level":"error","logger":"core","thread":471302,"pid":471302,"file":"/repo/modules/libstp-motion/drive.cpp","line":91,"func":"","msg":"motor stall detected"}
+{"t":"2026-07-04T15:32:28.010","elapsed":1.318,"seq":4,"level":"info","logger":"core","thread":471302,"pid":471302,"file":"/repo/python/raccoon/robot/api.py","line":72,"func":"Robot.stop","msg":"Robot stopped cleanly"}

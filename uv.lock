@@ -7,15 +7,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "aiosqlite"
-version = "0.22.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4e/8a/64761f4005f17809769d23e518d915db74e6310474e733e3593cfc854ef1/aiosqlite-0.22.1.tar.gz", hash = "sha256:043e0bd78d32888c0a9ca90fc788b38796843360c855a7262a532813133a0650", size = 14821, upload-time = "2025-12-23T19:25:43.997Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl", hash = "sha256:21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb", size = 17405, upload-time = "2025-12-23T19:25:42.139Z" },
-]
-
-[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1061,7 +1052,6 @@ dependencies = [
     { name = "pytest-asyncio" },
     { name = "pyyaml" },
     { name = "questionary" },
-    { name = "raccoon-library" },
     { name = "raccoon-transport" },
     { name = "rich" },
     { name = "ruamel-yaml" },
@@ -1096,7 +1086,6 @@ requires-dist = [
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "pyyaml" },
     { name = "questionary", specifier = ">=2.0" },
-    { name = "raccoon-library" },
     { name = "raccoon-transport", specifier = ">=0.1" },
     { name = "rich", specifier = ">=10.0" },
     { name = "ruamel-yaml", specifier = ">=0.17" },
@@ -1107,20 +1096,6 @@ requires-dist = [
     { name = "wheel", specifier = ">=0.45.1" },
 ]
 provides-extras = ["arm"]
-
-[[package]]
-name = "raccoon-library"
-version = "1.0.101"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiosqlite" },
-    { name = "pyyaml" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/36/db94963dbf435a31252f611aa5b7bac7576ca0848e98a537c3d9ece4be4b/raccoon_library-1.0.101-cp313-cp313-macosx_14_0_universal2.whl", hash = "sha256:1538e752dae95864dce826ee6f6636cbed9c6a61445b2925fae5324a17a143e3", size = 8470202, upload-time = "2026-05-23T21:09:44.813Z" },
-    { url = "https://files.pythonhosted.org/packages/55/5e/2d3a8bb7b875b273316f73dbb0dcee07f0b42564eba90d4e689bdd480f52/raccoon_library-1.0.101-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bc307ba96908d70af12ab49142b9e94f496f48d0e280007e3e5ff1ecdae2f6f3", size = 7823116, upload-time = "2026-05-23T21:09:47.751Z" },
-    { url = "https://files.pythonhosted.org/packages/a0/ec/538573173ebec4e6560ed72c1129ff12d67c2036d6e8d6ef34b4d2e39387/raccoon_library-1.0.101-cp313-cp313-win_amd64.whl", hash = "sha256:8a9ad2406c550ec3b21d2139970d964696cc7acd51d0547cbdf007bc6c6f6ba2", size = 5526911, upload-time = "2026-05-23T21:09:49.463Z" },
-]
 
 [[package]]
 name = "raccoon-transport"

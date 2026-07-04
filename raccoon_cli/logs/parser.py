@@ -1,12 +1,31 @@
-"""Parse libstp log files and detect run boundaries."""
+"""Parse libstp log files and detect run boundaries.
+
+The library (raccoon-lib) writes one **JSONL** file per run under
+``.raccoon/logs/libstp-<timestamp>.jsonl`` — one JSON object per line carrying
+all metadata (``t``, ``elapsed``, ``seq``, ``level``, ``logger``, ``thread``,
+``pid``, ``file``, ``line``, ``func``, ``msg``). Older builds wrote a
+pipe-delimited text ``libstp-<timestamp>.log`` (and, older still, a rotating
+``libstp.log``); both legacy text formats are still parsed so historical logs
+keep opening. :func:`parse_log_file` dispatches on the file extension.
+
+The JSONL field handling here is the single source of truth: the live
+``raccoon run`` TUI (:mod:`raccoon_cli.logs.live_stream`) builds its
+``LiveRecord`` from :func:`parse_jsonl_line` too, so the live streamer and the
+post-hoc ``raccoon logs`` viewer never diverge on how a record is decoded.
+"""
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+
+# Fallback timestamp for JSONL records with a missing/unparseable ``t`` — real
+# files always carry one, but a truncated/garbled line must not crash the parse.
+_EPOCH = datetime(1970, 1, 1)
 
 
 # Log line format:
@@ -57,7 +76,18 @@ def humanize_source(source: str) -> str:
 
 @dataclass
 class LogEntry:
-    """A single parsed log line."""
+    """A single parsed log line (from either the JSONL or legacy text format).
+
+    ``source`` is the short, groupable emitter label: the file **basename** for
+    JSONL records (e.g. ``base.py``) or the library's dotted abbreviation for
+    legacy text (e.g. ``p.Motor.cpp``). ``source_path`` keeps the full source
+    path and ``line_number`` the source line (JSONL only; ``line_number`` is 0
+    for legacy text, which carries no reliable source line), so a richer
+    ``file:line`` location and the enclosing ``func`` can be rendered without
+    losing the groupable source. ``file_path`` is the *log file* this entry was
+    read from (used to locate the raw file for ``download``), never the source
+    file. ``seq``/``thread``/``pid`` are carried through from JSONL (0 for legacy).
+    """
 
     timestamp: datetime
     elapsed: float
@@ -66,14 +96,26 @@ class LogEntry:
     message: str
     line_number: int = 0
     file_path: str = ""
+    func: str = ""
+    seq: int = 0
+    thread: int = 0
+    pid: int = 0
+    source_path: str = ""
 
     @property
     def level_upper(self) -> str:
         lvl = self.level.upper()
-        # Normalize "WARNING" → "WARN" for consistency
+        # Normalize "WARNING" (spdlog's spelling) → "WARN" for consistency
         if lvl == "WARNING":
             return "WARN"
         return lvl
+
+    @property
+    def location(self) -> str:
+        """``source:line`` (or just ``source``) — the emitting location."""
+        if self.source and self.line_number:
+            return f"{self.source}:{self.line_number}"
+        return self.source
 
 
 @dataclass
@@ -87,12 +129,25 @@ class LogRun:
     entries: List[LogEntry] = field(default_factory=list)
     file_path: str = ""
 
+    # When a run is loaded from the metadata sidecar cache its raw ``entries``
+    # aren't parsed (that's the whole point — parsing a multi-MB file is the
+    # bottleneck). These hold the precomputed summary so the list view is
+    # correct without the entries. ``None`` means "not cached, derive from
+    # entries". See ``logs.run_cache``.
+    summary_line_count: Optional[int] = None
+    summary_level_counts: Optional[dict[str, int]] = None
+    summary_sources: Optional[set[str]] = None
+
     @property
     def line_count(self) -> int:
+        if self.summary_line_count is not None:
+            return self.summary_line_count
         return len(self.entries)
 
     @property
     def level_counts(self) -> dict[str, int]:
+        if self.summary_level_counts is not None:
+            return dict(self.summary_level_counts)
         counts: dict[str, int] = {}
         for e in self.entries:
             key = e.level_upper
@@ -101,11 +156,19 @@ class LogRun:
 
     @property
     def sources(self) -> set[str]:
+        if self.summary_sources is not None:
+            return set(self.summary_sources)
         return {e.source for e in self.entries if e.source.strip()}
 
 
 def parse_log_line(line: str, line_number: int = 0, file_path: str = "") -> Optional[LogEntry]:
-    """Parse a single log line. Returns None if the line doesn't match."""
+    """Parse a single legacy pipe-delimited log line. None if it doesn't match.
+
+    *line_number* is the ordinal line in the log file; it is intentionally not
+    stored as ``LogEntry.line_number`` (that field means the *source* line, which
+    the legacy text format doesn't carry) — surfacing it would render a
+    misleading ``source:<log-line>`` location.
+    """
     m = _LOG_RE.match(line.strip())
     if not m:
         return None
@@ -116,13 +179,94 @@ def parse_log_line(line: str, line_number: int = 0, file_path: str = "") -> Opti
         level=level.strip(),
         source=humanize_source(source.strip()),
         message=message.strip(),
-        line_number=line_number,
+        line_number=0,
         file_path=file_path,
     )
 
 
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _basename(path: str) -> str:
+    """Last path component of *path* (handles both ``/`` and ``\\`` separators)."""
+    return path.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def parse_jsonl_line(line: str, line_number: int = 0) -> Optional[LogEntry]:
+    """Parse one JSONL log line into a :class:`LogEntry`.
+
+    Returns ``None`` for blank lines or anything that isn't a JSON object, so a
+    stray non-JSON line (e.g. an interpreter banner that slipped into the file)
+    is skipped rather than crashing the parse. This is the shared decoder used
+    by both this module and :mod:`raccoon_cli.logs.live_stream`.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        rec = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(rec, dict):
+        return None
+
+    ts_raw = str(rec.get("t", "") or "")
+    try:
+        timestamp = datetime.fromisoformat(ts_raw) if ts_raw else _EPOCH
+    except ValueError:
+        timestamp = _EPOCH
+
+    file_field = str(rec.get("file", "") or "")
+    return LogEntry(
+        timestamp=timestamp,
+        elapsed=_coerce_float(rec.get("elapsed", 0.0)),
+        level=str(rec.get("level", "") or ""),
+        # Basename is the groupable emitter; the full source path is source_path.
+        source=_basename(file_field),
+        message=str(rec.get("msg", "") or ""),
+        line_number=_coerce_int(rec.get("line", 0)),
+        func=str(rec.get("func", "") or ""),
+        seq=_coerce_int(rec.get("seq", 0)),
+        thread=_coerce_int(rec.get("thread", 0)),
+        pid=_coerce_int(rec.get("pid", 0)),
+        source_path=file_field,
+    )
+
+
+def _parse_jsonl_file(path: Path) -> List[LogEntry]:
+    """Parse every JSON object line of a per-run ``.jsonl`` file."""
+    entries: List[LogEntry] = []
+    log_path = str(path)
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line_no, raw in enumerate(f, 1):
+            entry = parse_jsonl_line(raw, line_number=line_no)
+            if entry is not None:
+                # file_path is the *log file* (for download), not the source.
+                entry.file_path = log_path
+                entries.append(entry)
+    return entries
+
+
 def parse_log_file(path: Path) -> List[LogEntry]:
-    """Parse all valid log entries from a file."""
+    """Parse all valid log entries from a file (JSONL or legacy pipe text).
+
+    Dispatches on the extension: ``.jsonl`` uses the JSON decoder, anything else
+    falls back to the legacy pipe-delimited text parser.
+    """
+    if str(path).endswith(".jsonl"):
+        return _parse_jsonl_file(path)
+
     entries: List[LogEntry] = []
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line_no, raw in enumerate(f, 1):

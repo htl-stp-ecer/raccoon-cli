@@ -1,5 +1,6 @@
 """Tests for log-file discovery (per-run dated files + legacy fallback)."""
 
+import json
 from pathlib import Path
 from textwrap import dedent
 
@@ -19,6 +20,17 @@ def _make_logs_dir(root: Path) -> Path:
     log_dir = root / ".raccoon" / "logs"
     log_dir.mkdir(parents=True)
     return log_dir
+
+
+def _jsonl_body(iso_prefix: str) -> str:
+    """A minimal per-run JSONL body: a couple of records with real fields."""
+    lines = [
+        {"t": f"{iso_prefix}.000", "elapsed": 0.0, "seq": 0, "level": "info",
+         "file": "/x/api.py", "line": 10, "func": "Robot.start", "msg": "start"},
+        {"t": f"{iso_prefix}.500", "elapsed": 0.5, "seq": 1, "level": "warning",
+         "file": "/x/motor.py", "line": 22, "func": "Motor.set", "msg": "low battery"},
+    ]
+    return "\n".join(json.dumps(x) for x in lines) + "\n"
 
 
 def _run_body(started: str) -> str:
@@ -61,6 +73,68 @@ class TestDiscoverPerRunFiles:
         empty.mkdir()
         assert current_log_file(empty) is None
         assert discover_log_files(empty) == []
+
+
+class TestDiscoverJsonl:
+    def test_jsonl_files_discovered_and_sorted(self, tmp_path: Path):
+        log_dir = _make_logs_dir(tmp_path)
+        for name in (
+            "libstp-2026-07-04_10-00-00.jsonl",
+            "libstp-2026-07-03_23-59-59.jsonl",
+            "libstp-2026-07-04_09-00-00.jsonl",
+        ):
+            (log_dir / name).write_text("{}\n")
+
+        assert [p.name for p in discover_log_files(log_dir)] == [
+            "libstp-2026-07-03_23-59-59.jsonl",
+            "libstp-2026-07-04_09-00-00.jsonl",
+            "libstp-2026-07-04_10-00-00.jsonl",
+        ]
+        assert current_log_file(log_dir).name == "libstp-2026-07-04_10-00-00.jsonl"
+
+    def test_mixed_jsonl_and_log_sorted_by_timestamp(self, tmp_path: Path):
+        log_dir = _make_logs_dir(tmp_path)
+        (log_dir / "libstp-2026-07-04_09-00-00.log").write_text("x")
+        (log_dir / "libstp-2026-07-04_10-00-00.jsonl").write_text("{}\n")
+        (log_dir / "libstp-2026-07-04_08-00-00.jsonl").write_text("{}\n")
+
+        assert [p.name for p in discover_log_files(log_dir)] == [
+            "libstp-2026-07-04_08-00-00.jsonl",
+            "libstp-2026-07-04_09-00-00.log",
+            "libstp-2026-07-04_10-00-00.jsonl",
+        ]
+
+    def test_jsonl_preferred_on_same_timestamp(self, tmp_path: Path):
+        log_dir = _make_logs_dir(tmp_path)
+        # Same run has both a legacy .log and the new .jsonl — .jsonl is "current".
+        (log_dir / "libstp-2026-07-04_10-00-00.log").write_text("x")
+        (log_dir / "libstp-2026-07-04_10-00-00.jsonl").write_text("{}\n")
+
+        assert current_log_file(log_dir).name == "libstp-2026-07-04_10-00-00.jsonl"
+
+    def test_jsonl_is_run_file(self):
+        assert is_run_file(Path("libstp-2026-07-04_10-00-00.jsonl"))
+        assert is_run_file(Path("/x/y/libstp-2026-07-04_10-00-00.jsonl"))
+
+    def test_load_runs_from_jsonl(self, tmp_path: Path):
+        log_dir = _make_logs_dir(tmp_path)
+        (log_dir / "libstp-2026-07-04_09-00-00.jsonl").write_text(
+            _jsonl_body("2026-07-04T09:00:00")
+        )
+        (log_dir / "libstp-2026-07-04_10-00-00.jsonl").write_text(
+            _jsonl_body("2026-07-04T10:00:00")
+        )
+
+        runs = load_runs(discover_log_files(log_dir))
+        assert len(runs) == 2
+        newest = load_run_by_index(discover_log_files(log_dir), 1)
+        assert newest is not None
+        assert newest.index == 1
+        assert newest.line_count == 2
+        assert newest.start_time.hour == 10
+        # Sources are the file basenames; levels normalise "warning" → WARN.
+        assert newest.sources == {"api.py", "motor.py"}
+        assert newest.level_counts.get("WARN") == 1
 
 
 class TestLegacyFallback:
