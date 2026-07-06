@@ -64,14 +64,23 @@ def _run_capture_env(fake_project, click_ctx, **kwargs) -> dict:
     return mock_popen.call_args.kwargs["env"]
 
 
-def test_defaults_inject_log_localization_and_profile(fake_project, click_ctx):
-    env = _run_capture_env(fake_project, click_ctx)  # defaults: record + profile on
+def test_defaults_inject_log_and_profile_but_not_localization(fake_project, click_ctx):
+    # Localization recording is OFF by default; log + profiling stay on.
+    env = _run_capture_env(fake_project, click_ctx)
     run_dir = fake_project / ".raccoon" / "runs" / "20260704T120000Z"
 
     assert env["LIBSTP_LOG_DIR"] == str(run_dir)
+    assert "LIBSTP_RECORD_LOCALIZATION" not in env
+    assert "LIBSTP_RECORDING_PATH" not in env
+    assert env["RACCOON_PROFILE"] == str(run_dir / "profile.json")
+
+
+def test_record_localization_opts_in(fake_project, click_ctx):
+    env = _run_capture_env(fake_project, click_ctx, record_localization=True)
+    run_dir = fake_project / ".raccoon" / "runs" / "20260704T120000Z"
+
     assert env["LIBSTP_RECORD_LOCALIZATION"] == "1"
     assert env["LIBSTP_RECORDING_PATH"] == str(run_dir / "localization.jsonl")
-    assert env["RACCOON_PROFILE"] == str(run_dir / "profile.json")
 
 
 def test_run_json_manifest_written(fake_project, click_ctx):
@@ -82,7 +91,7 @@ def test_run_json_manifest_written(fake_project, click_ctx):
     assert manifest["run_id"] == "20260704T120000Z"
     assert manifest["project"] == "proj"
     assert manifest["missions"] == ["M050"]
-    assert manifest["record_localization"] is True
+    assert manifest["record_localization"] is False
     assert manifest["profile"] is True
     assert manifest["started_at_utc"] == "2026-07-04T12:00:00Z"
     assert manifest["artifacts"]["log"] == "libstp.jsonl"
@@ -103,7 +112,9 @@ def test_no_record_opts_out_of_localization(fake_project, click_ctx):
 
 
 def test_no_profile_opts_out_of_profiling(fake_project, click_ctx):
-    env = _run_capture_env(fake_project, click_ctx, profile=False)
+    env = _run_capture_env(
+        fake_project, click_ctx, profile=False, record_localization=True
+    )
     assert "RACCOON_PROFILE" not in env
     assert env["LIBSTP_RECORD_LOCALIZATION"] == "1"
 
@@ -115,5 +126,7 @@ def test_no_profile_opts_out_of_profiling(fake_project, click_ctx):
 
 
 def test_record_hz_forwarded(fake_project, click_ctx):
-    env = _run_capture_env(fake_project, click_ctx, record_hz=25.0)
+    env = _run_capture_env(
+        fake_project, click_ctx, record_localization=True, record_hz=25.0
+    )
     assert env["LIBSTP_RECORDING_HZ"] == "25.0"
