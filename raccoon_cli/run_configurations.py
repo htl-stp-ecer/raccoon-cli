@@ -48,7 +48,7 @@ class RunConfiguration:
     debug: bool = False
     no_codegen: bool = False
     no_sync: bool = False
-    record_localization: bool = True
+    record_localization: bool = False
     profile: bool = True
     record_hz: Optional[float] = None
     args: List[str] = field(default_factory=list)

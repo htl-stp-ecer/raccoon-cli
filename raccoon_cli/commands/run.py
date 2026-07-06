@@ -565,7 +565,7 @@ def _run_local(
     no_checkpoints: bool = False,
     debug: bool = False,
     skip_missions: set[int] | None = None,
-    record_localization: bool = True,
+    record_localization: bool = False,
     profile: bool = True,
     record_hz: float | None = None,
     extra_env: dict | None = None,
@@ -762,7 +762,7 @@ async def _run_remote(
     no_checkpoints: bool = False,
     debug: bool = False,
     skip_missions: set[int] | None = None,
-    record_localization: bool = True,
+    record_localization: bool = False,
     profile: bool = True,
     record_hz: float | None = None,
     extra_env: dict | None = None,
@@ -1010,12 +1010,12 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
 @click.option(
     "--record-localization",
     is_flag=True,
-    help="(Default on) Record particle-filter state to .raccoon/runs/<run_id>/localization.jsonl. Kept for compatibility; use --no-record to disable.",
+    help="Record particle-filter state to .raccoon/runs/<run_id>/localization.jsonl (off by default).",
 )
 @click.option(
     "--no-record",
     is_flag=True,
-    help="Disable localization recording for this run (recording is on by default).",
+    help="Force-disable localization recording (redundant now that recording is off by default; kept for compatibility).",
 )
 @click.option(
     "--no-profile",
@@ -1064,10 +1064,11 @@ def run_command(
     """
     console: Console = ctx.obj["console"]
 
-    # Localization recording and step profiling are ON BY DEFAULT; --no-record
-    # and --no-profile opt out. (--record-localization is kept for compat and is
-    # a no-op now that recording defaults on.)
-    record_localization = not no_record
+    # Localization recording is OFF BY DEFAULT; enable it with --record-localization
+    # or a run config's `record_localization: true` (localization itself always
+    # runs, only the recording/logging is gated). --no-record forces it off and
+    # wins over any opt-in — applied after the run-config merge below. Step
+    # profiling stays ON BY DEFAULT; --no-profile opts out.
     profile = not no_profile
 
     # Parse --no-mN flags out of the raw args before forwarding the rest
@@ -1102,9 +1103,10 @@ def run_command(
             debug = debug or run_cfg.debug
             no_codegen = no_codegen or run_cfg.no_codegen
             no_sync = no_sync or run_cfg.no_sync
-            # A run config can opt out of either (its fields default True), but it
-            # never re-enables what the CLI --no-* flags disabled.
-            record_localization = record_localization and run_cfg.record_localization
+            # A run config can enable recording (opt-in, off by default) or opt
+            # out of profiling (on by default). --no-record still wins, enforced
+            # after this block.
+            record_localization = record_localization or run_cfg.record_localization
             profile = profile and run_cfg.profile
             if record_hz is None and run_cfg.record_hz is not None:
                 record_hz = run_cfg.record_hz
@@ -1115,6 +1117,10 @@ def run_command(
             if run_cfg.args:
                 args = tuple(run_cfg.args) + args
             extra_env = dict(run_cfg.env)
+
+        # --no-record wins over any opt-in (CLI --record-localization or run config).
+        if no_record:
+            record_localization = False
 
         _warn_if_migrations_pending(console, project_root)
 
