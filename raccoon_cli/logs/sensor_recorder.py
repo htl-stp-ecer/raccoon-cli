@@ -255,18 +255,28 @@ def record(
     readers: dict[str, _RingReader] = {}
     channel_ids: dict[str, int] = {}
     seq_counters: dict[str, int] = {}
+    warned: set[str] = set()
 
     def open_missing() -> None:
         for chan, typ in channels:
             if chan in readers:
                 continue
             path = _shm_path(chan)
-            if not os.path.exists(path):
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue  # ring not created yet — retry on next rescan
+            if size < _HEADER_SIZE:
+                # A 0-byte / partial placeholder: the ring isn't initialised
+                # (e.g. an unpopulated port beyond the robot's actual count).
+                # Skip silently and retry later in case it fills in.
                 continue
             try:
                 readers[chan] = _RingReader(path)
             except Exception as exc:
-                sys.stderr.write(f"[sensor_recorder] open {chan} failed: {exc}\n")
+                if chan not in warned:
+                    warned.add(chan)
+                    sys.stderr.write(f"[sensor_recorder] open {chan} failed: {exc}\n")
                 continue
             channel_ids[chan] = writer.register_channel(
                 topic=chan,
