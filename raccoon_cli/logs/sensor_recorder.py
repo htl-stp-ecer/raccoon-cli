@@ -92,9 +92,11 @@ def _decode(typ: str, payload: bytes) -> Optional[dict]:
 def _default_channels() -> list[tuple[str, str]]:
     """Return the default (channel, type) whitelist, with port expansion.
 
-    Port-indexed families are probed over a generous range; only rings whose
-    ``/dev/shm`` file actually exists are ever opened (see ``_open_missing``),
-    so unused ports cost nothing.
+    Port counts are fixed by the reader (never more, never fewer): see
+    ``wombat::DeviceTypes`` — ``MAX_ANALOG_PORTS=6`` (analog 0..5),
+    ``MAX_MOTOR_PORTS=4`` (bemf/motor 0..3) — and DataPublisher's hardcoded
+    ``bit < 11`` digital loop (digital 0..10). So the exact channel set is
+    enumerated, not probed.
     """
     channels: list[tuple[str, str]] = [
         # 3-axis vectors
@@ -117,10 +119,11 @@ def _default_channels() -> list[tuple[str, str]]:
         ("raccoon/odometry/vy", "scalar_f"),
         ("raccoon/odometry/wz", "scalar_f"),
     ]
-    for port in range(16):
+    for port in range(6):  # MAX_ANALOG_PORTS
         channels.append((f"raccoon/analog/{port}/value", "scalar_i32"))
-        channels.append((f"raccoon/digital/{port}/value", "scalar_i32"))
-    for port in range(8):
+    for bit in range(11):  # DataPublisher digital loop: bit < 11
+        channels.append((f"raccoon/digital/{bit}/value", "scalar_i32"))
+    for port in range(4):  # MAX_MOTOR_PORTS
         channels.append((f"raccoon/bemf/{port}/value", "scalar_i32"))
         channels.append((f"raccoon/motor/{port}/position", "scalar_i32"))
     return channels
