@@ -578,7 +578,9 @@ def _bundle_output_dir(explicit: Optional[str], run_index: int, start_time: date
 # Canonical artifacts a unified run dir may hold. Presence is discovered at
 # download time; the bundle manifest records name/size/present for each (plus
 # any extra files found, e.g. per-mission ``profile.<Mission>.json``).
-_RUN_ARTIFACTS = ("libstp.jsonl", "localization.jsonl", "profile.json", "run.json")
+_RUN_ARTIFACTS = (
+    "libstp.jsonl", "localization.jsonl", "profile.json", "run.json", "sensors.mcap",
+)
 
 
 def _artifact_entries(sizes: dict[str, int]) -> list[dict]:

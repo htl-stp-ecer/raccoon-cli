@@ -32,6 +32,7 @@ from raccoon_cli.run_configurations import (
 from raccoon_cli.run_recording import (
     build_run_env,
     make_run_id,
+    prune_runs,
     write_run_manifest,
 )
 
@@ -554,6 +555,65 @@ def _run_local_with_tui(
     return returncode if returncode is not None else 0
 
 
+def _on_raspberry_pi() -> bool:
+    """True when running on the robot (ARM), where run dirs accumulate."""
+    import platform
+
+    return platform.machine() in ("aarch64", "arm64", "armv7l")
+
+
+def _sensor_rings_present() -> bool:
+    """True when the stm32-data-reader SHM rings exist (so we can record)."""
+    import glob
+
+    return bool(glob.glob("/dev/shm/raccoon_ring_*"))
+
+
+def _start_sensor_recorder(run_dir: Path, env: dict, console: Console):
+    """Spawn the run-scoped SHM sensor recorder; return the process or None.
+
+    Only starts when the sensor rings are present (i.e. we are on the robot
+    with the reader running). Shares the run's process group so a killpg from
+    the Pi server also reaches it — but we stop it explicitly too.
+    """
+    if not _sensor_rings_present():
+        console.print(
+            "[dim]Sensor recording requested but no SHM rings found "
+            "(reader not running?) — skipping.[/dim]"
+        )
+        return None
+    out_path = run_dir / "sensors.mcap"
+    try:
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "raccoon_cli.logs.sensor_recorder",
+                "--out", str(out_path),
+                "--preset", "default",
+            ],
+            env=env,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[yellow]Could not start sensor recorder: {exc}[/yellow]")
+        return None
+    console.print(f"[dim]Recording sensors → {out_path.name}[/dim]")
+    return proc
+
+
+def _stop_sensor_recorder(proc, console: Console) -> None:
+    """SIGTERM the recorder and wait for it to finalise the MCAP index."""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()  # SIGTERM → recorder finishes the MCAP file
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+
 def _run_local(
     ctx: click.Context,
     project_root: Path,
@@ -568,6 +628,7 @@ def _run_local(
     record_localization: bool = False,
     profile: bool = True,
     record_hz: float | None = None,
+    record_sensors: bool = True,
     extra_env: dict | None = None,
     raw: bool = False,
     run_id: str | None = None,
@@ -593,6 +654,13 @@ def _run_local(
         )
 
     env = os.environ.copy()
+    # For a remote run the laptop launches `raccoon run --local` on the Pi and
+    # passes RACCOON_RECORD_SENSORS in the env. The Pi's fresh invocation would
+    # otherwise fall back to the flag default (on); honour the inherited opt-out.
+    _inherited_rs = env.get("RACCOON_RECORD_SENSORS")
+    effective_record_sensors = (
+        record_sensors if _inherited_rs is None else _inherited_rs == "1"
+    )
     env["PYTHONUNBUFFERED"] = "1"
     # Force color output: uv and other launchers may not propagate the TTY to
     # the child Python process, so libraries like Rich fall back to no-color mode.
@@ -649,6 +717,7 @@ def _run_local(
         args=list(args),
         record_localization=record_localization,
         profile=profile,
+        record_sensors=effective_record_sensors,
         project=config.get("name") if isinstance(config, dict) else None,
     )
     for key, value in build_run_env(
@@ -658,6 +727,7 @@ def _run_local(
         record_localization=record_localization,
         profile=profile,
         record_hz=record_hz,
+        record_sensors=effective_record_sensors,
     ).items():
         env[key] = value
     _announce_run_dir(
@@ -665,6 +735,20 @@ def _run_local(
         record_localization=record_localization, profile=profile,
     )
     run_log_path = run_dir / "libstp.jsonl"
+
+    # Retention (Pi only): keep the 3 newest run dirs, delete older ones so the
+    # SD card does not fill up with raw sensor recordings. The just-created run
+    # dir counts as newest and is always kept. Best-effort — never fail the run.
+    if _on_raspberry_pi():
+        try:
+            removed = prune_runs(project_root, keep=3)
+            if removed:
+                console.print(
+                    f"[dim]Pruned {len(removed)} old run(s): "
+                    f"{', '.join(removed)}[/dim]"
+                )
+        except Exception:
+            logger.exception("Run retention prune failed")
 
     # On Windows, Ctrl+C doesn't reliably propagate to child processes.
     # Use Popen so we can catch SIGINT ourselves and terminate the child.
@@ -680,35 +764,45 @@ def _run_local(
     # non-TTY) falls back to inheriting the child's stdout directly.
     use_tui = sys.stdout.isatty() and not raw and os.environ.get("RACCOON_RUN_RAW") != "1"
 
-    if use_tui:
-        returncode = _run_local_with_tui(
-            cmd_parts, project_root, env, console, log_path=run_log_path
-        )
-    elif sys.platform == "win32" or sys.stdout.isatty():
-        with _active_program_lock():
-            _ensure_single_active_program(project_root, console)
-            proc = subprocess.Popen(
-                cmd_parts,
-                cwd=project_root,
-                env=env,
-                start_new_session=(os.name == "posix"),
+    # Record raw SHM sensor channels for the lifetime of the mission (Pi only —
+    # the rings live on the robot). Started before and stopped after whichever
+    # launch path runs, so the MCAP file is always finalised.
+    sensor_recorder = None
+    if effective_record_sensors:
+        sensor_recorder = _start_sensor_recorder(run_dir, env, console)
+
+    try:
+        if use_tui:
+            returncode = _run_local_with_tui(
+                cmd_parts, project_root, env, console, log_path=run_log_path
             )
-            _write_active_program_state(
-                pid=proc.pid,
-                project_root=project_root,
-                cmd_parts=cmd_parts,
-            )
-        original_sigint, original_sigterm = _install_termination_handlers()
-        try:
-            returncode = proc.wait()
-        except KeyboardInterrupt:
-            returncode = _terminate_process_on_interrupt(proc, console)
-        finally:
-            _restore_termination_handlers(original_sigint, original_sigterm)
+        elif sys.platform == "win32" or sys.stdout.isatty():
             with _active_program_lock():
-                _clear_active_program_state(proc.pid)
-    else:
-        returncode = _run_via_pty(cmd_parts, project_root, env, console)
+                _ensure_single_active_program(project_root, console)
+                proc = subprocess.Popen(
+                    cmd_parts,
+                    cwd=project_root,
+                    env=env,
+                    start_new_session=(os.name == "posix"),
+                )
+                _write_active_program_state(
+                    pid=proc.pid,
+                    project_root=project_root,
+                    cmd_parts=cmd_parts,
+                )
+            original_sigint, original_sigterm = _install_termination_handlers()
+            try:
+                returncode = proc.wait()
+            except KeyboardInterrupt:
+                returncode = _terminate_process_on_interrupt(proc, console)
+            finally:
+                _restore_termination_handlers(original_sigint, original_sigterm)
+                with _active_program_lock():
+                    _clear_active_program_state(proc.pid)
+        else:
+            returncode = _run_via_pty(cmd_parts, project_root, env, console)
+    finally:
+        _stop_sensor_recorder(sensor_recorder, console)
 
     exit_style = "bold green" if returncode == 0 else "bold red"
     console.print(
@@ -765,6 +859,7 @@ async def _run_remote(
     record_localization: bool = False,
     profile: bool = True,
     record_hz: float | None = None,
+    record_sensors: bool = True,
     extra_env: dict | None = None,
     run_id: str | None = None,
 ) -> None:
@@ -849,6 +944,7 @@ async def _run_remote(
                 args=list(args),
                 record_localization=record_localization,
                 profile=profile,
+                record_sensors=record_sensors,
                 project=project_name,
             )
             for key, value in build_run_env(
@@ -857,6 +953,7 @@ async def _run_remote(
                 record_localization=record_localization,
                 profile=profile,
                 record_hz=record_hz,
+                record_sensors=record_sensors,
             ).items():
                 env[key] = value
             _announce_run_dir(
@@ -1029,6 +1126,12 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
     help="Localization recorder downsample rate in Hz (default 20).",
 )
 @click.option(
+    "--record-sensors/--no-record-sensors",
+    default=True,
+    help="Record raw SHM sensor channels to .raccoon/runs/<run_id>/sensors.mcap "
+    "on the Pi for the duration of the run (on by default).",
+)
+@click.option(
     "--raw",
     is_flag=True,
     help="Local runs: inherit the program's stdout directly instead of the live JSONL log viewer.",
@@ -1048,6 +1151,7 @@ def run_command(
     no_record: bool,
     no_profile: bool,
     record_hz: float | None,
+    record_sensors: bool,
     raw: bool,
 ) -> None:
     """Run codegen and then execute src.main.
@@ -1108,6 +1212,9 @@ def run_command(
             # after this block.
             record_localization = record_localization or run_cfg.record_localization
             profile = profile and run_cfg.profile
+            # Sensor recording is ON by default; a run config may opt out with
+            # `record_sensors: false`. --no-record-sensors on the CLI also wins.
+            record_sensors = record_sensors and getattr(run_cfg, "record_sensors", True)
             if record_hz is None and run_cfg.record_hz is not None:
                 record_hz = run_cfg.record_hz
             if run_cfg.target == "local":
@@ -1186,6 +1293,7 @@ def run_command(
                         record_localization=record_localization,
                         profile=profile,
                         record_hz=record_hz,
+                        record_sensors=record_sensors,
                         extra_env=extra_env,
                         run_id=run_id,
                     )
@@ -1215,6 +1323,7 @@ def run_command(
             record_localization=record_localization,
             profile=profile,
             record_hz=record_hz,
+            record_sensors=record_sensors,
             extra_env=extra_env,
             raw=raw,
             run_id=run_id,

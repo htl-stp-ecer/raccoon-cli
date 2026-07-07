@@ -163,7 +163,9 @@ async def get_run(
     }
 
 
-_CANONICAL_ARTIFACTS = ("libstp.jsonl", "localization.jsonl", "profile.json", "run.json")
+_CANONICAL_ARTIFACTS = (
+    "libstp.jsonl", "localization.jsonl", "profile.json", "run.json", "sensors.mcap",
+)
 
 
 def _artifact_entries(sizes: dict[str, int]) -> list[dict]:

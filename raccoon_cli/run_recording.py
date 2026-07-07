@@ -18,8 +18,15 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import re
+import shutil
 from pathlib import Path
 from typing import Optional
+
+_RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
+
+#: Basename of the run-scoped raw sensor recording (see logs/sensor_recorder.py).
+SENSORS_FILENAME = "sensors.mcap"
 
 
 def make_run_id() -> str:
@@ -38,6 +45,40 @@ def run_dir_path(project_path: Path, run_id: str) -> Path:
 
 def recording_rel_path(run_id: str) -> str:
     return f"{run_rel_dir(run_id)}/localization.jsonl"
+
+
+def prune_runs(project_path: Path, keep: int = 3) -> list[str]:
+    """Delete all but the *keep* newest ``.raccoon/runs/<run_id>/`` dirs.
+
+    Runs accumulate unbounded otherwise; on the Pi the raw ``sensors.mcap``
+    recordings would fill the SD card. Called at run start (Pi-side) so the
+    just-created run counts as the newest and is always retained. Only
+    directories whose name matches the ``run_id`` timestamp pattern are
+    touched, and each is confirmed to resolve inside the runs root before
+    removal (defence in depth against traversal). Best-effort: returns the
+    list of removed run ids and never raises on individual failures.
+    """
+    runs_root = project_path / ".raccoon" / "runs"
+    if not runs_root.is_dir():
+        return []
+    runs_resolved = runs_root.resolve()
+    run_dirs = [
+        d for d in runs_root.iterdir()
+        if d.is_dir() and _RUN_ID_RE.match(d.name)
+    ]
+    # Newest first — run ids are lexically sortable UTC timestamps.
+    run_dirs.sort(key=lambda d: d.name, reverse=True)
+
+    removed: list[str] = []
+    for d in run_dirs[keep:]:
+        if runs_resolved not in d.resolve().parents:
+            continue
+        try:
+            shutil.rmtree(d)
+            removed.append(d.name)
+        except OSError:
+            continue
+    return removed
 
 
 def build_recording_env(
@@ -70,6 +111,7 @@ def build_run_env(
     record_localization: bool = True,
     profile: bool = True,
     record_hz: float | None = None,
+    record_sensors: bool = True,
 ) -> dict[str, str]:
     """Env vars that point raccoon-lib's artifact writers at the run dir.
 
@@ -82,6 +124,10 @@ def build_run_env(
     - ``LIBSTP_RECORD_LOCALIZATION``/``LIBSTP_RECORDING_PATH``/``LIBSTP_RECORDING_HZ``
       → localization recorder (only when *record_localization*)
     - ``RACCOON_PROFILE``         → step profiler output path (only when *profile*)
+    - ``RACCOON_RECORD_SENSORS``  → "1"/"0"; carries the sensor-recording opt-out
+      to the Pi's nested ``raccoon run --local`` (which recomputes its own run id,
+      so only this flag — not the path — propagates). ``RACCOON_SENSORS_PATH`` is
+      the intended output path (informational; the Pi resolves its own run dir).
     """
     if absolute:
         if project_path is None:
@@ -89,10 +135,12 @@ def build_run_env(
         run_dir = str(run_dir_path(project_path, run_id))
         loc_path = str(run_dir_path(project_path, run_id) / "localization.jsonl")
         prof_path = str(run_dir_path(project_path, run_id) / "profile.json")
+        sensors_path = str(run_dir_path(project_path, run_id) / SENSORS_FILENAME)
     else:
         run_dir = run_rel_dir(run_id)
         loc_path = recording_rel_path(run_id)
         prof_path = f"{run_rel_dir(run_id)}/profile.json"
+        sensors_path = f"{run_rel_dir(run_id)}/{SENSORS_FILENAME}"
 
     env: dict[str, str] = {"LIBSTP_LOG_DIR": run_dir}
     if record_localization:
@@ -102,6 +150,8 @@ def build_run_env(
             env["LIBSTP_RECORDING_HZ"] = str(record_hz)
     if profile:
         env["RACCOON_PROFILE"] = prof_path
+    env["RACCOON_RECORD_SENSORS"] = "1" if record_sensors else "0"
+    env["RACCOON_SENSORS_PATH"] = sensors_path
     return env
 
 
@@ -113,6 +163,7 @@ def write_run_manifest(
     args: Optional[list[str]] = None,
     record_localization: bool = True,
     profile: bool = True,
+    record_sensors: bool = True,
     project: Optional[str] = None,
 ) -> Path:
     """Create the run dir and write ``run.json`` into it; return the run dir.
@@ -136,10 +187,12 @@ def write_run_manifest(
         "args": list(args or []),
         "record_localization": bool(record_localization),
         "profile": bool(profile),
+        "record_sensors": bool(record_sensors),
         "artifacts": {
             "log": "libstp.jsonl",
             "localization": "localization.jsonl",
             "profile": "profile.json",
+            "sensors": SENSORS_FILENAME,
         },
     }
     (run_dir / "run.json").write_text(
