@@ -43,6 +43,7 @@ class OutputHandler:
         self,
         console: Optional[Console] = None,
         on_line: Optional[Callable[[str], None]] = None,
+        echo: bool = True,
     ) -> dict:
         """
         Stream output to console until command completes.
@@ -50,6 +51,9 @@ class OutputHandler:
         Args:
             console: Rich console for output (uses default if None)
             on_line: Optional callback for each line
+            echo: When True, print each output line directly. Set False when the
+                caller renders the lines itself (e.g. into a live TUI) via
+                ``on_line`` and must not have them printed underneath it.
 
         Returns:
             Final status dict with exit_code
@@ -96,7 +100,8 @@ class OutputHandler:
                     pass
 
                 # Regular output line
-                print(message)
+                if echo:
+                    print(message)
                 if on_line:
                     on_line(message)
 

@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from raccoon_cli.commands.run import _ensure_single_active_program, _run_local
+from raccoon_cli.commands.run import (
+    _ensure_single_active_program,
+    _run_local,
+    _run_local_streaming_jsonl,
+)
 
 
 class FakePopen:
@@ -66,6 +70,7 @@ def patch_single_program_guard():
          patch("raccoon_cli.commands.run._clear_active_program_state"), \
          patch("raccoon_cli.commands.run._install_termination_handlers", return_value=(None, None)), \
          patch("raccoon_cli.commands.run._restore_termination_handlers"), \
+         patch("raccoon_cli.commands.run._sensor_rings_present", return_value=False), \
          patch("raccoon_cli.commands.run.sys.stdout.isatty", return_value=True):
         yield
 
@@ -163,6 +168,69 @@ def test_launches_src_main_in_own_session(fake_project, click_ctx):
         )
 
     assert mock_popen.call_args.kwargs["start_new_session"] is True
+
+
+class _StreamPopen:
+    """Popen stub that reports 'finished' via poll() for the JSONL streamer."""
+
+    def __init__(self, returncode=0):
+        self.pid = 4243
+        self.returncode = returncode
+
+    def poll(self):
+        # Already exited → wait_for_path returns at once and follow_lines drains.
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+def test_streaming_jsonl_echoes_log_lines_to_stdout(fake_project, capsys):
+    """The Pi-side streamer re-emits each tailed JSONL line to stdout verbatim."""
+    console = MagicMock()
+    run_dir = fake_project / ".raccoon" / "runs" / "20260707T120000Z"
+    run_dir.mkdir(parents=True)
+    log_path = run_dir / "libstp.jsonl"
+    lines = [
+        '{"t":"2026-07-07T12:00:00","elapsed":0.01,"level":"info","msg":"a"}',
+        '{"t":"2026-07-07T12:00:01","elapsed":0.02,"level":"warning","msg":"b"}',
+    ]
+    log_path.write_text("\n".join(lines) + "\n")
+
+    fake = _StreamPopen(returncode=0)
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake):
+        rc = _run_local_streaming_jsonl(
+            ["true"], fake_project, {}, console, log_path=log_path
+        )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Both raw JSON lines reached stdout (→ relayed over the WS to the laptop).
+    assert lines[0] in out
+    assert lines[1] in out
+
+
+def test_streaming_jsonl_drops_trace_over_the_wire(fake_project, capsys):
+    """TRACE lines are filtered out before hitting stdout; DEBUG+ still stream."""
+    console = MagicMock()
+    run_dir = fake_project / ".raccoon" / "runs" / "20260707T120001Z"
+    run_dir.mkdir(parents=True)
+    log_path = run_dir / "libstp.jsonl"
+    trace = '{"t":"2026-07-07T12:00:00","elapsed":0.01,"level":"trace","msg":"noise"}'
+    debug = '{"t":"2026-07-07T12:00:01","elapsed":0.02,"level":"debug","msg":"Preloading main mission: MFoo"}'
+    info = '{"t":"2026-07-07T12:00:02","elapsed":0.03,"level":"info","msg":"keep"}'
+    log_path.write_text("\n".join([trace, debug, info]) + "\n")
+
+    fake = _StreamPopen(returncode=0)
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake):
+        _run_local_streaming_jsonl(
+            ["true"], fake_project, {}, console, log_path=log_path
+        )
+
+    out = capsys.readouterr().out
+    assert "noise" not in out  # trace never crosses the network
+    assert "Preloading main mission" in out  # debug kept (feeds the breadcrumb)
+    assert "keep" in out
 
 
 def test_single_program_guard_kills_stale_robot_programs(click_ctx, fake_project):

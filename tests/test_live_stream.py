@@ -166,6 +166,41 @@ def test_view_push_updates_counts_and_renders():
     assert con.file.getvalue()  # something was rendered
 
 
+def test_view_hides_trace_and_debug_from_body_but_counts_them():
+    view = LiveLogView(_headless_console(), title="proj")
+    view.push(parse_record(_rec(level="trace", msg="t")))
+    view.push(parse_record(_rec(level="debug", msg="d")))
+    view.push(parse_record(_rec(level="info", msg="i")))
+    view.push(parse_record(_rec(level="warning", msg="w")))
+    # Body holds only INFO and above…
+    shown = [r.message for r in view.records]
+    assert shown == ["i", "w"]
+    # …but counts and total still reflect every record.
+    assert view.total == 4
+    assert view.counts["TRACE"] == 1
+    assert view.counts["DEBUG"] == 1
+
+
+def test_view_breadcrumb_uses_hidden_debug_records():
+    """Debug-level mission-preload markers build the breadcrumb even though the
+    body hides debug lines."""
+    view = LiveLogView(_headless_console(), title="proj")
+    view.push(parse_record(_rec(level="debug", msg="Preloading main mission: M010Foo")))
+    view.push(parse_record(_rec(level="debug", msg="Preloading main mission: M020Bar")))
+    view.push(parse_record(_rec(level="info", msg="Starting mission: M020Bar")))
+    view.push(parse_record(_rec(level="info", msg="3/8: DriveForward")))
+    body = [r.message for r in view.records]
+    assert body == ["Starting mission: M020Bar", "3/8: DriveForward"]  # no debug lines
+    assert view.progress.breadcrumb() == "main · M020Bar (2/2) · 3/8 DriveForward"
+
+
+def test_view_min_level_override_shows_debug():
+    view = LiveLogView(_headless_console(), title="proj", min_level="DEBUG")
+    view.push(parse_record(_rec(level="trace", msg="t")))
+    view.push(parse_record(_rec(level="debug", msg="d")))
+    assert [r.message for r in view.records] == ["d"]
+
+
 def test_view_body_caps_to_visible_rows():
     view = LiveLogView(_headless_console(), title="proj")
     for i in range(500):

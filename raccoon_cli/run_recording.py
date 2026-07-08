@@ -8,6 +8,8 @@ Every ``raccoon run`` co-locates all of a run's artifacts under one directory
 - ``localization.jsonl``— particle-filter recording (opt-out)
 - ``profile.json``      — step profiler output (opt-out; may append
                           ``.<MissionName>`` for multi-mission runs)
+- ``cmd_trace.robot.jsonl`` — send-side command trace (opt-out; raccoon-lib
+                          writes it when ``RACCOON_CMD_TRACE`` is truthy)
 - ``run.json``          — the manifest written here by ``raccoon run`` at start
 
 ``run_id`` is a compact UTC timestamp (``YYYYMMDDThhmmssZ``) allocated once per
@@ -112,6 +114,7 @@ def build_run_env(
     profile: bool = True,
     record_hz: float | None = None,
     record_sensors: bool = True,
+    cmd_trace: bool = True,
 ) -> dict[str, str]:
     """Env vars that point raccoon-lib's artifact writers at the run dir.
 
@@ -128,6 +131,9 @@ def build_run_env(
       to the Pi's nested ``raccoon run --local`` (which recomputes its own run id,
       so only this flag — not the path — propagates). ``RACCOON_SENSORS_PATH`` is
       the intended output path (informational; the Pi resolves its own run dir).
+    - ``RACCOON_CMD_TRACE``       → "1"/"0" boolean flag (only when *cmd_trace*).
+      raccoon-lib writes the send-side command trace to ``cmd_trace.robot.jsonl``
+      inside ``LIBSTP_LOG_DIR``, so it downloads with the run bundle.
     """
     if absolute:
         if project_path is None:
@@ -152,6 +158,10 @@ def build_run_env(
         env["RACCOON_PROFILE"] = prof_path
     env["RACCOON_RECORD_SENSORS"] = "1" if record_sensors else "0"
     env["RACCOON_SENSORS_PATH"] = sensors_path
+    # Send-side command trace. RACCOON_CMD_TRACE is a boolean flag (not a path):
+    # raccoon-lib writes cmd_trace.robot.jsonl into LIBSTP_LOG_DIR (the run dir),
+    # so the run-bundle download picks it up next to the reader's cmd_trace.jsonl.
+    env["RACCOON_CMD_TRACE"] = "1" if cmd_trace else "0"
     return env
 
 
