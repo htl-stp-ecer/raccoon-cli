@@ -9,6 +9,7 @@ from .parser import (
     parse_log_file,
     single_run,
 )
+from .progress import RunProgress
 from .finder import (
     DEFAULT_LIST_LIMIT,
     current_log_file,
@@ -29,6 +30,7 @@ __all__ = [
     "parse_log_file",
     "detect_runs",
     "single_run",
+    "RunProgress",
     "humanize_source",
     "find_log_dir",
     "discover_log_files",

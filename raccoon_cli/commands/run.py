@@ -31,8 +31,12 @@ from raccoon_cli.run_configurations import (
 )
 from raccoon_cli.run_recording import (
     build_run_env,
+    finalize_ram_run_dir,
     make_run_id,
+    prune_ram_runs,
     prune_runs,
+    ram_run_dir_path,
+    run_dir_path,
     write_run_manifest,
 )
 
@@ -162,26 +166,6 @@ def _print_service_deployments(console: Console, deployments: list[dict]) -> Non
         table.add_row(d.get("name", "?"), action_text, d.get("reason", ""))
 
     console.print(table)
-
-
-def _print_output_summary(console: Console, collected: list[str]) -> None:
-    """Print collected warning/error lines from program output as a summary panel."""
-    if not collected:
-        return
-    text = Text(overflow="ellipsis", no_wrap=True)
-    for line in collected:
-        clean = _ANSI_RE.sub("", line)
-        style = "bold red" if _ERROR_RE.search(clean) else "bold yellow"
-        text.append(clean + "\n", style=style)
-    console.print(
-        Panel(
-            text,
-            title=f"[bold yellow]Program Warnings & Errors ({len(collected)})[/bold yellow]",
-            border_style="yellow",
-            box=box.ROUNDED,
-            expand=True,
-        )
-    )
 
 
 def _terminate_process_on_interrupt(proc: subprocess.Popen, console: Console) -> int:
@@ -555,6 +539,99 @@ def _run_local_with_tui(
     return returncode if returncode is not None else 0
 
 
+def _run_local_streaming_jsonl(
+    cmd_parts: list[str],
+    project_root: Path,
+    env: dict,
+    console: Console,
+    log_path: Path | None = None,
+) -> int:
+    """Run the child with stdout suppressed, echoing its JSONL log to *our* stdout.
+
+    This is the remote counterpart of :func:`_run_local_with_tui`. The Pi server
+    runs ``raccoon run --local`` with a piped stdout, so we can't render a TUI
+    here — but the laptop can. We tail the child's ``<run_dir>/libstp.jsonl`` and
+    write each raw JSON line to stdout, which the server relays over the output
+    WebSocket to the laptop, where it is parsed into the live viewer. The child's
+    own warn/error stdout is dropped (the JSONL already carries those levels);
+    stderr is captured and its tail echoed on a crash so a traceback still
+    reaches the laptop.
+    """
+    import tempfile
+
+    from raccoon_cli.logs.live_stream import (
+        DEFAULT_STREAM_LEVEL,
+        follow_lines,
+        level_rank,
+        line_at_or_above,
+        wait_for_path,
+    )
+
+    # Drop TRACE (the bulk of a run) before it ever hits the network; DEBUG and up
+    # still cross so the laptop's breadcrumb stays complete. RACCOON_STREAM_LEVEL
+    # overrides the floor (e.g. "TRACE" to stream everything, "INFO" for even less).
+    min_rank = level_rank(os.environ.get("RACCOON_STREAM_LEVEL", DEFAULT_STREAM_LEVEL))
+
+    err_file = tempfile.TemporaryFile(mode="w+b")
+    with _active_program_lock():
+        _ensure_single_active_program(project_root, console)
+        proc = subprocess.Popen(
+            cmd_parts,
+            cwd=project_root,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=err_file,
+            stdin=subprocess.DEVNULL,
+            start_new_session=(os.name == "posix"),
+        )
+        _write_active_program_state(
+            pid=proc.pid,
+            project_root=project_root,
+            cmd_parts=cmd_parts,
+        )
+
+    original_sigint, original_sigterm = _install_termination_handlers()
+    returncode: int | None = None
+    out = sys.stdout
+    try:
+        if log_path is not None and wait_for_path(
+            log_path, should_continue=lambda: proc.poll() is None, timeout=12.0
+        ):
+            for line in follow_lines(
+                log_path, should_stop=lambda: proc.poll() is not None
+            ):
+                # Re-emit the raw JSONL line verbatim; the laptop parses it. Skip
+                # trace/debug so they never hit the network.
+                if not line_at_or_above(line, min_rank):
+                    continue
+                out.write(line + "\n")
+                out.flush()
+        returncode = proc.wait()
+    except KeyboardInterrupt:
+        returncode = _terminate_process_on_interrupt(proc, console)
+    finally:
+        _restore_termination_handlers(original_sigint, original_sigterm)
+        with _active_program_lock():
+            _clear_active_program_state(proc.pid)
+
+    # Surface a crash: echo the tail of captured stderr so the laptop sees it
+    # (as non-JSON lines, which the laptop prints rather than folds into the TUI).
+    if returncode not in (0, None):
+        try:
+            err_file.seek(0)
+            err = err_file.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            err = ""
+        if err:
+            for line in err.splitlines()[-30:]:
+                out.write(line + "\n")
+            out.flush()
+    with suppress(Exception):
+        err_file.close()
+
+    return returncode if returncode is not None else 0
+
+
 def _on_raspberry_pi() -> bool:
     """True when running on the robot (ARM), where run dirs accumulate."""
     import platform
@@ -583,6 +660,9 @@ def _start_sensor_recorder(run_dir: Path, env: dict, console: Console):
         )
         return None
     out_path = run_dir / "sensors.mcap"
+    # In stream mode the recorder's own stdout/stderr (e.g. its "wrote N messages"
+    # summary) would be relayed to the laptop as noise — drop it there.
+    quiet = env.get("RACCOON_STREAM_JSONL") == "1"
     try:
         proc = subprocess.Popen(
             [
@@ -591,6 +671,8 @@ def _start_sensor_recorder(run_dir: Path, env: dict, console: Console):
                 "--preset", "default",
             ],
             env=env,
+            stdout=subprocess.DEVNULL if quiet else None,
+            stderr=subprocess.DEVNULL if quiet else None,
         )
     except Exception as exc:  # pragma: no cover - defensive
         console.print(f"[yellow]Could not start sensor recorder: {exc}[/yellow]")
@@ -708,8 +790,21 @@ def _run_local(
             env.setdefault(key, str(value))
 
     # Unified per-run artifact dir: write the manifest, then point raccoon-lib's
-    # log / localization / profile writers at .raccoon/runs/<run_id>/. The log
-    # dir is absolute so it's robust regardless of the child's cwd.
+    # log / localization / profile writers at the run dir. The log dir is absolute
+    # so it's robust regardless of the child's cwd.
+    #
+    # On the Pi we write ALL run artifacts (libstp.jsonl, sensors.mcap, profile.*,
+    # cmd_trace.robot.jsonl, localization.jsonl, run.json) to a RAM/tmpfs dir for
+    # the duration of the run, so the SD card sees ZERO writes on the hot path —
+    # an SD write-back stall would otherwise starve the async motion control loop
+    # for ~1-2s and the robot drives blind (unchecked overshoot). The RAM dir is
+    # copied to the persistent .raccoon/runs/<run_id>/ location exactly once,
+    # after the robot has stopped (copy-back in the finally block below).
+    sd_run_dir = run_dir_path(project_root, run_id)
+    use_ram = _on_raspberry_pi() or bool(os.environ.get("RACCOON_RAM_RUNS_DIR"))
+    ram_run_dir = ram_run_dir_path(run_id) if use_ram else None
+    work_run_dir = ram_run_dir or sd_run_dir
+
     run_dir = write_run_manifest(
         project_root,
         run_id,
@@ -719,6 +814,7 @@ def _run_local(
         profile=profile,
         record_sensors=effective_record_sensors,
         project=config.get("name") if isinstance(config, dict) else None,
+        run_dir_override=work_run_dir,
     )
     for key, value in build_run_env(
         run_id,
@@ -728,12 +824,20 @@ def _run_local(
         profile=profile,
         record_hz=record_hz,
         record_sensors=effective_record_sensors,
+        run_dir_override=work_run_dir,
     ).items():
         env[key] = value
     _announce_run_dir(
         console, run_dir, remote=False,
         record_localization=record_localization, profile=profile,
     )
+    if ram_run_dir is not None:
+        # RAM is scarce — drop run dirs left by crashed runs, keep only this one.
+        prune_ram_runs(keep_run_id=run_id)
+        console.print(
+            f"[dim]Run artifacts → RAM {ram_run_dir} "
+            f"(no SD writes during run; copied to SD after)[/dim]"
+        )
     run_log_path = run_dir / "libstp.jsonl"
 
     # Retention (Pi only): keep the 3 newest run dirs, delete older ones so the
@@ -764,6 +868,19 @@ def _run_local(
     # non-TTY) falls back to inheriting the child's stdout directly.
     use_tui = sys.stdout.isatty() and not raw and os.environ.get("RACCOON_RUN_RAW") != "1"
 
+    # Remote runs: the Pi server launches `raccoon run --local` with a piped
+    # stdout (not a TTY), so the interactive TUI above can't apply. Instead the
+    # laptop asks us (via RACCOON_STREAM_JSONL=1) to tail the child's
+    # <run_dir>/libstp.jsonl and re-emit each raw JSON line to stdout — the server
+    # relays it over the output WebSocket, and the laptop renders the same live
+    # TUI on its end. Only meaningful when stdout is a pipe (i.e. not the local
+    # interactive path).
+    stream_jsonl = (
+        not use_tui
+        and not raw
+        and os.environ.get("RACCOON_STREAM_JSONL") == "1"
+    )
+
     # Record raw SHM sensor channels for the lifetime of the mission (Pi only —
     # the rings live on the robot). Started before and stopped after whichever
     # launch path runs, so the MCAP file is always finalised.
@@ -774,6 +891,10 @@ def _run_local(
     try:
         if use_tui:
             returncode = _run_local_with_tui(
+                cmd_parts, project_root, env, console, log_path=run_log_path
+            )
+        elif stream_jsonl:
+            returncode = _run_local_streaming_jsonl(
                 cmd_parts, project_root, env, console, log_path=run_log_path
             )
         elif sys.platform == "win32" or sys.stdout.isatty():
@@ -803,6 +924,25 @@ def _run_local(
             returncode = _run_via_pty(cmd_parts, project_root, env, console)
     finally:
         _stop_sensor_recorder(sensor_recorder, console)
+        # The ONE SD write for the whole run: copy the RAM run dir to the
+        # persistent location now that the robot has stopped (off the hot path).
+        # Runs on every exit path — normal, nonzero, or Ctrl+C — before the
+        # SystemExit below, so remote download always finds the artifacts on SD.
+        if ram_run_dir is not None:
+            try:
+                finalize_ram_run_dir(ram_run_dir, sd_run_dir)
+                console.print(
+                    f"[dim]Run artifacts copied RAM → {sd_run_dir}[/dim]"
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to copy RAM run dir to SD; artifacts kept in %s",
+                    ram_run_dir,
+                )
+                console.print(
+                    f"[yellow]Copy to SD failed — run artifacts kept in RAM at "
+                    f"{ram_run_dir}[/yellow]"
+                )
 
     exit_style = "bold green" if returncode == 0 else "bold red"
     console.print(
@@ -956,6 +1096,11 @@ async def _run_remote(
                 record_sensors=record_sensors,
             ).items():
                 env[key] = value
+            # Ask the Pi to tail its <run_dir>/libstp.jsonl and re-emit the raw
+            # JSON lines over the output stream, so we can render the same live
+            # TUI here as a local run gets. A Pi on older code simply ignores the
+            # flag and streams its warn/error stdout as before (still shown).
+            env["RACCOON_STREAM_JSONL"] = "1"
             _announce_run_dir(
                 console, run_dir, remote=True,
                 record_localization=record_localization, profile=profile,
@@ -987,18 +1132,57 @@ async def _run_remote(
 
         original_handler = signal.signal(signal.SIGINT, signal_handler)
 
-        collected: list[str] = []
+        # Render the Pi's streamed JSONL log in the same live TUI a local run
+        # gets. Each WS line is either a raw JSON record (parsed → pushed into the
+        # view) or plain text (a crash traceback tail, or an older Pi streaming
+        # warn/error stdout) which we surface above the live view and keep for the
+        # exit heuristic.
+        from rich.live import Live
 
-        def _collect_line(line: str) -> None:
+        from raccoon_cli.logs.live_stream import LiveLogView, parse_record
+
+        view = LiveLogView(console, title=project_name)
+        collected: list[str] = []
+        live_holder: dict[str, Live] = {}
+
+        def _on_line(line: str) -> None:
+            rec = parse_record(line)
+            if rec is not None:
+                view.push(rec)
+                live = live_holder.get("live")
+                if live is not None:
+                    live.update(view.render())
+                return
+            if not line.strip():
+                return
             if _is_warn_or_error(line):
                 collected.append(line)
+            # Strip ANSI and print as literal text (no Rich markup parsing) so a
+            # stray line's escape codes never show up as garbled `[1m[36m…`.
+            clean = _ANSI_RE.sub("", line)
+            live = live_holder.get("live")
+            target = live.console if live is not None else console
+            target.print(Text(clean))
 
         try:
-            final_status = handler.stream_to_console(console, on_line=_collect_line)
+            with Live(
+                view.render(),
+                console=console,
+                refresh_per_second=12,
+                transient=False,
+            ) as live:
+                live_holder["live"] = live
+                final_status = handler.stream_to_console(
+                    console, on_line=_on_line, echo=False
+                )
+                live.update(view.render())
         finally:
             signal.signal(signal.SIGINT, original_handler)
 
-        _print_output_summary(console, collected)
+        # Errors that arrived as structured records feed the exit heuristic too.
+        streamed_error_count = view.counts.get("ERROR", 0) + view.counts.get(
+            "CRITICAL", 0
+        )
 
         # Sync changes back from Pi (preserve locally-edited files)
         console.print()
@@ -1012,7 +1196,9 @@ async def _run_remote(
         status = final_status.get("status", "unknown")
         success = exit_code == 0
 
-        if exit_code != 0 and collected and not _has_error_lines(collected):
+        saw_warnings = bool(collected) or view.warn_error_count > 0
+        no_errors = streamed_error_count == 0 and not _has_error_lines(collected)
+        if exit_code != 0 and saw_warnings and no_errors:
             console.print(
                 "[yellow]Non-zero remote exit code returned, but output contained only warnings; "
                 "treating run as successful.[/yellow]"

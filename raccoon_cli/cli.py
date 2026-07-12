@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import click
 from rich.console import Console
 
@@ -75,12 +77,19 @@ def _setup_context(ctx: click.Context) -> None:
     ctx.ensure_object(dict)
 
     if not ctx.obj.get("initialized"):
-        console = Console()
+        # Remote runs launch `raccoon run --local` on the Pi with RACCOON_STREAM_JSONL=1
+        # and relay its stdout to the laptop, which renders its own TUI. The Pi's
+        # own chrome (banner, INFO logs, run panels) would arrive there as garbled
+        # non-rendered ANSI, so we silence the console entirely in that mode — only
+        # the JSONL the streamer writes straight to stdout gets through.
+        quiet = os.environ.get("RACCOON_STREAM_JSONL") == "1"
+        console = Console(quiet=quiet)
         summary = configure_logging(console)
         ctx.obj["console"] = console
         ctx.obj["log_summary"] = summary
         ctx.obj["initialized"] = True
-        render_banner(console)
+        if not quiet:
+            render_banner(console)
     else:
         summary = ctx.obj["log_summary"]
 

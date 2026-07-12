@@ -28,6 +28,15 @@ from rich.table import Table
 from rich.text import Text
 
 from .parser import parse_jsonl_line
+from .progress import RunProgress
+
+# Phase → badge style for the breadcrumb, so the current stage of the run reads
+# at a glance (setup warming up, main scoring, shutdown winding down).
+_PHASE_STYLES = {
+    "setup": "blue",
+    "main": "bold magenta",
+    "shutdown": "dim",
+}
 
 # One JSONL file per run; the zero-padded timestamp sorts chronologically.
 JSONL_GLOB = "libstp-*.jsonl"
@@ -49,6 +58,18 @@ _LOUD = {"WARN", "ERROR", "CRITICAL"}
 _LEVEL_ORDER = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"]
 
 
+# Body-display floor: hide trace/debug from the scrolling view by default (just
+# elapsed/level/message of the meaningful INFO+ lines).
+DEFAULT_MIN_LEVEL = "INFO"
+
+# Network floor for remote runs: the Pi drops only TRACE (the bulk — a run is
+# mostly trace), but keeps DEBUG on the wire so the debug-level mission-preload
+# markers still reach the laptop and build the full breadcrumb. The laptop then
+# hides DEBUG from the *display* via DEFAULT_MIN_LEVEL. Cheap and lossless for
+# the breadcrumb.
+DEFAULT_STREAM_LEVEL = "DEBUG"
+
+
 def _level_style(level: str) -> str:
     return _LEVEL_STYLES.get(level.upper(), "")
 
@@ -56,6 +77,31 @@ def _level_style(level: str) -> str:
 def _norm_level(level: str) -> str:
     lvl = (level or "").upper()
     return "WARN" if lvl == "WARNING" else lvl
+
+
+def level_rank(level: str) -> int:
+    """Ordinal of *level* in :data:`_LEVEL_ORDER`; unknown levels rank highest.
+
+    Unknown levels sort above CRITICAL so a filter never silently drops a level
+    it doesn't recognise.
+    """
+    try:
+        return _LEVEL_ORDER.index(_norm_level(level))
+    except ValueError:
+        return len(_LEVEL_ORDER)
+
+
+def line_at_or_above(line: str, min_rank: int) -> bool:
+    """True if a raw JSONL *line*'s level is at least *min_rank*.
+
+    Non-JSON lines (a stray banner, a crash-tail line) return ``True`` — they're
+    rare and cheap, and dropping them could hide something important. Used by the
+    Pi-side streamer to avoid pushing trace/debug over the network.
+    """
+    entry = parse_jsonl_line(line)
+    if entry is None:
+        return True
+    return level_rank(entry.level) >= min_rank
 
 
 @dataclass
@@ -202,6 +248,7 @@ class LiveLogView:
         title: str,
         log_path: Optional[Path] = None,
         buffer: int = 2000,
+        min_level: str = DEFAULT_MIN_LEVEL,
     ) -> None:
         self.console = console
         self.title = title
@@ -210,16 +257,24 @@ class LiveLogView:
         self.counts: dict[str, int] = {lvl: 0 for lvl in _LEVEL_ORDER}
         self.latest_elapsed = 0.0
         self.total = 0
+        self.progress = RunProgress()
+        # Body hides records below this level (trace/debug by default). Counts and
+        # the mission/step breadcrumb still see every record — only the scrolling
+        # body is filtered, so the debug-level mission-preload markers still build
+        # the breadcrumb.
+        self._min_rank = level_rank(min_level)
         self._spinner = Spinner("dots", style="cyan")
 
     def push(self, rec: LiveRecord) -> None:
-        self.records.append(rec)
         self.total += 1
         self.latest_elapsed = rec.elapsed
+        self.progress.update(rec)
         if rec.level in self.counts:
             self.counts[rec.level] += 1
         else:
             self.counts[rec.level] = 1
+        if level_rank(rec.level) >= self._min_rank:
+            self.records.append(rec)
 
     @property
     def warn_error_count(self) -> int:
@@ -247,6 +302,28 @@ class LiveLogView:
             t.append(str(n), style="bold " + (_level_style(lvl) or "white"))
         return t
 
+    def _breadcrumb_text(self) -> Text:
+        """The resolved ``phase · mission · step`` position, coloured by phase."""
+        p = self.progress
+        t = Text()
+        phase = p.phase
+        mission = p.mission_label()
+        step = p.step_label()
+        if not (phase or mission or step):
+            t.append("waiting for mission…", style="dim")
+            return t
+        if phase:
+            t.append(phase, style=_PHASE_STYLES.get(phase, "cyan"))
+        if mission:
+            if len(t):
+                t.append("  ", style="dim")
+            t.append(mission, style="bold")
+        if step:
+            if len(t):
+                t.append("  ›  ", style="dim")
+            t.append(step, style="cyan")
+        return t
+
     def _header(self) -> Panel:
         head = Table.grid(expand=True, padding=(0, 1))
         head.add_column(justify="left", ratio=1)
@@ -268,7 +345,15 @@ class LiveLogView:
         right.append_text(self._counts_text())
 
         head.add_row(left, right)
-        return Panel(head, border_style="cyan", padding=(0, 1))
+
+        # Second row: the resolved mission/step breadcrumb on its own full-width
+        # line (its own grid so the counts column above can't squeeze it into a
+        # wrap). Ellipsis-truncated rather than wrapped.
+        crumb = Table.grid(expand=True)
+        crumb.add_column(justify="left", no_wrap=True, overflow="ellipsis")
+        crumb.add_row(self._breadcrumb_text())
+
+        return Panel(Group(head, crumb), border_style="cyan", padding=(0, 1))
 
     def _body(self) -> RenderableType:
         rows = list(self.records)[-self._visible_rows() :]
@@ -279,14 +364,15 @@ class LiveLogView:
             pad_edge=False,
             padding=(0, 1),
         )
+        # Clean three-column layout — just elapsed, level and message. The
+        # emitting source/func is dropped from the live view (it's noise for
+        # following a run); it's still in the file and in `raccoon logs`.
         table.add_column("elapsed", justify="right", width=9, style="dim", no_wrap=True)
         table.add_column("level", width=5, no_wrap=True)
-        table.add_column("source", width=22, no_wrap=True, overflow="ellipsis", style="dim")
-        table.add_column("func", width=20, no_wrap=True, overflow="ellipsis", style="dim italic")
         table.add_column("message", ratio=1, no_wrap=True, overflow="ellipsis")
 
         if not rows:
-            table.add_row("", "", "", "", Text("waiting for first log record…", style="dim"))
+            table.add_row("", "", Text("waiting for first log record…", style="dim"))
             return table
 
         for rec in rows:
@@ -295,8 +381,6 @@ class LiveLogView:
             table.add_row(
                 f"{rec.elapsed:7.3f}s",
                 Text(rec.level[:5], style=lvl_style),
-                rec.source,
-                rec.func,
                 Text(rec.message, style=msg_style),
             )
         return table

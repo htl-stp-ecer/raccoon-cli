@@ -244,3 +244,31 @@ def test_on_line_callback(console):
     handler.stream_to_console(console, on_line=lines.append)
 
     assert lines == ["alpha", "beta"]
+
+
+def test_echo_false_suppresses_print_but_keeps_on_line(console, capsys):
+    """echo=False routes lines only to on_line (for a caller-owned live TUI)."""
+    messages = ["alpha", "beta", _status(exit_code=0)]
+
+    lines: list[str] = []
+    gen = _make_handler(messages)
+    handler, ws = next(gen)
+    handler.stream_to_console(console, on_line=lines.append, echo=False)
+
+    # Callback still fires for every line…
+    assert lines == ["alpha", "beta"]
+    # …but nothing was printed to stdout underneath the caller's renderer.
+    out = capsys.readouterr().out
+    assert "alpha" not in out
+    assert "beta" not in out
+
+
+def test_echo_true_prints_lines(console, capsys):
+    """echo=True (default) prints each output line to stdout."""
+    messages = ["alpha", _status(exit_code=0)]
+
+    gen = _make_handler(messages)
+    handler, ws = next(gen)
+    handler.stream_to_console(console)
+
+    assert "alpha" in capsys.readouterr().out
