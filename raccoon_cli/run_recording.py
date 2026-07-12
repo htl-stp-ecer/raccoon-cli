@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -30,9 +31,79 @@ _RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
 #: Basename of the run-scoped raw sensor recording (see logs/sensor_recorder.py).
 SENSORS_FILENAME = "sensors.mcap"
 
+#: Env var to override the RAM (tmpfs) run-artifact root. When set, all run
+#: artifacts are written under ``$RACCOON_RAM_RUNS_DIR/<run_id>`` during the run.
+RAM_RUNS_ROOT_ENV = "RACCOON_RAM_RUNS_DIR"
+#: Default tmpfs root on Linux/Pi (``/dev/shm`` is RAM-backed). Keeping all run
+#: writers here means the SD card sees ZERO writes on the control-loop hot path;
+#: the directory is copied to ``.raccoon/runs/<run_id>`` once, after the run.
+_DEFAULT_RAM_RUNS_ROOT = "/dev/shm/raccoon-runs"
+
 
 def make_run_id() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def ram_run_dir_path(run_id: str) -> Optional[Path]:
+    """RAM-backed (tmpfs) run directory for *run_id*, or None if unavailable.
+
+    All run artifacts (``libstp.jsonl``, ``sensors.mcap``, ``profile.*``,
+    ``cmd_trace.robot.jsonl``, ``localization.jsonl``, ``run.json``) are written
+    here during the run so the SD card is never touched on the hot path — an SD
+    write-back stall would otherwise starve the motion control loop for ~1-2s.
+    After the run the directory is copied once to the persistent
+    ``.raccoon/runs/<run_id>`` location (see :func:`finalize_ram_run_dir`).
+
+    Honours ``$RACCOON_RAM_RUNS_DIR`` for a custom tmpfs mount; otherwise defaults
+    to ``/dev/shm/raccoon-runs``. Returns None on platforms without ``/dev/shm``
+    (macOS/Windows) so callers transparently fall back to writing on disk.
+    """
+    root = os.environ.get(RAM_RUNS_ROOT_ENV)
+    if root:
+        return Path(root) / run_id
+    if Path("/dev/shm").is_dir():
+        return Path(_DEFAULT_RAM_RUNS_ROOT) / run_id
+    return None
+
+
+def prune_ram_runs(keep_run_id: Optional[str] = None) -> list[str]:
+    """Remove stale RAM run dirs left behind by crashed/interrupted runs.
+
+    RAM is scarce, so unlike the SD retention (:func:`prune_runs`, keep=3) this
+    clears *all* previous run dirs under the tmpfs root, keeping only
+    *keep_run_id* (the current run). Best-effort: never raises.
+    """
+    sample = ram_run_dir_path(keep_run_id or "x")
+    if sample is None:
+        return []
+    ram_root = sample.parent
+    if not ram_root.is_dir():
+        return []
+    removed: list[str] = []
+    for d in ram_root.iterdir():
+        if not (d.is_dir() and _RUN_ID_RE.match(d.name)):
+            continue
+        if keep_run_id is not None and d.name == keep_run_id:
+            continue
+        try:
+            shutil.rmtree(d)
+            removed.append(d.name)
+        except OSError:
+            continue
+    return removed
+
+
+def finalize_ram_run_dir(ram_dir: Path, dest_dir: Path) -> None:
+    """Copy a completed RAM run dir to its persistent location, then free RAM.
+
+    This is the *only* SD write for the whole run and happens after the robot
+    has stopped — off the control-loop hot path. On copy failure the RAM copy is
+    left in place (nothing is lost) and the error propagates so the caller can
+    log it. On success the RAM copy is removed.
+    """
+    dest_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(ram_dir, dest_dir, dirs_exist_ok=True)
+    shutil.rmtree(ram_dir, ignore_errors=True)
 
 
 def run_rel_dir(run_id: str) -> str:
@@ -115,13 +186,18 @@ def build_run_env(
     record_hz: float | None = None,
     record_sensors: bool = True,
     cmd_trace: bool = True,
+    run_dir_override: Optional[Path] = None,
 ) -> dict[str, str]:
     """Env vars that point raccoon-lib's artifact writers at the run dir.
 
     The child writes into ``.raccoon/runs/<run_id>/``. Pass *absolute*=True for a
     local child (robust regardless of its cwd) and *absolute*=False for a remote
     run (paths are interpreted in the synced project dir on the Pi). When
-    *absolute* is True, *project_path* must be given.
+    *absolute* is True, either *project_path* or *run_dir_override* must be given.
+
+    *run_dir_override* (absolute only) redirects every writer to an explicit
+    directory instead of ``<project_path>/.raccoon/runs/<run_id>`` — used to send
+    all artifacts to a RAM/tmpfs dir during the run (:func:`ram_run_dir_path`).
 
     - ``LIBSTP_LOG_DIR``          → the run dir (C++ logger writes ``libstp.jsonl``)
     - ``LIBSTP_RECORD_LOCALIZATION``/``LIBSTP_RECORDING_PATH``/``LIBSTP_RECORDING_HZ``
@@ -136,12 +212,18 @@ def build_run_env(
       inside ``LIBSTP_LOG_DIR``, so it downloads with the run bundle.
     """
     if absolute:
-        if project_path is None:
-            raise ValueError("project_path is required when absolute=True")
-        run_dir = str(run_dir_path(project_path, run_id))
-        loc_path = str(run_dir_path(project_path, run_id) / "localization.jsonl")
-        prof_path = str(run_dir_path(project_path, run_id) / "profile.json")
-        sensors_path = str(run_dir_path(project_path, run_id) / SENSORS_FILENAME)
+        if run_dir_override is not None:
+            base = Path(run_dir_override)
+        elif project_path is not None:
+            base = run_dir_path(project_path, run_id)
+        else:
+            raise ValueError(
+                "project_path or run_dir_override is required when absolute=True"
+            )
+        run_dir = str(base)
+        loc_path = str(base / "localization.jsonl")
+        prof_path = str(base / "profile.json")
+        sensors_path = str(base / SENSORS_FILENAME)
     else:
         run_dir = run_rel_dir(run_id)
         loc_path = recording_rel_path(run_id)
@@ -175,13 +257,19 @@ def write_run_manifest(
     profile: bool = True,
     record_sensors: bool = True,
     project: Optional[str] = None,
+    run_dir_override: Optional[Path] = None,
 ) -> Path:
     """Create the run dir and write ``run.json`` into it; return the run dir.
 
     Records *which* artifacts were requested — actual presence is discovered at
-    download time.
+    download time. *run_dir_override* writes the manifest into an explicit dir
+    (e.g. a RAM/tmpfs dir) instead of ``<project_path>/.raccoon/runs/<run_id>``.
     """
-    run_dir = run_dir_path(project_path, run_id)
+    run_dir = (
+        Path(run_dir_override)
+        if run_dir_override is not None
+        else run_dir_path(project_path, run_id)
+    )
     run_dir.mkdir(parents=True, exist_ok=True)
 
     started_utc = _dt.datetime.strptime(run_id, "%Y%m%dT%H%M%SZ").replace(

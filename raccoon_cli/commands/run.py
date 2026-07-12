@@ -31,8 +31,12 @@ from raccoon_cli.run_configurations import (
 )
 from raccoon_cli.run_recording import (
     build_run_env,
+    finalize_ram_run_dir,
     make_run_id,
+    prune_ram_runs,
     prune_runs,
+    ram_run_dir_path,
+    run_dir_path,
     write_run_manifest,
 )
 
@@ -786,8 +790,21 @@ def _run_local(
             env.setdefault(key, str(value))
 
     # Unified per-run artifact dir: write the manifest, then point raccoon-lib's
-    # log / localization / profile writers at .raccoon/runs/<run_id>/. The log
-    # dir is absolute so it's robust regardless of the child's cwd.
+    # log / localization / profile writers at the run dir. The log dir is absolute
+    # so it's robust regardless of the child's cwd.
+    #
+    # On the Pi we write ALL run artifacts (libstp.jsonl, sensors.mcap, profile.*,
+    # cmd_trace.robot.jsonl, localization.jsonl, run.json) to a RAM/tmpfs dir for
+    # the duration of the run, so the SD card sees ZERO writes on the hot path —
+    # an SD write-back stall would otherwise starve the async motion control loop
+    # for ~1-2s and the robot drives blind (unchecked overshoot). The RAM dir is
+    # copied to the persistent .raccoon/runs/<run_id>/ location exactly once,
+    # after the robot has stopped (copy-back in the finally block below).
+    sd_run_dir = run_dir_path(project_root, run_id)
+    use_ram = _on_raspberry_pi() or bool(os.environ.get("RACCOON_RAM_RUNS_DIR"))
+    ram_run_dir = ram_run_dir_path(run_id) if use_ram else None
+    work_run_dir = ram_run_dir or sd_run_dir
+
     run_dir = write_run_manifest(
         project_root,
         run_id,
@@ -797,6 +814,7 @@ def _run_local(
         profile=profile,
         record_sensors=effective_record_sensors,
         project=config.get("name") if isinstance(config, dict) else None,
+        run_dir_override=work_run_dir,
     )
     for key, value in build_run_env(
         run_id,
@@ -806,12 +824,20 @@ def _run_local(
         profile=profile,
         record_hz=record_hz,
         record_sensors=effective_record_sensors,
+        run_dir_override=work_run_dir,
     ).items():
         env[key] = value
     _announce_run_dir(
         console, run_dir, remote=False,
         record_localization=record_localization, profile=profile,
     )
+    if ram_run_dir is not None:
+        # RAM is scarce — drop run dirs left by crashed runs, keep only this one.
+        prune_ram_runs(keep_run_id=run_id)
+        console.print(
+            f"[dim]Run artifacts → RAM {ram_run_dir} "
+            f"(no SD writes during run; copied to SD after)[/dim]"
+        )
     run_log_path = run_dir / "libstp.jsonl"
 
     # Retention (Pi only): keep the 3 newest run dirs, delete older ones so the
@@ -898,6 +924,25 @@ def _run_local(
             returncode = _run_via_pty(cmd_parts, project_root, env, console)
     finally:
         _stop_sensor_recorder(sensor_recorder, console)
+        # The ONE SD write for the whole run: copy the RAM run dir to the
+        # persistent location now that the robot has stopped (off the hot path).
+        # Runs on every exit path — normal, nonzero, or Ctrl+C — before the
+        # SystemExit below, so remote download always finds the artifacts on SD.
+        if ram_run_dir is not None:
+            try:
+                finalize_ram_run_dir(ram_run_dir, sd_run_dir)
+                console.print(
+                    f"[dim]Run artifacts copied RAM → {sd_run_dir}[/dim]"
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to copy RAM run dir to SD; artifacts kept in %s",
+                    ram_run_dir,
+                )
+                console.print(
+                    f"[yellow]Copy to SD failed — run artifacts kept in RAM at "
+                    f"{ram_run_dir}[/yellow]"
+                )
 
     exit_style = "bold green" if returncode == 0 else "bold red"
     console.print(
