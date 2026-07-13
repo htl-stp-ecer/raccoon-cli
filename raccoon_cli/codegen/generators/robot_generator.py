@@ -73,6 +73,17 @@ class RobotGenerator(BaseGenerator):
             if "type" not in kinematics:
                 raise ValueError("robot.kinematics.type is required")
 
+        if "turn" in data:
+            turn = data["turn"]
+            if not isinstance(turn, dict):
+                raise ValueError("robot.turn must be a mapping")
+            ks = turn.get("kS", 0.0)
+            if isinstance(ks, bool) or not isinstance(ks, (int, float)) or ks < 0:
+                raise ValueError(
+                    "robot.turn.kS must be a non-negative number "
+                    "(static friction feedforward, rad/s)"
+                )
+
         if "odometry" in data:
             logger.info(
                 "Ignoring 'robot.odometry' in config: odometry is now platform-managed "
@@ -123,6 +134,11 @@ class RobotGenerator(BaseGenerator):
                 motion_pid_class, motion_pid_cfg, "robot.motion_pid", self.imports
             )
             builder.add_class_attribute("motion_pid_config", motion_pid_expr)
+
+        turn_cfg = data.get("turn")
+        if turn_cfg is not None:
+            turn_ks = turn_cfg.get("kS", 0.0)
+            builder.add_class_attribute("turn_kS", repr(float(turn_ks)))
 
         shutdown_in = data.get("shutdown_in")
         if shutdown_in is None:
