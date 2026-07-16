@@ -59,7 +59,7 @@ _DECODERS: dict[str, tuple[str, tuple[str, ...]]] = {
     "quaternion": (">qffff", ("w", "x", "y", "z")),
     "scalar_f": (">qf", ("value",)),
     "scalar_i32": (">qi", ("value",)),
-    "scalar_i8": (">qb", ("dir",)),
+    "scalar_i8": (">qb", ("value",)),
 }
 
 # Minimal JSON schemas per type for the MCAP schema registry.
@@ -92,11 +92,18 @@ def _decode(typ: str, payload: bytes) -> Optional[dict]:
 def _default_channels() -> list[tuple[str, str]]:
     """Return the default (channel, type) whitelist, with port expansion.
 
+    This enumerates EVERY ``raccoon/`` channel the reader publishes as numeric
+    sensor/state data (``stm32-data-reader`` ``DataPublisher``/``SystemMonitor``),
+    so a run's ``sensors.mcap`` captures the full outbound bus. Deliberately
+    excluded: command channels (``*_cmd`` — inbound, the reader subscribes to
+    them, not publishes), ``raccoon/errors`` (a ``string_t``, not one of the five
+    numeric codecs), and camera/YOLO/screen frames (the only multi-MB messages).
+
     Port counts are fixed by the reader (never more, never fewer): see
     ``wombat::DeviceTypes`` — ``MAX_ANALOG_PORTS=6`` (analog 0..5),
-    ``MAX_MOTOR_PORTS=4`` (bemf/motor 0..3) — and DataPublisher's hardcoded
-    ``bit < 11`` digital loop (digital 0..10). So the exact channel set is
-    enumerated, not probed.
+    ``MAX_MOTOR_PORTS=4`` (bemf/motor 0..3), ``MAX_SERVO_PORTS=4`` (servo 0..3) —
+    and DataPublisher's hardcoded ``bit < 11`` digital loop (digital 0..10). So
+    the exact channel set is enumerated, not probed.
     """
     channels: list[tuple[str, str]] = [
         # 3-axis vectors
@@ -107,7 +114,7 @@ def _default_channels() -> list[tuple[str, str]]:
         ("raccoon/mag/value", "vector3f"),
         # orientation
         ("raccoon/imu/quaternion", "quaternion"),
-        # scalars
+        # float scalars
         ("raccoon/imu/heading", "scalar_f"),
         ("raccoon/imu/temp/value", "scalar_f"),
         ("raccoon/battery/voltage", "scalar_f"),
@@ -118,6 +125,19 @@ def _default_channels() -> list[tuple[str, str]]:
         ("raccoon/odometry/vx", "scalar_f"),
         ("raccoon/odometry/vy", "scalar_f"),
         ("raccoon/odometry/wz", "scalar_f"),
+        # heading-fusion debug (string-literal channels, not in Channels.h)
+        ("raccoon/debug/fused_heading", "scalar_f"),
+        ("raccoon/debug/yaw_rate", "scalar_f"),
+        ("raccoon/debug/yaw_bias", "scalar_f"),
+        # int32 state
+        ("raccoon/debug/resting", "scalar_i32"),
+        ("raccoon/system/shutdown_status", "scalar_i32"),
+        ("raccoon/feature/bemf_enabled", "scalar_i32"),
+        # int8 IMU accuracy (BNO08x calibration status 0..3)
+        ("raccoon/gyro/accuracy", "scalar_i8"),
+        ("raccoon/accel/accuracy", "scalar_i8"),
+        ("raccoon/mag/accuracy", "scalar_i8"),
+        ("raccoon/imu/quaternion_accuracy", "scalar_i8"),
     ]
     for port in range(6):  # MAX_ANALOG_PORTS
         channels.append((f"raccoon/analog/{port}/value", "scalar_i32"))
@@ -126,6 +146,11 @@ def _default_channels() -> list[tuple[str, str]]:
     for port in range(4):  # MAX_MOTOR_PORTS
         channels.append((f"raccoon/bemf/{port}/value", "scalar_i32"))
         channels.append((f"raccoon/motor/{port}/position", "scalar_i32"))
+        channels.append((f"raccoon/motor/{port}/power", "scalar_i32"))
+        channels.append((f"raccoon/motor/{port}/done", "scalar_i32"))
+    for port in range(4):  # MAX_SERVO_PORTS
+        channels.append((f"raccoon/servo/{port}/position", "scalar_f"))
+        channels.append((f"raccoon/servo/{port}/mode", "scalar_i8"))
     return channels
 
 
