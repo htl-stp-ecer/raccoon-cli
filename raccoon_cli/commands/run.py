@@ -472,6 +472,7 @@ def _run_local_with_tui(
     title = project_root.name
 
     err_file = tempfile.TemporaryFile(mode="w+b")
+    started_at = time.monotonic()
     with _active_program_lock():
         _ensure_single_active_program(project_root, console)
         proc = subprocess.Popen(
@@ -517,14 +518,20 @@ def _run_local_with_tui(
             "(use [cyan]--raw[/cyan] to see the program's stdout directly).[/dim]"
         )
 
-    # Surface a crash: dump the tail of captured stderr on a bad exit.
+    # Surface a crash: a Python traceback goes to stderr, which the JSONL log and
+    # live view never see. Persist it into the run's libstp.jsonl as ERROR records
+    # (so it survives in `raccoon logs`) and echo a red tail panel for immediate
+    # feedback here — the live view has already closed.
     if returncode not in (0, None):
-        try:
-            err_file.seek(0)
-            err = err_file.read().decode("utf-8", errors="replace").strip()
-        except Exception:
-            err = ""
+        err = _read_captured_stderr(err_file)
         if err:
+            from raccoon_cli.logs.crash import append_crash_records, build_crash_records
+
+            records = build_crash_records(
+                err, elapsed=time.monotonic() - started_at, pid=proc.pid
+            )
+            if log_path is not None:
+                append_crash_records(log_path, records)
             tail = "\n".join(err.splitlines()[-30:])
             console.print(
                 Panel(
@@ -537,6 +544,15 @@ def _run_local_with_tui(
         err_file.close()
 
     return returncode if returncode is not None else 0
+
+
+def _read_captured_stderr(err_file) -> str:
+    """Read back the child's captured stderr from its temp file (empty on error)."""
+    try:
+        err_file.seek(0)
+        return err_file.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
 
 
 def _run_local_streaming_jsonl(
@@ -573,6 +589,7 @@ def _run_local_streaming_jsonl(
     min_rank = level_rank(os.environ.get("RACCOON_STREAM_LEVEL", DEFAULT_STREAM_LEVEL))
 
     err_file = tempfile.TemporaryFile(mode="w+b")
+    started_at = time.monotonic()
     with _active_program_lock():
         _ensure_single_active_program(project_root, console)
         proc = subprocess.Popen(
@@ -614,16 +631,22 @@ def _run_local_streaming_jsonl(
         with _active_program_lock():
             _clear_active_program_state(proc.pid)
 
-    # Surface a crash: echo the tail of captured stderr so the laptop sees it
-    # (as non-JSON lines, which the laptop prints rather than folds into the TUI).
+    # Surface a crash: a Python traceback goes to stderr, which is invisible to
+    # the JSONL stream. Convert it to ERROR JSONL records and (a) persist them in
+    # the run's libstp.jsonl and (b) emit them on stdout so the server relays them
+    # over the WebSocket and the laptop's viewer *parses* and renders them —
+    # earlier this echoed raw non-JSON tail lines, which the laptop silently drops.
     if returncode not in (0, None):
-        try:
-            err_file.seek(0)
-            err = err_file.read().decode("utf-8", errors="replace").strip()
-        except Exception:
-            err = ""
+        err = _read_captured_stderr(err_file)
         if err:
-            for line in err.splitlines()[-30:]:
+            from raccoon_cli.logs.crash import append_crash_records, build_crash_records
+
+            records = build_crash_records(
+                err, elapsed=time.monotonic() - started_at, pid=proc.pid
+            )
+            if log_path is not None:
+                append_crash_records(log_path, records)
+            for line in records:
                 out.write(line + "\n")
             out.flush()
     with suppress(Exception):
