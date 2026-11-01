@@ -80,4 +80,5 @@ raccoon_cli = [
     "templates/**/*.sh",
     "templates/**/*.gitignore",
     "web-ide-dist/**/*",
+    "systemd/*.service",
 ]
