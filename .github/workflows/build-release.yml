@@ -164,3 +164,26 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  # Tell raccoon-example that a new CLI is on PyPI, so it can open a pull request
+  # that moves the raccoon-cli pin of its template branches. Runs after the PyPI
+  # upload; a failure here only warns because the release is already published.
+  notify-example:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispatch cli-released
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "::warning::GH_PAT is not set; raccoon-example was not notified"
+            exit 0
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/htl-stp-ecer/raccoon-example/dispatches \
+            -d '{"event_type":"cli-released","client_payload":{"version":"${{ env.VERSION }}"}}' \
+            || echo "::warning::could not notify raccoon-example"
