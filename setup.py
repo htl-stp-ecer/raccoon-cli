@@ -16,11 +16,11 @@ from setuptools.command.build_py import build_py
 
 ROOT_DIR = Path(__file__).parent
 
-# --- Configurable version: x.y.BUILD_NUMBER ---
-# CI sets BUILD_NUMBER=${{ github.run_number }}; local builds default to 0.
-BASE_VERSION = "0.1"
-BUILD_NUMBER = os.environ.get("BUILD_NUMBER", "0")
-_computed_version = f"{BASE_VERSION}.{BUILD_NUMBER}"
+# --- Version: the CI build number alone ---
+# CI sets BUILD_NUMBER=${{ github.run_number }}; local builds are a dev
+# release that sorts below every real one.
+BUILD_NUMBER = os.environ.get("BUILD_NUMBER", "")
+_computed_version = BUILD_NUMBER if BUILD_NUMBER.isdigit() else "0.dev0"
 
 _version_file = ROOT_DIR / "raccoon_cli" / "_version.py"
 _version_file.write_text(
