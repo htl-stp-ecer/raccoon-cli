@@ -68,20 +68,17 @@ def main() -> None:
     host = os.environ.get("RPI_HOST", "192.168.4.1")
     user = os.environ.get("RPI_USER", "pi")
 
-    # --- Preflight: check that wheels exist ---
-    transport_whls = glob.glob(str(script_dir / "raccoon_transport-*.whl"))
+    # --- Preflight: check that the wheel exists ---
     raccoon_whls = glob.glob(str(script_dir / "raccoon_cli-*.whl"))
 
-    if not transport_whls or not raccoon_whls:
-        print(f"ERROR: Expected raccoon_transport-*.whl and raccoon_cli-*.whl in {script_dir}")
+    if not raccoon_whls:
+        print(f"ERROR: Expected raccoon_cli-*.whl in {script_dir}")
         sys.exit(1)
 
-    transport_whl = transport_whls[0]
     raccoon_whl = raccoon_whls[0]
 
     print(f"Deploying to {user}@{host}")
-    print(f"  raccoon-transport: {Path(transport_whl).name}")
-    print(f"  raccoon:           {Path(raccoon_whl).name}")
+    print(f"  raccoon: {Path(raccoon_whl).name}")
 
     # --- Test SSH connection ---
     print("Testing SSH connection...")
@@ -93,11 +90,11 @@ def main() -> None:
     print("Stopping raccoon service...")
     ssh(host, user, "sudo systemctl stop raccoon.service 2>/dev/null || true")
 
-    # --- Upload wheels ---
-    print("Uploading wheels...")
+    # --- Upload wheel ---
+    print("Uploading wheel...")
     remote_tmp = "/tmp/raccoon-install"
     ssh(host, user, f"rm -rf {remote_tmp} && mkdir -p {remote_tmp}")
-    scp([transport_whl, raccoon_whl], f"{user}@{host}:{remote_tmp}/")
+    scp([raccoon_whl], f"{user}@{host}:{remote_tmp}/")
 
     # --- Remove stale user-level install that would shadow the system-wide one ---
     print("Removing stale user-level install (if any)...")
@@ -113,8 +110,10 @@ def main() -> None:
         host,
         user,
         f"sudo pip3 install --break-system-packages --force-reinstall --no-deps "
-        f"{remote_tmp}/raccoon_transport-*.whl {remote_tmp}/raccoon_cli-*.whl "
-        f"&& sudo pip3 install --break-system-packages {remote_tmp}/raccoon_cli-*.whl",
+        f"{remote_tmp}/raccoon_cli-*.whl "
+        # raccoon-transport comes from PyPI, not from this release.
+        f"&& sudo pip3 install --break-system-packages --upgrade raccoon-transport "
+        f"{remote_tmp}/raccoon_cli-*.whl",
     )
 
     # --- Install systemd service + run all migrations ---
