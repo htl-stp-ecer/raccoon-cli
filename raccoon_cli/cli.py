@@ -11,7 +11,6 @@ from raccoon_cli.commands import (
     calibrate_group,
     codegen_command,
     run_command,
-    wizard_command,
     connect_command,
     disconnect_command,
     sync_command,
@@ -150,7 +149,6 @@ def main(ctx: click.Context, no_validate: bool) -> None:
 main.add_command(calibrate_group)
 main.add_command(codegen_command)
 main.add_command(run_command)
-main.add_command(wizard_command)
 main.add_command(connect_command)
 main.add_command(disconnect_command)
 main.add_command(sync_command)
