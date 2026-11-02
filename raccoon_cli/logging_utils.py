@@ -143,15 +143,8 @@ def render_banner(console: Console) -> None:
 
 
 def render_summary(console: Console, summary: LogSummary) -> None:
-    """Pretty-print the collected warning/error messages."""
+    """Pretty-print the collected warning/error messages (nothing if there are none)."""
     if not summary.has_messages():
-        console.print(
-            Panel.fit(
-                Text("All clear - no warnings or errors logged!", style="bold green"),
-                border_style="green",
-                box=box.ROUNDED,
-            )
-        )
         return
 
     table = Table(
