@@ -12,9 +12,6 @@ from raccoon_cli.commands import (
     codegen_command,
     run_command,
     wizard_command,
-    create_command,
-    list_command,
-    remove_command,
     connect_command,
     disconnect_command,
     sync_command,
@@ -22,8 +19,8 @@ from raccoon_cli.commands import (
     web_command,
     update_command,
     checkpoint_group,
-    reorder_command,
     logs_group,
+    missions_group,
     migrate_command,
     validate_command,
     shell_command,
@@ -37,7 +34,7 @@ CONTEXT_SETTINGS = {
 }
 
 # Commands that don't operate on a project — skip auto-validation.
-_SKIP_VALIDATE_COMMANDS = {"validate", "create", "connect", "disconnect", "update", "doctor", "migrate", "web", "upload"}
+_SKIP_VALIDATE_COMMANDS = {"validate", "connect", "disconnect", "update", "doctor", "migrate", "web", "upload"}
 
 
 def _normalize_exit_code(code) -> int:
@@ -154,9 +151,6 @@ main.add_command(calibrate_group)
 main.add_command(codegen_command)
 main.add_command(run_command)
 main.add_command(wizard_command)
-main.add_command(create_command)
-main.add_command(list_command)
-main.add_command(remove_command)
 main.add_command(connect_command)
 main.add_command(disconnect_command)
 main.add_command(sync_command)
@@ -164,8 +158,8 @@ main.add_command(lcm_group)
 main.add_command(web_command)
 main.add_command(update_command)
 main.add_command(checkpoint_group)
-main.add_command(reorder_command)
 main.add_command(logs_group)
+main.add_command(missions_group)
 main.add_command(migrate_command)
 main.add_command(validate_command)
 main.add_command(shell_command)

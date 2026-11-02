@@ -31,3 +31,12 @@ def normalize_name(s: str, strip_suffix: str = "mission") -> NormalizedName:
     snake = "_".join(tokens)
     pascal = "".join(t.capitalize() for t in tokens)
     return NormalizedName(raw=raw, snake=snake, pascal=pascal)
+
+
+def mission_module_name(class_name: str) -> str:
+    """Module (file stem) of a mission class, e.g. ``M010DriveFooMission`` -> ``m010_drive_foo_mission``.
+
+    This is the convention the robot code generator imports missions by.
+    """
+    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", class_name)
+    return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()

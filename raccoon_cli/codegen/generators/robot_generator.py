@@ -378,9 +378,9 @@ class RobotGenerator(BaseGenerator):
 
     @staticmethod
     def _class_name_to_snake_case(class_name: str) -> str:
-        import re
-        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', class_name)
-        return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+        from raccoon_cli.naming import mission_module_name
+
+        return mission_module_name(class_name)
 
     HARDWARE_REF_PARAMS = {
         "left_motor", "right_motor",
