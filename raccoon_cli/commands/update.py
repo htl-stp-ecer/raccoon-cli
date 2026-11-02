@@ -213,6 +213,14 @@ def update_command(
     if pi_updates and ssh_client is not None:
         _run_post_install(console, ssh_client)
 
+        # Order matters: all binaries and packages first (above), then the bundle file,
+        # then the restart. A service must never start against a bundle file that names
+        # another transport than the one just installed. The dev bundle has no contract
+        # and leaves the file alone (a hand-set `dev` stays until the next normal update).
+        if resolved != "dev" and manifest:
+            if _install_bundle_file(console, ssh_client, manifest):
+                _restart_pi_services(console, ssh_client)
+
 
 def missing_transport_problem(manifest: dict, resolved: str) -> Optional[str]:
     """Message when a bundle has no raccoon-transport version, else None.
@@ -228,6 +236,12 @@ def missing_transport_problem(manifest: dict, resolved: str) -> Optional[str]:
             f"Bundle {manifest.get('bundle', resolved)} has no raccoon-transport version. "
             "Components of one bundle must share one transport, so nothing was changed. "
             "Pick another bundle, or use [cyan]--dev[/cyan] for the unchecked newest components."
+        )
+    contract_hash = manifest.get("contract_hash")
+    if not isinstance(contract_hash, str) or not contract_hash.strip() or contract_hash.strip() == "dev":
+        return (
+            f"Bundle {manifest.get('bundle', resolved)} has no usable contract_hash, so the Pi could not "
+            "be told which transport to expect. Nothing was changed."
         )
     return None
 
@@ -806,6 +820,63 @@ def _run_post_install(console: Console, ssh_client) -> None:
         return
 
     console.print("[green]Post-install complete.[/green]")
+
+
+BUNDLE_FILE = "/etc/raccoon-bundle.json"
+_REMOTE_TMP_BUNDLE = "/tmp/raccoon-bundle.json"
+# Restarted so every service re-runs its startup contract check against the new file.
+# raccoon-server goes last and without waiting, because it is the one we talk to.
+_PI_SERVICES = ["stm32_data_reader.service", "flutter-ui.service"]
+
+
+def _install_bundle_file(console: Console, ssh_client, manifest: dict) -> bool:
+    """Write the bundle manifest to /etc/raccoon-bundle.json on the Pi. True on success."""
+    import io
+    import json
+
+    console.print()
+    console.print("[bold]Writing bundle file on Pi...[/bold]")
+    document = json.dumps(manifest, indent=2) + "\n"
+    try:
+        sftp = ssh_client.open_sftp()
+        try:
+            sftp.putfo(io.BytesIO(document.encode()), _REMOTE_TMP_BUNDLE)
+        finally:
+            sftp.close()
+        command = (
+            f"sudo install -m 644 -o root -g root {_REMOTE_TMP_BUNDLE} {BUNDLE_FILE}"
+            f" && rm -f {_REMOTE_TMP_BUNDLE}"
+            # status files of the startup checks live here (the image creates it via tmpfiles.d)
+            " && sudo install -d -m 1777 /run/raccoon"
+        )
+        _, stdout, stderr = ssh_client.exec_command(command, timeout=30)
+        exit_code = stdout.channel.recv_exit_status()
+        err = stderr.read().decode(errors="replace").strip()
+    except Exception as exc:
+        _error_badge(console, f"Could not write {BUNDLE_FILE} on the Pi: {exc}")
+        return False
+    if exit_code != 0:
+        _error_badge(console, f"Could not write {BUNDLE_FILE} on the Pi (exit {exit_code}): {err}")
+        return False
+    console.print(f"[green]{BUNDLE_FILE} -> bundle {manifest.get('bundle', '?')}[/green]")
+    return True
+
+
+def _restart_pi_services(console: Console, ssh_client) -> None:
+    """Restart the services so they check their transport against the new bundle file."""
+    console.print("[bold]Restarting services on Pi...[/bold]")
+    commands = [f"sudo systemctl restart {' '.join(_PI_SERVICES)}", "sudo systemctl --no-block restart raccoon.service"]
+    for command in commands:
+        try:
+            _, stdout, stderr = ssh_client.exec_command(command, timeout=60)
+            exit_code = stdout.channel.recv_exit_status()
+            err = stderr.read().decode(errors="replace").strip()
+        except Exception as exc:
+            console.print(f"[yellow]`{command}` failed: {exc}[/yellow]")
+            continue
+        if exit_code != 0:
+            console.print(f"[yellow]`{command}` failed (exit {exit_code}): {err}[/yellow]")
+    console.print("[green]Services restarted.[/green] Run [cyan]raccoon doctor[/cyan] to see their contract status.")
 
 
 def _find_install_script(tmpdir: str) -> str | None:
