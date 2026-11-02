@@ -3,10 +3,11 @@
 import logging
 import re
 import shutil
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from raccoon_cli.project_creation import scaffold_project
 
 logger = logging.getLogger("raccoon")
 PROJECT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\s]+$")
@@ -110,7 +111,7 @@ class ProjectManager:
 
     def create_project(self, name: str) -> dict:
         """
-        Create a new project via the raccoon CLI.
+        Create a new project via the shared scaffolding service.
 
         Args:
             name: Display name and directory name for the new project
@@ -128,34 +129,11 @@ class ProjectManager:
         if project_path.exists():
             raise FileExistsError(f"Project '{project_name}' already exists")
 
-        try:
-            result = subprocess.run(
-                [
-                    "raccoon",
-                    "create",
-                    "project",
-                    project_name,
-                    "--path",
-                    str(self.projects_dir),
-                    "--no-wizard",
-                    "--no-open-ide",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError("The 'raccoon' command is not available on the server") from exc
-        except subprocess.CalledProcessError as exc:
-            stderr = (exc.stderr or "").strip()
-            stdout = (exc.stdout or "").strip()
-            message = stderr or stdout or f"Failed to create project '{project_name}'"
-            raise RuntimeError(message) from exc
+        scaffold_project(project_name, project_path)
 
         project = self._get_project_info(project_path)
         if not project:
-            stdout = (result.stdout or "").strip()
-            raise RuntimeError(stdout or f"Project '{project_name}' was created but could not be loaded")
+            raise RuntimeError(f"Project '{project_name}' was created but could not be loaded")
 
         return project
 

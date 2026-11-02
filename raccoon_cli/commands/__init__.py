@@ -3,7 +3,6 @@
 from .calibrate import calibrate_group
 from .codegen import codegen_command
 from .run import run_command
-from .wizard import wizard_command
 from .connect import connect_command, disconnect_command
 from .sync_cmd import sync_command
 from .lcm import lcm_group
@@ -21,7 +20,6 @@ __all__ = [
     "calibrate_group",
     "codegen_command",
     "run_command",
-    "wizard_command",
     "connect_command",
     "disconnect_command",
     "sync_cmd",
