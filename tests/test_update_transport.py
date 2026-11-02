@@ -31,7 +31,16 @@ def test_empty_transport_field_is_a_problem(value):
 
 
 def test_bundle_with_transport_is_fine():
-    assert upd.missing_transport_problem({"bundle": "b", "components": {"raccoon-transport": "v69"}}, "b") is None
+    manifest = {"bundle": "b", "contract_hash": "93ac36836810c9fe", "components": {"raccoon-transport": "v69"}}
+    assert upd.missing_transport_problem(manifest, "b") is None
+
+
+@pytest.mark.parametrize("value", [None, "", "  ", "dev", 5])
+def test_transport_without_a_usable_hash_is_a_problem(value):
+    manifest = {"bundle": "b", "components": {"raccoon-transport": "v69"}}
+    if value is not None:
+        manifest["contract_hash"] = value
+    assert "contract_hash" in upd.missing_transport_problem(manifest, "b")
 
 
 def test_dev_bundle_is_exempt():
