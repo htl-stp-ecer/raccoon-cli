@@ -68,6 +68,7 @@ def connect_command(
     state = manager.state
     console.print(f"[green]Connected to {state.pi_hostname}[/green]")
     console.print(f"  Address: {state.pi_address}:{state.pi_port}")
+    _warn_about_contract(console, state)
     console.print(f"  Version: {state.pi_version or 'unknown'}")
 
     # Check API token status
@@ -132,3 +133,19 @@ def disconnect_command(ctx: click.Context) -> None:
         console.print(f"[yellow]Disconnected from {hostname}[/yellow]")
     else:
         console.print("[dim]Not connected to any Pi[/dim]")
+
+
+def _warn_about_contract(console: Console, state) -> None:
+    """One red/yellow line when the Pi's transport contract is broken or in dev mode."""
+    from raccoon_cli import contract_status
+
+    summary = contract_status.fetch_remote_summary(state.pi_address, state.pi_port, state.api_token)
+    if summary is None:
+        return
+    if not summary.get("ok", True):
+        console.print(
+            f"[red]  Transport contract: {', '.join(summary.get('blocking') or ['?'])} do not match the bundle. "
+            "Runs will be refused; see `raccoon doctor`.[/red]"
+        )
+    for line in contract_status.dev_warnings(summary):
+        console.print(f"[yellow]  {line}[/yellow]")

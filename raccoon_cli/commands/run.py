@@ -97,6 +97,19 @@ def _missions_from_args(args: tuple) -> list[str]:
     return [a for a in args if not a.startswith("-")]
 
 
+def _server_error_text(error: Exception) -> str:
+    """The server's own explanation (e.g. a refused run) instead of a bare HTTP status."""
+    response = getattr(error, "response", None)
+    if response is not None:
+        try:
+            detail = response.json().get("detail")
+            if isinstance(detail, str) and detail:
+                return detail
+        except Exception:
+            pass
+    return str(error)
+
+
 def _announce_run_dir(
     console: Console,
     run_dir: Path,
@@ -1128,9 +1141,16 @@ async def _run_remote(
                 console, run_dir, remote=True,
                 record_localization=record_localization, profile=profile,
             )
+            try:
+                from raccoon_cli import contract_status
+
+                for contract_line in contract_status.dev_warnings(await client.get_contract()):
+                    console.print(f"[bold yellow]{contract_line}[/bold yellow]")
+            except Exception:
+                pass  # an older Pi has no contract endpoint; the run itself still decides
             result = await client.run_project(project_uuid, args=list(args), env=env)
         except Exception as e:
-            console.print(f"[red]Failed to start run on Pi: {e}[/red]")
+            console.print(f"[red]Failed to start run on Pi: {_server_error_text(e)}[/red]")
             raise SystemExit(1)
 
         _print_service_deployments(console, result.service_deployments or [])
