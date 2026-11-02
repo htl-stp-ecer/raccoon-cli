@@ -18,7 +18,7 @@ raccoon --help                      # View CLI help
 
 ### CLI Usage (after installation)
 ```bash
-raccoon create project MyRobot      # Create new project
+raccoon missions list               # List / create / rename / remove / reorder missions
 raccoon wizard                      # Interactive hardware configuration
 raccoon codegen                     # Generate hardware code from YAML
 raccoon calibrate ticks             # Measure encoder ticks per revolution

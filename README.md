@@ -34,8 +34,7 @@ pip install raccoon-cli
 ## Quick Start
 
 ```bash
-# 1. Create a new project (runs the hardware wizard automatically)
-raccoon create project MyRobot
+# 1. Create a project with the project helper script, then open it
 cd MyRobot
 
 # 2. Connect to your Pi
@@ -66,16 +65,17 @@ After that, the server starts automatically on boot and `raccoon connect` can re
 
 ## Commands
 
-### Project management
+### Missions
+
+Projects are git repos created with the project helper script; run `raccoon` from inside the project.
 
 | Command | Description |
 |:--------|:------------|
-| `raccoon create project <name>` | Scaffold a new project and run the hardware wizard |
-| `raccoon create mission <name>` | Add a new mission to the current project |
-| `raccoon list projects` | List all projects in the current directory |
-| `raccoon list missions` | List missions in the current project |
-| `raccoon remove mission <name>` | Remove a mission |
-| `raccoon reorder` | Interactively reorder missions |
+| `raccoon missions create <Mxxx><name>` | Add a mission; the number is required, e.g. `M030Wave` (`M000`/`M999` are reserved) |
+| `raccoon missions list` | List the project's missions |
+| `raccoon missions rename <name\|Mxxx> <new-name>` | Rename a mission (file, class and references; the M-number is kept) |
+| `raccoon missions remove <name\|Mxxx> [--keep-file]` | Remove a mission |
+| `raccoon missions reorder [order...]` | Reorder missions (interactive without arguments) and renumber them |
 
 ### Hardware & code generation
 
@@ -119,7 +119,7 @@ After that, the server starts automatically on boot and `raccoon connect` can re
 
 ## Project structure
 
-`raccoon create project` generates:
+A new project contains:
 
 ```
 MyRobot/
@@ -142,7 +142,7 @@ MyRobot/
 
 ## Configuration
 
-`raccoon create project` generates a split config layout. The root file just glues things together:
+A project uses a split config layout. The root file just glues things together:
 
 ### `raccoon.project.yml`
 

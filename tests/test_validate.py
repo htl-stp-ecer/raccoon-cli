@@ -627,10 +627,10 @@ class _DummySummary:
 
 class TestCreateMissionDoesNotTouchMainPy:
     def test_main_py_unchanged_after_create(self, tmp_path):
-        """raccoon create mission must not insert imports into main.py."""
+        """raccoon missions create must not insert imports into main.py."""
         import inspect
-        from raccoon_cli.commands import create as create_module
-        src = inspect.getsource(create_module.create_mission_command.callback)
+        from raccoon_cli.commands import missions as missions_module
+        src = inspect.getsource(missions_module.create_command.callback)
         assert "add_mission_import_to_main" not in src
 
     def test_get_next_mission_number_exists_in_shared_layer(self):
