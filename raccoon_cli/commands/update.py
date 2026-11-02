@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import tarfile
 import tempfile
+from typing import Optional
 
 import shutil
 
@@ -21,11 +23,12 @@ from raccoon_cli.client.connection import (
     ParamikoVersionError,
     print_paramiko_version_error,
 )
-from raccoon_cli.project import find_project_root
+from raccoon_cli import laptop_update
+from raccoon_cli.project import ProjectError, find_project_root
 from raccoon_cli.version_checker import (
     PackageStatus,
     check_all_versions,
-    download_release_assets,
+    download_release_assets_for_version,
     render_version_table,
     fetch_bundle_manifest,
     version_is_newer,
@@ -35,12 +38,17 @@ from raccoon_cli.version_checker import (
 logger = logging.getLogger("raccoon")
 
 
+def _error_badge(console: Console, message: str) -> None:
+    """Print a clean ERROR badge followed by the message (no traceback)."""
+    console.print(f"[bold white on red] ERROR [/bold white on red] {message}")
+
+
 @click.command(name="update")
 @click.option("--check", "check_only", is_flag=True, help="Only check, don't install")
 @click.option("--laptop-only", is_flag=True, help="Only update laptop packages")
 @click.option("--pi-only", is_flag=True, help="Only update Pi packages")
 @click.option("--force", is_flag=True, help="Force reinstall even if versions match")
-@click.option("--bundle", "bundle_tag", default=None, metavar="NAME", help="Pin to a specific bundle (e.g. 2026.4.25.1)")
+@click.option("--bundle", "bundle_tag", default=None, metavar="NAME", help="Pin to a specific bundle")
 @click.option("--dev", "use_dev", is_flag=True, help="Use the dev manifest (latest component tips, auto-updated by CI)")
 @click.option(
     "--allow-missing-pypi-version-fallback",
@@ -70,6 +78,18 @@ def update_command(
     """
     console: Console = ctx.obj.get("console", Console())
 
+    # The update needs a project (laptop pyproject.toml, project Pi connection).
+    # Fail fast with a clean message instead of a traceback or a slow Pi connect.
+    try:
+        find_project_root()
+    except ProjectError:
+        _error_badge(
+            console,
+            "Not in a raccoon project (no raccoon.project.yml found). "
+            "Run [cyan]raccoon update[/cyan] from inside a project directory.",
+        )
+        ctx.exit(1)
+
     # Get SSH client for Pi if needed
     ssh_client = None
     server_url = None
@@ -95,13 +115,13 @@ def update_command(
         console.print(f"[dim]Bundle: {manifest.get('bundle', resolved)}[/dim]")
     else:
         console.print("[yellow]Could not fetch raccoon-image manifest — falling back to individual repo versions.[/yellow]")
-    console.print()
 
     # Check versions — prefer HTTP server endpoint, SSH as fallback
     console.print("[dim]Checking versions...[/dim]")
-    console.print()
     statuses = check_all_versions(ssh_client=ssh_client, server_url=server_url, api_token=api_token, manifest=manifest)
-    any_outdated, any_ahead = render_version_table(console, statuses)
+    any_outdated, any_ahead = render_version_table(
+        console, statuses, show_laptop=not pi_only, show_pi=not laptop_only
+    )
 
     if check_only:
         console.print()
@@ -154,6 +174,7 @@ def update_command(
             laptop_updates,
             force,
             allow_missing_pypi_version_fallback,
+            bundle_version=(manifest or {}).get("bundle"),
         )
 
     if pi_updates:
@@ -201,7 +222,10 @@ def _get_ssh_client(console: Console):
     pi_port = 8421
     pi_user = "pi"
 
-    project_root = find_project_root()
+    try:
+        project_root = find_project_root()
+    except ProjectError:
+        project_root = None  # not in a project — fall back to the global known Pis
     if project_root:
         project_conn = manager.load_from_project(project_root)
         if project_conn and project_conn.pi_address:
@@ -225,19 +249,14 @@ def _get_ssh_client(console: Console):
         success = manager.connect_sync(pi_address, pi_port, pi_user)
         if success:
             return manager.get_ssh_client()
+        console.print("[yellow]raccoon-server unreachable.[/yellow]")
     except Exception as e:
         console.print(f"[yellow]raccoon-server unreachable: {e}[/yellow]")
 
-    # Fallback: raccoon-server is down but SSH may still work (e.g. broken server install).
-    console.print(f"[dim]Trying direct SSH to {pi_address} (bypassing raccoon-server)...[/dim]")
-    try:
-        if manager.connect_ssh_only(pi_address, pi_user, pi_port):
-            console.print("[yellow]Connected via SSH only — raccoon-server is down.[/yellow]")
-            return manager.get_ssh_client()
-    except Exception as e:
-        console.print(f"[yellow]Direct SSH also failed: {e}[/yellow]")
-
-    console.print("[dim]Could not connect to Pi — skipping Pi version checks.[/dim]")
+    console.print(
+        "[dim]Could not connect to Pi — skipping Pi version checks. "
+        "If raccoon-server is broken, flash the latest raccoon-image.[/dim]"
+    )
     return None
 
 
@@ -277,7 +296,7 @@ def _get_pi_updates(
     """Filter statuses to those needing Pi updates (behind bundle only)."""
     updates = []
     for s in statuses:
-        if "pi" not in s.info.targets:
+        if "pi" not in s.info.targets or s.info.pi_install == "dependency":
             continue
         if s.latest_version is None:
             continue
@@ -303,14 +322,41 @@ def _update_laptop(
     updates: list[PackageStatus],
     force: bool,
     allow_missing_pypi_version_fallback: bool,
+    bundle_version: Optional[str] = None,
 ) -> None:
-    """Update laptop pip packages directly from PyPI."""
+    """Pin the bundle versions in the project's pyproject.toml and run ``uv sync``."""
     console.print()
     console.print("[bold]Updating laptop packages...[/bold]")
 
-    specs: list[str] = []
+    try:
+        project_root = find_project_root()
+    except ProjectError:
+        _error_badge(
+            console,
+            "Not in a raccoon project (no raccoon.project.yml found). "
+            "Run [cyan]raccoon update[/cyan] inside a project to update the laptop packages, "
+            "or use [cyan]--pi-only[/cyan].",
+        )
+        return
+    if not (project_root / "pyproject.toml").exists():
+        _error_badge(
+            console,
+            f"No pyproject.toml in {project_root} — run [cyan]raccoon migrate[/cyan] first.",
+        )
+        return
+
+    uv = shutil.which("uv")
+    if not uv:
+        _error_badge(
+            console,
+            "uv is not installed or not in PATH — skipping laptop update.\n"
+            "Install it with: curl -LsSf https://astral.sh/uv/install.sh | sh",
+        )
+        return
+
+    pins: dict[str, str] = {}
     for s in updates:
-        if not (s.info.pip_name and s.info.on_pypi and s.latest_version):
+        if not (s.info.pip_name and s.latest_version):
             continue
         try:
             resolved, note = resolve_pypi_version(
@@ -323,70 +369,35 @@ def _update_laptop(
         if note:
             console.print(f"[yellow]{note}[/yellow]")
         if resolved:
-            specs.append(f"{s.info.pip_name}=={resolved}")
-    skipped = [s for s in updates if not (s.info.pip_name and s.info.on_pypi)]
-    for s in skipped:
-        console.print(
-            f"[yellow]Skipping {s.info.name} on laptop — not installable from PyPI.[/yellow]"
-        )
-    if not specs:
+            pins[s.info.pip_name] = resolved
+    if not pins:
         return
 
-    # Clean up stale .old exe from a previous Windows update
-    if sys.platform == "win32":
-        exe_path = shutil.which("raccoon")
-        if exe_path:
-            old_path = exe_path + ".old"
-            if os.path.exists(old_path):
-                try:
-                    os.remove(old_path)
-                except OSError:
-                    pass
+    pyproject = project_root / "pyproject.toml"
+    changed, missing = laptop_update.apply_pins(pyproject, pins, bundle_version)
+    for dist in changed:
+        console.print(f"  [dim]{dist}=={pins[dist]}[/dim]")
+    for dist in missing:
+        console.print(f"  [yellow]{dist} is not a dependency in pyproject.toml — not pinned.[/yellow]")
+    if bundle_version and not laptop_update.is_valid_project_version(bundle_version):
+        console.print(f"  [dim]Bundle '{bundle_version}' is not a valid version — project version left unchanged.[/dim]")
+    if not changed:
+        return
 
-    for spec in specs:
-        console.print(f"  [dim]{spec}[/dim]")
+    if not laptop_update.can_sync_while_running(project_root):
+        console.print(
+            "[yellow]raccoon is running from this project's environment, which Windows "
+            "locks while running.[/yellow]\n"
+            f"pyproject.toml is updated — run [cyan]uv sync{' --reinstall' if force else ''}[/cyan] "
+            f"in {project_root} to finish."
+        )
+        return
 
-    # On Windows, the running raccoon.exe is locked and pip cannot
-    # overwrite it. Windows *does* allow renaming a locked file, so we
-    # move the exe out of the way before pip install and clean up after.
-    renamed_exe: str | None = None
-    if sys.platform == "win32":
-        exe_path = shutil.which("raccoon")
-        if exe_path and os.path.isfile(exe_path):
-            old_path = exe_path + ".old"
-            try:
-                if os.path.exists(old_path):
-                    os.remove(old_path)
-                os.rename(exe_path, old_path)
-                renamed_exe = old_path
-                logger.info(f"Renamed {exe_path} → {old_path} to avoid lock")
-            except OSError:
-                logger.debug("Could not rename raccoon exe, proceeding anyway")
-
-    pip_args = [sys.executable, "-m", "pip", "install", "--upgrade"]
-    if force:
-        pip_args.append("--force-reinstall")
-    pip_args.extend(specs)
-
-    result = subprocess.run(pip_args, capture_output=True, text=True)
+    cmd = [uv, "sync"] + (["--reinstall"] if force else [])
+    result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
     if result.returncode != 0:
-        if "externally-managed-environment" in result.stderr:
-            console.print("[yellow]System Python detected — retrying with --break-system-packages[/yellow]")
-            pip_args.insert(4, "--break-system-packages")
-            result = subprocess.run(pip_args, capture_output=True, text=True)
-            if result.returncode != 0:
-                console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
-                return
-        else:
-            console.print(f"[red]pip install failed:[/red]\n{result.stderr.strip()}")
-            return
-
-    # Clean up renamed exe on Windows
-    if renamed_exe and os.path.exists(renamed_exe):
-        try:
-            os.remove(renamed_exe)
-        except OSError:
-            logger.debug(f"Could not remove {renamed_exe} — will be cleaned up next run")
+        _error_badge(console, f"uv sync failed:\n{result.stderr.strip()}")
+        return
 
     console.print("[green]Laptop packages updated successfully.[/green]")
 
@@ -398,14 +409,12 @@ def _update_pi(
     force: bool,
     allow_missing_pypi_version_fallback: bool,
 ) -> None:
-    """Update Pi packages.
+    """Update Pi packages, each by the method declared in the registry.
 
-    Three paths depending on how the package is shipped:
-    - PyPI pip packages: single ``pip3 install`` over SSH.
-    - GitHub wheel (``on_pypi=False``): download wheel locally, SFTP to Pi,
-      then ``pip3 install`` the uploaded wheel.
-    - Non-pip packages: download the release tarball locally and run its
-      ``install.py`` on the laptop (script SSHes to Pi using RPI_HOST/RPI_USER).
+    - ``pypi``:    ``pip3 install`` over SSH (raccoon-lib + sim extra).
+    - ``tarball``: download the release tarball locally, run its ``install.py``
+      on the laptop (it SSHes to the Pi via RPI_HOST/RPI_USER).
+    - ``deb``:     download the .deb, SFTP it to the Pi, ``apt install`` it.
     """
     console.print()
     console.print("[bold]Updating Pi packages...[/bold]")
@@ -414,10 +423,7 @@ def _update_pi(
     pi_host = manager.state.pi_address
     pi_user = manager.state.pi_user
 
-    pypi_updates = [s for s in updates if s.info.pip_name and s.info.on_pypi]
-    wheel_updates = [s for s in updates if s.info.pip_name and not s.info.on_pypi]
-    tarball_updates = [s for s in updates if not s.info.pip_name]
-
+    pypi_updates = [s for s in updates if s.info.pi_install == "pypi"]
     if pypi_updates:
         _pi_install_from_pypi(
             console,
@@ -427,18 +433,11 @@ def _update_pi(
             allow_missing_pypi_version_fallback,
         )
 
-    if wheel_updates:
-        _pi_install_github_wheels(console, ssh_client, wheel_updates, force)
-
-    if tarball_updates:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            by_repo: dict[str, list[PackageStatus]] = {}
-            for s in tarball_updates:
-                by_repo.setdefault(s.info.repo, []).append(s)
-            for repo, repo_updates in by_repo.items():
-                repo_short = repo.split("/")[-1]
-                console.print(f"\n[cyan]Updating {repo_short} from {repo}...[/cyan]")
-                _update_pi_tarball(console, tmpdir, repo, repo_short, pi_host, pi_user)
+    for s in updates:
+        if s.info.pi_install == "deb":
+            _pi_install_deb(console, ssh_client, s)
+        elif s.info.pi_install == "tarball":
+            _update_pi_tarball(console, s, pi_host, pi_user)
 
 
 def _pi_pip_install(
@@ -450,7 +449,7 @@ def _pi_pip_install(
     paths). Returns True on success.
     """
     force_flag = " --force-reinstall" if force else ""
-    args_joined = " ".join(install_args)
+    args_joined = " ".join(shlex.quote(a) for a in install_args)
 
     commands = [
         f"pip3 install --upgrade{force_flag} {args_joined}",
@@ -499,7 +498,8 @@ def _pi_install_from_pypi(
         if note:
             console.print(f"[yellow]{note}[/yellow]")
         if resolved:
-            specs.append(f"{s.info.pip_name}=={resolved}")
+            extras = f"[{s.info.pi_extras}]" if s.info.pi_extras else ""
+            specs.append(f"{s.info.pip_name}{extras}=={resolved}")
     if not specs:
         return
 
@@ -520,51 +520,47 @@ def _pi_install_from_pypi(
     console.print(f"[red]pip3 install failed on Pi:[/red]\n{err.strip()}")
 
 
-def _pi_install_github_wheels(
-    console: Console,
-    ssh_client,
-    updates: list[PackageStatus],
-    force: bool,
-) -> None:
-    """Download GitHub wheels for each package and pip-install them on the Pi."""
-    console.print("\n[cyan]Installing GitHub wheels on Pi...[/cyan]")
-
+def _pi_install_deb(console: Console, ssh_client, status: PackageStatus) -> None:
+    """Download a release .deb, upload it to the Pi and ``apt install`` it."""
+    info = status.info
+    console.print(f"\n[cyan]Updating {info.name} from {info.repo}...[/cyan]")
     with tempfile.TemporaryDirectory() as tmpdir:
-        remote_paths: list[str] = []
+        debs = download_release_assets_for_version(
+            info.repo, info.pi_asset or "*.deb", tmpdir, status.latest_version
+        )
+        if not debs:
+            console.print(f"[red]No .deb found for {info.name} {status.latest_version}.[/red]")
+            return
+
+        name = os.path.basename(debs[0])
+        remote_path = f"/tmp/{name}"
+        console.print(f"  [dim]Uploading {name} → Pi:{remote_path}[/dim]")
         sftp = ssh_client.open_sftp()
         try:
-            for s in updates:
-                pip_name = s.info.pip_name
-                if not pip_name:
-                    continue
-                pattern = f"{pip_name.replace('-', '_')}-*.whl"
-                console.print(f"[dim]Downloading {pip_name} wheels from {s.info.repo}...[/dim]")
-                wheels = download_release_assets(s.info.repo, pattern, tmpdir)
-                if not wheels:
-                    console.print(f"[yellow]No wheel found for {s.info.name} — skipping.[/yellow]")
-                    continue
-                for local_path in wheels:
-                    name = os.path.basename(local_path)
-                    remote_path = f"/tmp/{name}"
-                    console.print(f"  [dim]Uploading {name} → Pi:{remote_path}[/dim]")
-                    sftp.put(local_path, remote_path)
-                    remote_paths.append(remote_path)
+            sftp.put(debs[0], remote_path)
         finally:
             sftp.close()
 
-        if not remote_paths:
-            console.print("[yellow]No wheels to install on Pi.[/yellow]")
+        try:
+            quoted = shlex.quote(remote_path)
+            _, stdout, stderr = ssh_client.exec_command(
+                f"sudo apt install -y {quoted}", timeout=300
+            )
+            exit_code = stdout.channel.recv_exit_status()
+            err = stderr.read().decode(errors="replace")
+        except Exception as e:
+            console.print(f"[red]apt install failed: {e}[/red]")
             return
+        finally:
+            try:
+                ssh_client.exec_command(f"rm -f {shlex.quote(remote_path)}")
+            except Exception:
+                pass
 
-        success, err = _pi_pip_install(console, ssh_client, remote_paths, force)
-
-        # Clean up uploaded wheels regardless of success
-        ssh_client.exec_command("rm -f " + " ".join(remote_paths))
-
-        if success:
-            console.print("[green]GitHub wheels installed on Pi.[/green]")
-        else:
-            console.print(f"[red]pip3 install failed on Pi:[/red]\n{err.strip()}")
+    if exit_code != 0:
+        console.print(f"[red]apt install failed for {info.name}:[/red]\n{err.strip()}")
+        return
+    console.print(f"[green]{info.name} updated on Pi.[/green]")
 
 
 def _pi_install_from_local_wheels(
@@ -591,7 +587,7 @@ def _pi_install_from_local_wheels(
             sftp.close()
 
         success, _ = _pi_pip_install(console, ssh_client, remote_paths, force)
-        ssh_client.exec_command("rm -f " + " ".join(remote_paths))
+        ssh_client.exec_command("rm -f " + " ".join(shlex.quote(p) for p in remote_paths))
         return success
 
 
@@ -671,44 +667,52 @@ def _get_pi_wheel_tags(ssh_client) -> tuple[str, str, str, list[str]]:
 
 def _update_pi_tarball(
     console: Console,
-    tmpdir: str,
-    repo: str,
-    repo_short: str,
+    status: PackageStatus,
     pi_host: str,
     pi_user: str,
 ) -> None:
     """Update a Pi package by downloading its tarball and running its install script."""
-    console.print(f"[dim]Downloading release assets from {repo}...[/dim]")
-    tarballs = download_release_assets(repo, "*.tar.gz", tmpdir)
-    if not tarballs:
-        console.print(f"[red]No tarball found for {repo_short}.[/red]")
-        return
+    info = status.info
+    repo_short = info.repo.split("/")[-1]
+    console.print(f"\n[cyan]Updating {info.name} from {info.repo}...[/cyan]")
 
-    tarball = tarballs[0]
-    console.print(f"[dim]Extracting {os.path.basename(tarball)}...[/dim]")
-    with tarfile.open(tarball, "r:gz") as tf:
-        tf.extractall(tmpdir)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        console.print(f"[dim]Downloading release assets from {info.repo}...[/dim]")
+        tarballs = download_release_assets_for_version(
+            info.repo, info.pi_asset or "*.tar.gz", tmpdir, status.latest_version
+        )
+        if not tarballs:
+            console.print(f"[red]No tarball found for {repo_short} {status.latest_version}.[/red]")
+            return
 
-    install_script = _find_install_script(tmpdir)
-    if not install_script:
-        console.print(f"[red]install script not found in {repo_short} tarball.[/red]")
-        return
+        # Each package is extracted into its own directory so one package's
+        # install.py is never mistaken for another's.
+        extract_dir = os.path.join(tmpdir, info.name)
+        os.makedirs(extract_dir)
+        console.print(f"[dim]Extracting {os.path.basename(tarballs[0])}...[/dim]")
+        with tarfile.open(tarballs[0], "r:gz") as tf:
+            tf.extractall(extract_dir, filter="data")
 
-    console.print(f"[dim]Running {os.path.basename(install_script)} for {repo_short}...[/dim]")
-    env = os.environ.copy()
-    env["RPI_HOST"] = pi_host
-    env["RPI_USER"] = pi_user
+        install_script = _find_install_script(extract_dir)
+        if not install_script:
+            console.print(f"[red]install script not found in {repo_short} tarball.[/red]")
+            return
 
-    result = subprocess.run(
-        [sys.executable, install_script],
-        env=env,
-        cwd=os.path.dirname(install_script),
-    )
-    if result.returncode != 0:
-        console.print(f"[red]{os.path.basename(install_script)} failed for {repo_short}.[/red]")
-        return
+        console.print(f"[dim]Running {os.path.basename(install_script)} for {repo_short}...[/dim]")
+        env = os.environ.copy()
+        env["RPI_HOST"] = pi_host
+        env["RPI_USER"] = pi_user
 
-    console.print(f"[green]{repo_short} updated on Pi.[/green]")
+        result = subprocess.run(
+            [sys.executable, install_script],
+            env=env,
+            cwd=os.path.dirname(install_script),
+        )
+        if result.returncode != 0:
+            console.print(f"[red]{os.path.basename(install_script)} failed for {repo_short}.[/red]")
+            return
+
+    console.print(f"[green]{info.name} updated on Pi.[/green]")
 
 
 def _run_post_install(console: Console, ssh_client) -> None:

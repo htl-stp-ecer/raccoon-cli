@@ -6,9 +6,7 @@ import fnmatch
 import json
 import logging
 import os
-import subprocess
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -32,9 +30,16 @@ class PackageInfo:
     # SSH command whose stdout is the installed version string.
     # Used when pip_name is None and the server endpoint is unavailable.
     version_cmd: Optional[str] = None
-    # True if the package is installable from PyPI by ``pip_name``. If False,
-    # updates fall back to downloading the wheel from the GitHub release.
-    on_pypi: bool = True
+    # How the package is installed on the Pi:
+    #   "pypi"       - ``pip3 install pip_name[extras]==version`` over SSH
+    #   "tarball"    - GitHub release tarball whose ``install.py`` runs on the laptop
+    #   "deb"        - GitHub release .deb, uploaded and installed with apt
+    #   "dependency" - pulled in by other packages; nothing to install itself
+    pi_install: str = "tarball"
+    # fnmatch pattern for the release asset (tarball / deb installs).
+    pi_asset: Optional[str] = None
+    # pip extras installed together with the package on the Pi.
+    pi_extras: Optional[str] = None
 
 
 PACKAGE_REGISTRY: list[PackageInfo] = [
@@ -43,25 +48,23 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         repo="htl-stp-ecer/raccoon-cli",
         pip_name="raccoon-cli",
         targets=["laptop", "pi"],
+        pi_install="tarball",
+        pi_asset="raccoon-server-v*.tar.gz",
+    ),
+    PackageInfo(
+        name="raccoon-lib",
+        repo="htl-stp-ecer/raccoon-lib",
+        pip_name="raccoon-library",
+        targets=["laptop", "pi"],
+        pi_install="pypi",
+        pi_extras="sim",
     ),
     PackageInfo(
         name="raccoon-transport",
         repo="htl-stp-ecer/raccoon-transport",
         pip_name="raccoon-transport",
         targets=["pi"],
-    ),
-    PackageInfo(
-        name="raccoon-lib",
-        repo="htl-stp-ecer/raccoon-lib",
-        pip_name="raccoon-library",
-        targets=["pi"],
-        on_pypi=False,
-    ),
-    PackageInfo(
-        name="raccoon-stubs",
-        repo="htl-stp-ecer/raccoon-lib",
-        pip_name="raccoon-stubs",
-        targets=["laptop"],
+        pi_install="dependency",
     ),
     PackageInfo(
         name="botui",
@@ -69,6 +72,8 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         pip_name=None,
         targets=["pi"],
         version_cmd="cat /home/pi/stp-velox/version 2>/dev/null",
+        pi_install="deb",
+        pi_asset="stp-velox_*_arm64.deb",
     ),
     PackageInfo(
         name="stm32-data-reader",
@@ -76,6 +81,8 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         pip_name=None,
         targets=["pi"],
         version_cmd="/home/pi/stm32_data_reader/stm32_data_reader --version 2>/dev/null",
+        pi_install="tarball",
+        pi_asset="stm32_data_reader-v*.tar.gz",
     ),
     PackageInfo(
         name="raccoon-cam",
@@ -83,6 +90,8 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         pip_name=None,
         targets=["pi"],
         version_cmd="/usr/local/bin/raccoon-cam --version 2>/dev/null",
+        pi_install="tarball",
+        pi_asset="*.tar.gz",
     ),
 ]
 
@@ -173,6 +182,21 @@ def download_release_assets(
     return downloaded
 
 
+def download_release_assets_for_version(
+    repo: str, pattern: str, dest_dir: str, version: str
+) -> list[str]:
+    """Download assets from the release of a specific version.
+
+    Release tags are usually ``v<version>`` but some repos tag without the
+    ``v``, so both spellings are tried.
+    """
+    for tag in (f"v{version}", version):
+        files = download_release_assets(repo, pattern, dest_dir, tag=tag)
+        if files:
+            return files
+    return []
+
+
 _RACCOON_IMAGE_RAW = "https://raw.githubusercontent.com/htl-stp-ecer/raccoon-image/main/bundles"
 
 
@@ -203,63 +227,24 @@ def fetch_bundle_manifest(bundle: str = "latest") -> Optional[dict]:
     return None
 
 
-def _is_editable_install(pip_name: str) -> bool:
-    """Check if a pip package is an editable (dev) install via direct_url.json."""
-    try:
-        result = subprocess.run(
-            ["pip", "show", "-f", pip_name],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return False
-        # Find the install location
-        location = None
-        pkg_name = None
-        version = None
-        for line in result.stdout.splitlines():
-            if line.startswith("Location:"):
-                location = line.split(":", 1)[1].strip()
-            elif line.startswith("Name:"):
-                pkg_name = line.split(":", 1)[1].strip()
-            elif line.startswith("Version:"):
-                version = line.split(":", 1)[1].strip()
-        if not location or not pkg_name or not version:
-            return False
-        # Check for direct_url.json in dist-info
-        dist_info = Path(location) / f"{pkg_name.replace('-', '_')}-{version}.dist-info" / "direct_url.json"
-        if dist_info.exists():
-            data = json.loads(dist_info.read_text())
-            url = data.get("url", "")
-            return url.startswith("file://")
-    except Exception:
-        pass
-    return False
-
-
 def get_local_pip_version(pip_name: str) -> Optional[str]:
-    """Get installed version of a local pip package.
+    """Get the installed version of a package in the running environment.
 
     Returns "dev" for editable/local installs.
     """
+    from importlib import metadata
+
     try:
-        result = subprocess.run(
-            ["pip", "show", pip_name],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                if line.startswith("Version:"):
-                    version = line.split(":", 1)[1].strip()
-                    if _is_editable_install(pip_name):
-                        return "dev"
-                    return version
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+        dist = metadata.distribution(pip_name)
+    except metadata.PackageNotFoundError:
+        return None
+    try:
+        direct_url = dist.read_text("direct_url.json")
+        if direct_url and json.loads(direct_url).get("url", "").startswith("file://"):
+            return "dev"
+    except Exception:
         pass
-    return None
+    return dist.version
 
 
 def get_remote_pip_version(ssh_client, pip_name: str) -> Optional[str]:
@@ -340,11 +325,15 @@ def check_all_versions(
     for pkg in PACKAGE_REGISTRY:
         status = PackageStatus(info=pkg)
 
-        # Latest version — prefer bundle manifest, fall back to individual GitHub release
-        manifest_versions = (manifest or {}).get("components", {})
-        if pkg.name in manifest_versions:
-            tag = manifest_versions[pkg.name]
-            status.latest_version = tag.lstrip("v") if tag else None
+        # Latest version — the bundle manifest is authoritative. A component it
+        # doesn't list (or lists empty) is not part of the bundle: leave the
+        # version unset so it shows as "-" and is never touched. Only when no
+        # manifest could be fetched at all, fall back to each repo's GitHub release.
+        if manifest is not None:
+            tag = (manifest.get("components") or {}).get(pkg.name)
+            status.latest_version = (
+                tag.strip().lstrip("v") or None if isinstance(tag, str) else None
+            )
         else:
             if pkg.repo not in latest_cache:
                 latest_cache[pkg.repo] = get_latest_version(pkg.repo)
@@ -447,45 +436,58 @@ def _version_style(installed: Optional[str], latest: Optional[str]) -> tuple[str
     return installed, "yellow"     # behind bundle
 
 
-def render_version_table(console: Console, statuses: list[PackageStatus]) -> tuple[bool, bool]:
-    """Render a Rich table showing package version status.
-
-    Returns (any_outdated, any_ahead).
-    """
-    table = Table(title="Package Versions")
+def _render_target_table(
+    console: Console,
+    statuses: list[PackageStatus],
+    target: str,
+    title: str,
+) -> tuple[bool, bool]:
+    """Render one table (laptop or Pi). Returns (any_outdated, any_ahead)."""
+    table = Table(title=title)
     table.add_column("Package", style="cyan")
     table.add_column("Bundle", style="dim")
-    table.add_column("Laptop", justify="center")
-    table.add_column("Pi", justify="center")
+    table.add_column("Installed", justify="center")
 
     any_outdated = False
     any_ahead = False
 
     for s in statuses:
-        latest_display = s.latest_version or "?"
+        if target not in s.info.targets:
+            continue
+        installed = s.laptop_version if target == "laptop" else s.pi_version
+        text, style = _version_style(installed, s.latest_version)
+        table.add_row(s.info.name, s.latest_version or "-", f"[{style}]{text}[/{style}]")
 
-        def _cell(version: Optional[str]) -> str:
-            text, style = _version_style(version, s.latest_version)
-            return f"[{style}]{text}[/{style}]"
-
-        def _check(version: Optional[str]) -> None:
-            nonlocal any_outdated, any_ahead
-            if not version or version in _NON_VERSION_TAGS or not s.latest_version:
-                return
-            if version_is_newer(version, s.latest_version):
+        if installed and installed not in _NON_VERSION_TAGS and s.latest_version:
+            if version_is_newer(installed, s.latest_version):
                 any_ahead = True
-            elif version != s.latest_version:
+            elif installed != s.latest_version:
                 any_outdated = True
 
-        laptop_cell = _cell(s.laptop_version) if "laptop" in s.info.targets else "[dim]n/a[/dim]"
-        pi_cell = _cell(s.pi_version) if "pi" in s.info.targets else "[dim]n/a[/dim]"
-
-        if "laptop" in s.info.targets:
-            _check(s.laptop_version)
-        if "pi" in s.info.targets:
-            _check(s.pi_version)
-
-        table.add_row(s.info.name, latest_display, laptop_cell, pi_cell)
-
     console.print(table)
+    return any_outdated, any_ahead
+
+
+def render_version_table(
+    console: Console,
+    statuses: list[PackageStatus],
+    show_laptop: bool = True,
+    show_pi: bool = True,
+) -> tuple[bool, bool]:
+    """Render the laptop table, then the Pi table, each preceded by a blank line.
+
+    Returns (any_outdated, any_ahead).
+    """
+    any_outdated = False
+    any_ahead = False
+    for target, title, enabled in (
+        ("laptop", "Laptop Versions", show_laptop),
+        ("pi", "Pi Versions", show_pi),
+    ):
+        if not enabled:
+            continue
+        console.print()
+        outdated, ahead = _render_target_table(console, statuses, target, title)
+        any_outdated |= outdated
+        any_ahead |= ahead
     return any_outdated, any_ahead
