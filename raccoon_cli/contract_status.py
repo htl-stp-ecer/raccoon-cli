@@ -23,6 +23,8 @@ except ImportError:  # pragma: no cover - exercised through available()
     _check = None
 
 SERVER_COMPONENT = "raccoon-server"
+# The server is released as part of raccoon-cli, so that is its entry in the bundle.
+SERVER_BUNDLE_KEY = "raccoon-cli"
 
 
 def available() -> bool:
@@ -52,7 +54,9 @@ def record_server_start(version: str):
     if _check is None:
         return None
     try:
-        return _check.startup_check(SERVER_COMPONENT, version, persistent=True, enforce=False)
+        return _check.startup_check(
+            SERVER_COMPONENT, version, persistent=True, enforce=False, bundle_key=SERVER_BUNDLE_KEY
+        )
     except Exception as exc:  # a broken check must not take the server down
         print(f"Transport contract check failed to run: {exc}")
         return None
@@ -79,6 +83,7 @@ _RESULT_STYLE = {
     "skipped": "dim",
     "dev-warnung": "yellow",
     "mismatch": "red",
+    "version-mismatch": "red",
     "bundle-fehler": "red",
 }
 

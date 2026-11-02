@@ -28,10 +28,11 @@ def device(tmp_path, monkeypatch):
     class Device:
         bundle = tmp_path / "bundle.json"
 
-        def write_bundle(self, contract_hash=HASH):
+        def write_bundle(self, contract_hash=HASH, **versions):
+            components = {"raccoon-transport": "v69", "stm32-data-reader": "v1", "a": "v1", "b": "v1",
+                          "raccoon-cli": "173", **versions}
             self.bundle.write_text(
-                json.dumps({"bundle": "2026.11.02", "contract_hash": contract_hash,
-                            "components": {"raccoon-transport": "v69"}})
+                json.dumps({"bundle": "2026.11.02", "contract_hash": contract_hash, "components": components})
             )
 
         def report(self, component, own_hash, persistent=True):
@@ -87,17 +88,38 @@ def test_not_a_device_is_not_blocked(tmp_path, monkeypatch):
     assert "not running on a Raccoon device" in console.export_text()
 
 
-def test_server_records_its_own_check(device):
+def test_server_records_its_own_check_under_the_cli_entry(device):
     device.write_bundle()
     contract_status.record_server_start("173")
     names = [c["component"] for c in contract_status.local_summary()["components"]]
     assert "raccoon-server" in names
+    assert contract_status.local_summary()["ok"]
+
+
+def test_server_version_is_compared_with_the_raccoon_cli_entry(device):
+    device.write_bundle(**{"raccoon-cli": "v174"})
+    contract_status.record_server_start("173")
+    entry = [c for c in contract_status.local_summary()["components"] if c["component"] == "raccoon-server"][0]
+    assert entry["result"] == "version-mismatch"
+    message = contract_status.refusal_message(contract_status.local_summary())
+    assert message and "raccoon-server" in message
+
+
+def test_component_with_dev_entry_is_not_compared(device):
+    device.write_bundle(**{"stm32-data-reader": "dev"})
+    device.report("stm32-data-reader", HASH)
+    summary = contract_status.local_summary()
+    assert summary["ok"]
+    entry = [c for c in summary["components"] if c["component"] == "stm32-data-reader"][0]
+    assert entry["result"] == "dev-warnung" and entry["reason"] == "version-omitted"
 
 
 def test_endpoint_returns_the_summary(device):
+    from raccoon_cli import __version__
     from raccoon_cli.server.app import create_app
 
-    device.write_bundle()
+    # create_app() starts the server's own check, which compares the real version.
+    device.write_bundle(**{"raccoon-cli": __version__})
     device.report("stm32-data-reader", HASH)
     with TestClient(create_app()) as client:
         body = client.get("/api/v1/contract").json()
