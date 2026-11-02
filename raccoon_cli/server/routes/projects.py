@@ -48,17 +48,6 @@ class ProjectListResponse(BaseModel):
     count: int
 
 
-class CreateProjectRequest(BaseModel):
-    """Create-project request payload."""
-
-    name: str = Field(
-        ...,
-        min_length=1,
-        max_length=100,
-        pattern=r"^[a-zA-Z0-9_\-\s]+$",
-    )
-
-
 def _serialize_project(project: dict) -> ProjectInfo:
     return ProjectInfo(
         id=project["id"],
@@ -89,31 +78,6 @@ async def list_projects():
         projects=[_serialize_project(project) for project in projects],
         count=len(projects),
     )
-
-
-@router.post("", response_model=ProjectInfo, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_auth)])
-async def create_project(request: CreateProjectRequest):
-    """
-    Create a new project on the Pi.
-
-    Uses `raccoon create project` in non-interactive mode.
-    """
-    from raccoon_cli.server.app import get_config
-    from raccoon_cli.server.services.project_manager import ProjectManager
-
-    config = get_config()
-    manager = ProjectManager(config.projects_dir)
-
-    try:
-        project = manager.create_project(request.name)
-    except FileExistsError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-
-    return _serialize_project(project)
 
 
 @router.get("/{project_id}", response_model=ProjectInfo)

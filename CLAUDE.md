@@ -19,7 +19,6 @@ raccoon --help                      # View CLI help
 ### CLI Usage (after installation)
 ```bash
 raccoon missions list               # List / create / rename / remove / reorder missions
-raccoon wizard                      # Interactive hardware configuration
 raccoon codegen                     # Generate hardware code from YAML
 raccoon calibrate ticks             # Measure encoder ticks per revolution
 raccoon calibrate autotune          # Run motor autotune
@@ -48,7 +47,6 @@ raccoon/
 ├── project.py             # Project discovery & validation
 ├── commands/              # CLI command implementations
 │   ├── create.py          # Project/mission creation
-│   ├── wizard.py          # Interactive hardware config
 │   ├── codegen.py         # Code generation orchestration
 │   ├── run.py             # Execute projects
 │   └── calibrate/         # Motor calibration suite
