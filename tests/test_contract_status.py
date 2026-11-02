@@ -17,6 +17,16 @@ pytestmark = pytest.mark.skipif(
 HASH = "93ac36836810c9fe"
 
 
+def _dev_check():
+    from raccoon_transport.contract_check import ComponentCheck
+
+    return ComponentCheck(name="version", result="dev-warnung", reason="version-omitted",
+                          message="component version check omitted", expected="dev")
+
+
+DEV_CHECK = _dev_check() if contract_status.available() else None
+
+
 @pytest.fixture
 def device(tmp_path, monkeypatch):
     """A fake Raccoon device: marker dir, bundle file and status dir under tmp_path."""
@@ -35,10 +45,10 @@ def device(tmp_path, monkeypatch):
                 json.dumps({"bundle": "2026.11.02", "contract_hash": contract_hash, "components": components})
             )
 
-        def report(self, component, own_hash, persistent=True):
+        def report(self, component, own_hash, persistent=True, component_check=None):
             from raccoon_transport import contract_check as cc
 
-            result = cc.check(component, "v1", own_hash=own_hash, own_version="v69")
+            result = cc.check(component, "v1", own_hash=own_hash, own_version="v69", component_check=component_check)
             cc.write_status(result, persistent=persistent)
 
     return Device()
@@ -106,8 +116,8 @@ def test_server_version_is_compared_with_the_raccoon_cli_entry(device):
 
 
 def test_dev_components_are_announced_for_doctor_connect_and_run(device):
-    device.write_bundle(**{"stm32-data-reader": "dev"})
-    device.report("stm32-data-reader", HASH)
+    device.write_bundle()
+    device.report("stm32-data-reader", HASH, component_check=DEV_CHECK)
     summary = contract_status.local_summary()
     assert summary["dev_components"] == ["stm32-data-reader"]
     assert contract_status.dev_mode_line(summary) is None  # the contract itself is not in dev mode
@@ -125,8 +135,8 @@ def test_no_warning_lines_when_nothing_is_dev(device):
 
 
 def test_component_with_dev_entry_is_not_compared(device):
-    device.write_bundle(**{"stm32-data-reader": "dev"})
-    device.report("stm32-data-reader", HASH)
+    device.write_bundle()
+    device.report("stm32-data-reader", HASH, component_check=DEV_CHECK)
     summary = contract_status.local_summary()
     assert summary["ok"]
     entry = [c for c in summary["components"] if c["component"] == "stm32-data-reader"][0]
@@ -188,3 +198,43 @@ def test_server_error_text_prefers_the_server_detail():
 
     assert _server_error_text(Error("409 Conflict")) == "Transport contract check failed; refusing to start."
     assert _server_error_text(ValueError("plain")) == "plain"
+
+
+# -- the server's own version check (raccoon-transport contract/COMPONENT_VERSION_CHECK.md) --
+
+CASES = [
+    ('"v58"', "ok", None), ('"58"', "ok", None), ('" v58 "', "ok", None), ('"V58"', "ok", None),
+    ('"v59"', "version-mismatch", None), ('"v058"', "version-mismatch", None),
+    ('"dev"', "dev-warnung", "version-omitted"),
+    ('""', "bundle-fehler", "version-field-empty"), ('"  "', "bundle-fehler", "version-field-empty"),
+    ("58", "bundle-fehler", "version-field-missing"),
+]
+
+
+@pytest.mark.parametrize("entry,result,reason", CASES)
+def test_server_version_check_cases(tmp_path, entry, result, reason):
+    bundle = tmp_path / "b.json"
+    bundle.write_text('{"bundle":"b","components":{"raccoon-cli":%s}}' % entry)
+    check = contract_status.version_check("v58", str(bundle))
+    assert (check.result, check.reason) == (result, reason)
+
+
+def test_server_version_check_missing_entry_and_components(tmp_path):
+    bundle = tmp_path / "b.json"
+    for text in ('{"components":{"botui":"v1"}}', '{"contract_hash":"x"}'):
+        bundle.write_text(text)
+        check = contract_status.version_check("58", str(bundle))
+        assert (check.result, check.reason) == ("bundle-fehler", "version-field-missing")
+        assert "no version for raccoon-cli" in check.message
+
+
+def test_server_version_check_message(tmp_path):
+    bundle = tmp_path / "b.json"
+    bundle.write_text('{"bundle":"2026.11.02","components":{"raccoon-cli":"v59"}}')
+    assert contract_status.version_check("v58", str(bundle)).message == (
+        "component version mismatch: raccoon-server is v58 but bundle 2026.11.02 expects v59; "
+        "update or reflash so all components match")
+
+
+def test_server_version_check_without_a_readable_bundle(tmp_path):
+    assert contract_status.version_check("58", str(tmp_path / "missing.json")) is None

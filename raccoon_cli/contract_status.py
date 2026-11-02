@@ -15,6 +15,9 @@ check is reported as unavailable and never blocks.
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
 from typing import Any, Optional
 
 try:  # transport releases before the contract check do not have it
@@ -45,6 +48,57 @@ def unavailable_summary() -> dict[str, Any]:
     }
 
 
+def _normalize_version(value: str) -> str:
+    """`v173` and `173` are the same version; nothing else is normalised."""
+    value = value.strip()
+    return value[1:] if value[:1] in ("v", "V") else value
+
+
+def version_check(version: str, bundle_file: Optional[str] = None):
+    """The server's own version against the ``raccoon-cli`` entry of the bundle file.
+
+    This is the server's own component check (specified in raccoon-transport,
+    ``contract/COMPONENT_VERSION_CHECK.md``); the transport only merges its result.
+    Returns None when the bundle file cannot be read (the transport check reports that).
+    """
+    if _check is None:
+        return None
+    path = bundle_file or os.environ.get("RACCOON_BUNDLE_FILE") or "/etc/raccoon-bundle.json"
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    components = document.get("components")
+    entry = components.get(SERVER_BUNDLE_KEY) if isinstance(components, dict) else None
+    bundle = document.get("bundle") if isinstance(document.get("bundle"), str) else None
+
+    def result(outcome, message, reason=None, expected=None):
+        return _check.ComponentCheck(name="version", result=outcome, message=message, reason=reason, expected=expected)
+
+    if not isinstance(entry, str):
+        return result("bundle-fehler", f"bundle check failed: bundle file has no version for {SERVER_BUNDLE_KEY}: {path}",
+                      "version-field-missing")
+    expected = entry.strip()
+    if not expected:
+        return result("bundle-fehler", f"bundle check failed: bundle file has an empty version for {SERVER_BUNDLE_KEY}: {path}",
+                      "version-field-empty")
+    if expected == "dev":
+        return result(
+            "dev-warnung",
+            f"component version check omitted ('{SERVER_BUNDLE_KEY}' is 'dev' in the bundle): "
+            f"{SERVER_COMPONENT} {version or 'unknown'} is not compared; mismatches are not enforced",
+            "version-omitted", expected)
+    if _normalize_version(expected) != _normalize_version(version):
+        return result(
+            "version-mismatch",
+            f"component version mismatch: {SERVER_COMPONENT} is {version or 'unknown'} but bundle "
+            f"{bundle or 'unknown'} expects {expected}; update or reflash so all components match",
+            None, expected)
+    return result("ok", f"version ok: {version}", None, expected)
+
+
 def record_server_start(version: str):
     """Run and record the server's own startup check. Never raises, never stops the server.
 
@@ -55,7 +109,7 @@ def record_server_start(version: str):
         return None
     try:
         return _check.startup_check(
-            SERVER_COMPONENT, version, persistent=True, enforce=False, bundle_key=SERVER_BUNDLE_KEY
+            SERVER_COMPONENT, version, persistent=True, enforce=False, component_check=version_check(version)
         )
     except Exception as exc:  # a broken check must not take the server down
         print(f"Transport contract check failed to run: {exc}")
