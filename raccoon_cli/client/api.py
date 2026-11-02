@@ -104,6 +104,13 @@ class RaccoonApiClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_contract(self) -> dict:
+        """Transport contract status of the Pi (raises for a server without the endpoint)."""
+        client = self._get_client()
+        response = await client.get(f"{self.base_url}/api/v1/contract")
+        response.raise_for_status()
+        return response.json()
+
     async def list_projects(self) -> list[ProjectInfo]:
         """List all projects on the Pi."""
         client = self._get_client()

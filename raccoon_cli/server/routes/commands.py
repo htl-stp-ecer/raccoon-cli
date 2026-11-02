@@ -191,12 +191,22 @@ async def _start_command(
     observe it and take the cancel-or-reject path instead of spawning
     another subprocess.
     """
+    from raccoon_cli import contract_status
     from raccoon_cli.server.app import get_config
     from raccoon_cli.server.services.project_manager import ProjectManager
     from raccoon_cli.server.services.executor import CommandExecutor
 
     config = get_config()
     manager = ProjectManager(config.projects_dir)
+
+    # A run talks to the hardware over the transport. If a component was built
+    # against another transport (or the bundle file is broken), messages would be
+    # dropped silently, so refuse before anything is deployed or started.
+    refusal = await asyncio.to_thread(
+        lambda: contract_status.refusal_message(contract_status.local_summary())
+    )
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
 
     async with _command_lock:
         project = manager.get_project(project_id)

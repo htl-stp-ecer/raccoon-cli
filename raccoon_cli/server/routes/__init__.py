@@ -9,6 +9,7 @@ from raccoon_cli.server.routes.network import router as network_router
 from raccoon_cli.server.routes.steps import router as steps_router
 from raccoon_cli.server.routes.logs import router as logs_router
 from raccoon_cli.server.routes.version import router as version_router
+from raccoon_cli.server.routes.contract import router as contract_router
 from raccoon_cli.server.routes.arm import router as arm_router
 from raccoon_cli.server.routes.servo import router as servo_router
 from raccoon_cli.server.routes.calibrate_servos import router as calibrate_servos_router
@@ -23,6 +24,7 @@ __all__ = [
     "steps_router",
     "logs_router",
     "version_router",
+    "contract_router",
     "arm_router",
     "servo_router",
     "calibrate_servos_router",

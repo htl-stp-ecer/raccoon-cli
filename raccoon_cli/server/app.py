@@ -11,6 +11,7 @@ from raccoon_cli.server.routes import (
     arm_router,
     calibrate_servos_router,
     commands_router,
+    contract_router,
     device_router,
     hardware_router,
     health_router,
@@ -49,6 +50,12 @@ async def lifespan(app: FastAPI):
     print(f"Raccoon Server v{config.version} starting...")
     print(f"Projects directory: {config.projects_dir}")
     print(f"Listening on http://{config.host}:{config.port}")
+    # Record this server's transport contract check. The server stays up on a
+    # mismatch (it reports it) and refuses runs instead.
+    from raccoon_cli import contract_status
+
+    contract_status.record_server_start(config.version)
+
     try:
         NetworkManager().restore_persisted_network_mode()
     except Exception as exc:
@@ -101,6 +108,7 @@ def create_app(config: Optional[ServerConfig] = None) -> FastAPI:
     app.include_router(steps_router)
     app.include_router(logs_router)
     app.include_router(version_router)
+    app.include_router(contract_router)
     app.include_router(arm_router)
     app.include_router(servo_router)
     app.include_router(calibrate_servos_router)

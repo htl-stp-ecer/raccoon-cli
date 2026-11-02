@@ -288,6 +288,23 @@ def _show_package_versions(console: Console, manager) -> None:
         console.print("[blue]Some packages are ahead of the bundle.[/blue]")
 
 
+def _show_contract(console: Console, manager) -> bool:
+    """Transport contract of the connected Pi (what the server reports). True when fine."""
+    from raccoon_cli import contract_status
+
+    if not manager.is_connected or not manager.state.pi_address:
+        return True
+    summary = contract_status.fetch_remote_summary(
+        manager.state.pi_address, manager.state.pi_port, manager.state.api_token
+    )
+    if summary is None:
+        console.print()
+        console.print("[bold]Transport contract[/bold]")
+        console.print("[dim]The Pi server did not answer (an older raccoon-server has no contract endpoint).[/dim]")
+        return True
+    return contract_status.render_summary(console, summary)
+
+
 # ---------------------------------------------------------------------------
 # Command
 # ---------------------------------------------------------------------------
@@ -310,10 +327,15 @@ def doctor_command(ctx: click.Context) -> None:
 
     _show_package_versions(console, manager)
 
+    contract_ok = _show_contract(console, manager)
+
     console.print()
     console.print("[bold]External tools[/bold]")
     all_ok = stream_tool_checks(console)
     console.print()
+
+    if not contract_ok:
+        raise SystemExit(1)
 
     if not all_ok:
         console.print("[red]✗ One or more required tools are missing.[/red]")
