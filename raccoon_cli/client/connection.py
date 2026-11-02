@@ -149,12 +149,18 @@ class ConnectionManager:
         """Get the API token for the current connection."""
         return self._state.api_token
 
-    def _fetch_api_token_via_ssh(self, address: str, user: str) -> Optional[str]:
+    def _fetch_api_token_via_ssh(
+        self, address: str, user: str, keep_open: bool = False
+    ) -> Optional[str]:
         """
         Fetch the API token from the Pi via SSH.
 
         The token is stored at ~/.raccoon/api_token on the Pi.
         This requires SSH access (key-based auth recommended).
+
+        If ``keep_open`` is True, the authenticated SSH client is stored as the
+        manager's shared client (reused by ``get_ssh_client``) instead of being
+        closed, so a connect needs only one SSH login.
 
         Raises:
             ParamikoVersionError: If paramiko version is too old
@@ -168,23 +174,27 @@ class ConnectionManager:
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.connect(hostname=address, username=user)
-
-            # Read the token file
-            stdin, stdout, stderr = client.exec_command(f"cat ~/{self.TOKEN_FILE_PATH}")
-            token = stdout.read().decode().strip()
-            error = stderr.read().decode().strip()
-
-            client.close()
-
-            if token:
-                return token
-
-            return None
-
         except ParamikoVersionError:
             raise  # Let version errors propagate
         except Exception:
             return None
+
+        try:
+            # Read the token file
+            stdin, stdout, stderr = client.exec_command(f"cat ~/{self.TOKEN_FILE_PATH}")
+            token = stdout.read().decode().strip()
+        except Exception:
+            client.close()
+            return None
+
+        if keep_open:
+            if self._ssh_client is not None:
+                self._ssh_client.close()
+            self._ssh_client = client
+        else:
+            client.close()
+
+        return token or None
 
     async def connect(
         self,
@@ -234,7 +244,7 @@ class ConnectionManager:
             _warn_version_mismatch(CLIENT_VERSION, server_version)
 
         # Fetch API token via SSH
-        api_token = self._fetch_api_token_via_ssh(address, user)
+        api_token = self._fetch_api_token_via_ssh(address, user, keep_open=True)
         if not api_token:
             # Try to load from saved config as fallback
             known_pis = self.load_known_pis()
