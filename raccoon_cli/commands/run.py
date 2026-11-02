@@ -1144,8 +1144,7 @@ async def _run_remote(
             try:
                 from raccoon_cli import contract_status
 
-                contract_line = contract_status.dev_mode_line(await client.get_contract())
-                if contract_line:
+                for contract_line in contract_status.dev_warnings(await client.get_contract()):
                     console.print(f"[bold yellow]{contract_line}[/bold yellow]")
             except Exception:
                 pass  # an older Pi has no contract endpoint; the run itself still decides

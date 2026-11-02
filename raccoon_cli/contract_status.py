@@ -97,6 +97,19 @@ def dev_mode_line(summary: dict[str, Any]) -> Optional[str]:
     return line
 
 
+def dev_components_line(summary: dict[str, Any]) -> Optional[str]:
+    """Which components skip their version check because the bundle says `dev` for them."""
+    names = summary.get("dev_components") or []
+    if not names:
+        return None
+    return f"Version check omitted for {', '.join(names)}: the bundle marks them as 'dev'."
+
+
+def dev_warnings(summary: dict[str, Any]) -> list[str]:
+    """Every dev-mode warning line for `connect` and `run` (contract dev mode and dev components)."""
+    return [line for line in (dev_mode_line(summary), dev_components_line(summary)) if line]
+
+
 def render_summary(console, summary: dict[str, Any]) -> bool:
     """Print the contract table for ``raccoon doctor``. Returns True when everything is fine."""
     from rich.table import Table
@@ -116,8 +129,7 @@ def render_summary(console, summary: dict[str, Any]) -> bool:
         expected = summary.get("expected_hash")
         version = bundle.get("transport_version") or "unknown"
         console.print(f"Bundle {bundle.get('name') or 'unknown'} expects {expected} (transport {version})")
-    line = dev_mode_line(summary)
-    if line:
+    for line in dev_warnings(summary):
         console.print(f"[bold yellow]{line}[/bold yellow]")
 
     components = summary.get("components") or []

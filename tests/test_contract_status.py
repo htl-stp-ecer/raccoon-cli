@@ -105,6 +105,25 @@ def test_server_version_is_compared_with_the_raccoon_cli_entry(device):
     assert message and "raccoon-server" in message
 
 
+def test_dev_components_are_announced_for_doctor_connect_and_run(device):
+    device.write_bundle(**{"stm32-data-reader": "dev"})
+    device.report("stm32-data-reader", HASH)
+    summary = contract_status.local_summary()
+    assert summary["dev_components"] == ["stm32-data-reader"]
+    assert contract_status.dev_mode_line(summary) is None  # the contract itself is not in dev mode
+    lines = contract_status.dev_warnings(summary)
+    assert len(lines) == 1 and "stm32-data-reader" in lines[0]
+    console = Console(record=True, width=120)
+    contract_status.render_summary(console, summary)
+    assert "Version check omitted for stm32-data-reader" in console.export_text()
+
+
+def test_no_warning_lines_when_nothing_is_dev(device):
+    device.write_bundle()
+    device.report("stm32-data-reader", HASH)
+    assert contract_status.dev_warnings(contract_status.local_summary()) == []
+
+
 def test_component_with_dev_entry_is_not_compared(device):
     device.write_bundle(**{"stm32-data-reader": "dev"})
     device.report("stm32-data-reader", HASH)

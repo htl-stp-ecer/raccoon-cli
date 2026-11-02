@@ -147,6 +147,5 @@ def _warn_about_contract(console: Console, state) -> None:
             f"[red]  Transport contract: {', '.join(summary.get('blocking') or ['?'])} do not match the bundle. "
             "Runs will be refused; see `raccoon doctor`.[/red]"
         )
-    line = contract_status.dev_mode_line(summary)
-    if line:
+    for line in contract_status.dev_warnings(summary):
         console.print(f"[yellow]  {line}[/yellow]")
