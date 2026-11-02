@@ -182,13 +182,36 @@ jobs:
             dist/raccoon_cli-*.whl
             raccoon-server-v${{ needs.version.outputs.number }}.tar.gz
 
+      # raccoon-image keeps its dev manifest (bundles/dev.json) up to date from this.
+      # The pins in raccoon-example no longer follow single releases: only Create
+      # Bundle in raccoon-image moves them.
+      - name: Create an app token for raccoon-image
+        id: image-token
+        # The release is already published at this point; never fail the job (and with it
+        # the PyPI upload that needs it) because the bundle could not be notified.
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          owner: htl-stp-ecer
+          repositories: raccoon-image
+          permission-contents: write
+
       - name: Trigger raccoon-image bundle
+        env:
+          TOKEN: ${{ steps.image-token.outputs.token }}
         run: |
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::no app token; raccoon-image was not notified"
+            exit 0
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/htl-stp-ecer/raccoon-image/dispatches \
-            -d '{"event_type":"component-released","client_payload":{"component":"raccoon-cli","version":"${{ needs.version.outputs.number }}"}}'
+            -d '{"event_type":"component-released","client_payload":{"component":"raccoon-cli","version":"${{ needs.version.outputs.number }}"}}' \
+            || echo "::warning::could not notify raccoon-image"
 
       # --- Upload wheel as artifact for the publish job ---
       - name: Upload raccoon-cli wheel
@@ -215,36 +238,3 @@ jobs:
         with:
           packages-dir: dist/
 
-  # Tell raccoon-example that a new CLI is on PyPI, so it can open a pull request
-  # that moves the raccoon-cli pin of its template branches. Runs after the PyPI
-  # upload; a failure here only warns because the release is already published.
-  notify-example:
-    needs: [publish-pypi, version]
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Create an app token for raccoon-example
-        id: app-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ vars.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
-          owner: htl-stp-ecer
-          repositories: raccoon-example
-          permission-contents: write
-
-      - name: Dispatch cli-released
-        env:
-          TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::warning::no app token; raccoon-example was not notified"
-            exit 0
-          fi
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/htl-stp-ecer/raccoon-example/dispatches \
-            -d '{"event_type":"cli-released","client_payload":{"version":"${{ needs.version.outputs.number }}"}}' \
-            || echo "::warning::could not notify raccoon-example"
