@@ -71,13 +71,16 @@ def scaffold_project(name: str, target_dir: Path) -> Tuple[str, GitInitResult]:
     return project_uuid, git_result
 
 
-def create_mission(project_root: Path, mission_name: str) -> str:
+def create_mission(project_root: Path, mission_name: str, number: int | None = None) -> str:
     """Create a mission file and register it in the project config.
 
     Strips any M-prefix and 'Mission' suffix from *mission_name* automatically.
+    The mission gets the explicit *number* if given (e.g. ``30`` -> ``M030``),
+    otherwise the next free one (highest + 10).
     Returns the generated ``mission_class`` name (e.g. ``M010DriveForwardMission``).
 
     Raises:
+        ValueError: if *number* is reserved (setup/shutdown) or already used.
         FileExistsError: if the mission file already exists.
         FileNotFoundError: if the mission template is missing.
     """
@@ -100,7 +103,19 @@ def create_mission(project_root: Path, mission_name: str) -> str:
         project_name = "Raccoon Project"
         existing_missions = []
 
-    mission_num = get_next_mission_number(existing_missions)
+    if number is None:
+        mission_num = get_next_mission_number(existing_missions)
+    else:
+        mission_num = number
+        if mission_num in _RESERVED_MISSION_NUMBERS:
+            raise ValueError(
+                f"M{mission_num:03d} is reserved for the setup/shutdown mission; pick another number."
+            )
+        for entry in existing_missions:
+            existing = list(entry.keys())[0] if isinstance(entry, dict) else str(entry)
+            m_existing = _MISSION_NUMBER_RE.match(existing)
+            if m_existing and int(m_existing.group(1)) == mission_num:
+                raise ValueError(f"M{mission_num:03d} is already used by '{existing}'.")
     mission_prefix = f"M{mission_num:03d}"
 
     nn = normalize_name(mission_name, strip_suffix="")

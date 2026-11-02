@@ -186,14 +186,28 @@ def missions_group() -> None:
 @click.argument("name")
 @click.pass_context
 def create_command(ctx: click.Context, name: str) -> None:
-    """Create a new mission NAME in the current project."""
+    """Create a new mission in the current project.
+
+    NAME must start with the mission number, e.g. M030Wave
+    (creates M030WaveMission). M000 and M999 are reserved for setup/shutdown.
+    """
     console: Console = ctx.obj["console"]
     project_root = _project_root()
 
+    number = mission_ops.mission_number(name.strip())
+    base = mission_ops.strip_number_prefix(name.strip()).lstrip("_- ")
+    if number is None or not base:
+        raise _fail(
+            MissionError(
+                f"Mission name must start with its number and have a name, "
+                f"e.g. 'M030Wave' (got '{name}')."
+            )
+        )
+
     console.print(f"[cyan]Creating mission '{name}'...[/cyan]")
     try:
-        mission_class = create_mission(project_root, name)
-    except (FileExistsError, FileNotFoundError) as exc:
+        mission_class = create_mission(project_root, base, number=number)
+    except (ValueError, FileExistsError, FileNotFoundError) as exc:
         raise _fail(exc) from exc
 
     console.print(f"[green]\u2713 Mission '{mission_class}' created successfully[/green]")
@@ -205,7 +219,10 @@ def create_command(ctx: click.Context, name: str) -> None:
 @click.option("--keep-file", is_flag=True, help="Only remove it from the config, keep the mission file.")
 @click.pass_context
 def remove_command(ctx: click.Context, name: str, keep_file: bool) -> None:
-    """Remove the mission NAME from the current project."""
+    """Remove a mission from the current project.
+
+    NAME is the mission name or just its number (e.g. Drive, M010Drive or M010).
+    """
     console: Console = ctx.obj["console"]
     project_root = _project_root()
 
@@ -264,7 +281,10 @@ def list_command(ctx: click.Context) -> None:
 @click.argument("new_name")
 @click.pass_context
 def rename_command(ctx: click.Context, name: str, new_name: str) -> None:
-    """Rename the mission NAME to NEW_NAME (the M-number is kept)."""
+    """Rename a mission to NEW_NAME (the M-number is kept).
+
+    NAME is the mission name or just its number (e.g. Drive, M010Drive or M010).
+    """
     console: Console = ctx.obj["console"]
     project_root = _project_root()
 

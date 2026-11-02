@@ -28,6 +28,7 @@ from raccoon_cli.naming import mission_module_name, normalize_name
 from raccoon_cli.project import load_project_config, save_project_keys
 
 _NUMBER_PREFIX_RE = re.compile(r"^[Mm](\d+)")
+_NUMBER_ONLY_RE = re.compile(r"[Mm](\d+)")
 
 SETUP_NUMBER = 0
 SHUTDOWN_NUMBER = 999
@@ -82,6 +83,12 @@ def number_prefix(class_name: str) -> Optional[str]:
     return m.group(0) if m else None
 
 
+def mission_number(class_name: str) -> Optional[int]:
+    """Return the numeric value of the ``M010`` prefix (10), or ``None``."""
+    prefix = number_prefix(class_name)
+    return int(prefix[1:]) if prefix else None
+
+
 def strip_number_prefix(name: str) -> str:
     prefix = number_prefix(name)
     return name[len(prefix):] if prefix else name
@@ -116,27 +123,34 @@ def _name(entry: Any) -> str:
 def resolve_mission(missions: Sequence[Any], query: str, *, allow_prefix: bool = False) -> int:
     """Return the index of the mission matching *query*.
 
-    *query* may include or omit the ``Mission`` suffix and the ``M010`` number
-    prefix. With a number prefix it must match the full class name; without
-    one it matches the name part only (so ``Drive`` finds ``M010DriveMission``).
+    *query* may be just the number (``M010``), or a name that includes or
+    omits the ``Mission`` suffix and the ``M010`` prefix. With a number prefix
+    it must match the full class name; without one it matches the name part
+    only (so ``Drive`` finds ``M010DriveMission``).
     With ``allow_prefix`` a unique name prefix is accepted when there is no
     exact match (used by ``reorder``, never by destructive commands).
     """
     query = query.strip()
     if not query:
         raise MissionError("Mission name must not be empty.")
-    has_number = number_prefix(strip_mission_suffix(query)) is not None
 
-    def key(class_name: str) -> str:
-        k = _match_key(class_name)
-        return k if has_number else _match_key(strip_number_prefix(class_name))
+    only_number = _NUMBER_ONLY_RE.fullmatch(query)
+    if only_number:
+        wanted_number = int(only_number.group(1))
+        matches = [i for i, e in enumerate(missions) if mission_number(_name(e)) == wanted_number]
+    else:
+        has_number = number_prefix(strip_mission_suffix(query)) is not None
 
-    wanted = _match_key(query)
-    keys = [key(_name(e)) for e in missions]
+        def key(class_name: str) -> str:
+            k = _match_key(class_name)
+            return k if has_number else _match_key(strip_number_prefix(class_name))
 
-    matches = [i for i, k in enumerate(keys) if k == wanted]
-    if not matches and allow_prefix:
-        matches = [i for i, k in enumerate(keys) if k.startswith(wanted)]
+        wanted = _match_key(query)
+        keys = [key(_name(e)) for e in missions]
+
+        matches = [i for i, k in enumerate(keys) if k == wanted]
+        if not matches and allow_prefix:
+            matches = [i for i, k in enumerate(keys) if k.startswith(wanted)]
     if not matches:
         raise MissionError(f"No mission matching '{query}' found.")
     if len(matches) > 1:

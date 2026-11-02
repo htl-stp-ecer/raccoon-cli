@@ -165,8 +165,9 @@ def test_cli_group_and_old_commands(project):
 
 
 def test_cli_create_list_rename_remove_roundtrip(project):
-    assert _run("create", "Wave").exit_code == 0
+    assert _run("create", "M030Wave").exit_code == 0
     assert "M030WaveMission" in _names(project)
+    assert "m030_wave_mission.py" in _files(project)
 
     listing = _run("list")
     assert listing.exit_code == 0 and "M030WaveMission" in listing.output
@@ -182,3 +183,52 @@ def test_cli_reports_errors_without_traceback(project):
     result = CliRunner().invoke(main, ["--no-validate", "missions", "remove", "Nope"])
     assert result.exit_code == 1
     assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("query", ["M010", "m010", "m10", "M0010"])
+def test_resolve_by_number_only(query):
+    assert mission_ops.resolve_mission(MISSIONS, query) == 1
+    assert mission_ops.resolve_mission(MISSIONS, "M000") == 0  # setup too
+
+
+def test_resolve_by_number_unknown_or_duplicate():
+    with pytest.raises(MissionError, match="No mission"):
+        mission_ops.resolve_mission(MISSIONS, "M050")
+    with pytest.raises(MissionError, match="ambiguous"):
+        mission_ops.resolve_mission(["M010FooMission", "M010BarMission"], "M010")
+
+
+def test_remove_and_rename_by_number(project):
+    assert _run("rename", "M010", "Sprint").exit_code == 0
+    assert _names(project)[1] == "M010SprintMission"
+
+    assert _run("remove", "M020").exit_code == 0
+    assert "M020CollectMission" not in _names(project)
+    assert "m020_collect_mission.py" not in _files(project)
+
+
+@pytest.mark.parametrize("name", ["Wave", "M030", "M030_", "wave"])
+def test_cli_create_requires_prefix_and_name(project, name):
+    result = CliRunner().invoke(main, ["--no-validate", "missions", "create", name])
+    assert result.exit_code == 1
+    assert "must start with its number" in result.output
+    assert _names(project) == [mission_ops.mission_entry_name(e) for e in MISSIONS]
+
+
+@pytest.mark.parametrize("name, message", [("M010Other", "already used"), ("M999Late", "reserved"), ("M000Early", "reserved")])
+def test_cli_create_rejects_used_or_reserved_numbers(project, name, message):
+    result = CliRunner().invoke(main, ["--no-validate", "missions", "create", name])
+    assert result.exit_code == 1 and message in result.output
+    assert not any("Other" in n or "Late" in n or "Early" in n for n in _names(project))
+
+
+def test_cli_create_accepts_short_number_and_separator(project):
+    assert _run("create", "m5_quick_turn").exit_code == 0
+    assert "M005QuickTurnMission" in _names(project)
+    assert "m005_quick_turn_mission.py" in _files(project)
+
+
+def test_shared_create_mission_without_number_still_auto_numbers(project):
+    from raccoon_cli.project_creation import create_mission
+
+    assert create_mission(project, "Auto") == "M030AutoMission"
