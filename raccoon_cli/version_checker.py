@@ -64,7 +64,9 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         repo="htl-stp-ecer/raccoon-transport",
         pip_name="raccoon-transport",
         targets=["pi"],
-        pi_install="dependency",
+        # Installed exactly as in the bundle (together with raccoon-library, in one pip run),
+        # so the Pi never ends up on a newer transport than the bundle was checked against.
+        pi_install="pypi",
     ),
     PackageInfo(
         name="botui",

@@ -113,6 +113,12 @@ def update_command(
     manifest = fetch_bundle_manifest(resolved)
     if manifest:
         console.print(f"[dim]Bundle: {manifest.get('bundle', resolved)}[/dim]")
+        # Before anything is looked at or touched: a bundle without a transport version
+        # cannot be installed consistently. (The dev bundle is the deliberate exception.)
+        problem = missing_transport_problem(manifest, resolved)
+        if problem:
+            _error_badge(console, problem)
+            ctx.exit(1)
     else:
         console.print("[yellow]Could not fetch raccoon-image manifest — falling back to individual repo versions.[/yellow]")
 
@@ -122,6 +128,17 @@ def update_command(
     any_outdated, any_ahead = render_version_table(
         console, statuses, show_laptop=not pi_only, show_pi=not laptop_only
     )
+
+    # The fallback to individual repo versions must not skip the transport check either.
+    if manifest is None and resolved != "dev":
+        transport = transport_status(statuses)
+        if transport is None or not transport.latest_version:
+            _error_badge(
+                console,
+                "Could not determine the raccoon-transport version to install "
+                "(no bundle manifest and no GitHub release). Nothing was changed.",
+            )
+            ctx.exit(1)
 
     if check_only:
         console.print()
@@ -189,11 +206,49 @@ def update_command(
                 pi_updates,
                 force,
                 allow_missing_pypi_version_fallback,
+                transport=None if resolved == "dev" else transport_status(statuses),
             )
 
     # After any Pi update, run post-install migrations via the bundled command.
     if pi_updates and ssh_client is not None:
         _run_post_install(console, ssh_client)
+
+
+def missing_transport_problem(manifest: dict, resolved: str) -> Optional[str]:
+    """Message when a bundle has no raccoon-transport version, else None.
+
+    ``dev`` is exempt: it points at the newest components, has no transport field,
+    and runs without a transport check or pin (transport comes in as a dependency).
+    """
+    if resolved == "dev" or manifest.get("bundle") == "dev":
+        return None
+    components = manifest.get("components") or {}
+    if not str(components.get("raccoon-transport") or "").strip():
+        return (
+            f"Bundle {manifest.get('bundle', resolved)} has no raccoon-transport version. "
+            "Components of one bundle must share one transport, so nothing was changed. "
+            "Pick another bundle, or use [cyan]--dev[/cyan] for the unchecked newest components."
+        )
+    return None
+
+
+def transport_status(statuses: list[PackageStatus]) -> Optional[PackageStatus]:
+    for s in statuses:
+        if s.info.name == "raccoon-transport":
+            return s
+    return None
+
+
+def with_transport_pin(specs: list[str], transport: Optional[PackageStatus], resolve) -> list[str]:
+    """Add ``raccoon-transport==<bundle version>`` to a pip spec list unless already there."""
+    if transport is None or not transport.latest_version:
+        return specs
+    if any(spec.split("==")[0].split("[")[0] == "raccoon-transport" for spec in specs):
+        return specs
+    resolved, _note = resolve(transport)
+    if not resolved:
+        return specs
+    return [*specs, f"raccoon-transport=={resolved}"]
 
 
 def _get_ssh_client(console: Console):
@@ -408,6 +463,7 @@ def _update_pi(
     updates: list[PackageStatus],
     force: bool,
     allow_missing_pypi_version_fallback: bool,
+    transport: Optional[PackageStatus] = None,
 ) -> None:
     """Update Pi packages, each by the method declared in the registry.
 
@@ -431,6 +487,7 @@ def _update_pi(
             pypi_updates,
             force,
             allow_missing_pypi_version_fallback,
+            transport=transport,
         )
 
     for s in updates:
@@ -481,8 +538,14 @@ def _pi_install_from_pypi(
     updates: list[PackageStatus],
     force: bool,
     allow_missing_pypi_version_fallback: bool,
+    transport: Optional[PackageStatus] = None,
 ) -> None:
-    """Install PyPI packages on the Pi via ``pip3 install`` over SSH."""
+    """Install PyPI packages on the Pi via ``pip3 install`` over SSH.
+
+    The transport is always pinned exactly in the same pip run (``transport`` is None
+    only for the dev bundle, which has no transport and runs without a pin), so the
+    resolver cannot pull a newer transport than the bundle names.
+    """
     specs: list[str] = []
     for s in updates:
         if not (s.info.pip_name and s.latest_version):
@@ -502,6 +565,11 @@ def _pi_install_from_pypi(
             specs.append(f"{s.info.pip_name}{extras}=={resolved}")
     if not specs:
         return
+    specs = with_transport_pin(
+        specs, transport, resolve=lambda s: resolve_pypi_version(
+            s.info.pip_name, s.latest_version, allow_missing_fallback=allow_missing_pypi_version_fallback
+        )
+    )
 
     console.print("\n[cyan]Installing from PyPI on Pi...[/cyan]")
     for spec in specs:
