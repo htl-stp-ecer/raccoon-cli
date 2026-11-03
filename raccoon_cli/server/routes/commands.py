@@ -202,9 +202,7 @@ async def _start_command(
     # A run talks to the hardware over the transport. If a component was built
     # against another transport (or the bundle file is broken), messages would be
     # dropped silently, so refuse before anything is deployed or started.
-    refusal = await asyncio.to_thread(
-        lambda: contract_status.refusal_message(contract_status.local_summary())
-    )
+    refusal = await asyncio.to_thread(contract_status.current_refusal)
     if refusal:
         raise HTTPException(status_code=409, detail=refusal)
 
