@@ -18,9 +18,9 @@ ROOT_DIR = Path(__file__).parent
 
 # --- Version: the CI build number alone ---
 # CI sets BUILD_NUMBER=${{ github.run_number }}; local builds are a dev
-# release that sorts below every real one.
+# build with version 0.0 that sorts below every real one.
 BUILD_NUMBER = os.environ.get("BUILD_NUMBER", "")
-_computed_version = BUILD_NUMBER if BUILD_NUMBER.isdigit() else "0.dev0"
+_computed_version = BUILD_NUMBER if BUILD_NUMBER.isdigit() else "0.0"
 
 _version_file = ROOT_DIR / "raccoon_cli" / "_version.py"
 _version_file.write_text(
