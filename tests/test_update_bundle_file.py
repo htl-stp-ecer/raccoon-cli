@@ -138,3 +138,29 @@ def test_mark_dev_with_nothing_installed_writes_nothing():
     ssh = FileSsh({"bundle": "x", "components": {}})
     assert upd._mark_components_dev(Console(), ssh, [], None) is False
     assert ssh.uploads == []
+
+
+def test_no_pi_connection_acts_like_laptop_only(monkeypatch):
+    from click.testing import CliRunner
+    from rich.console import Console as C
+
+    seen = {}
+    monkeypatch.setattr(upd, "find_project_root", lambda: "/project")
+    monkeypatch.setattr(upd, "_get_ssh_client", lambda console: None)
+    monkeypatch.setattr(upd, "get_connection_manager", lambda: MagicMock(state=MagicMock(pi_address="1.2.3.4", pi_port=8421, api_token="t")))
+    monkeypatch.setattr(upd, "fetch_bundle_manifest", lambda tag: MANIFEST)
+
+    def check(**kw):
+        seen["check"] = kw
+        return []
+
+    def table(console, statuses, show_laptop, show_pi):
+        seen["table"] = (show_laptop, show_pi)
+        return (False, False)
+
+    monkeypatch.setattr(upd, "check_all_versions", check)
+    monkeypatch.setattr(upd, "render_version_table", table)
+    result = CliRunner().invoke(upd.update_command, [], obj={"console": C()})
+    assert result.exit_code == 0, result.output
+    assert seen["table"] == (True, False)
+    assert seen["check"]["server_url"] is None and seen["check"]["api_token"] is None

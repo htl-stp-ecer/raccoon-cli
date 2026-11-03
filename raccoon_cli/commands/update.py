@@ -101,6 +101,14 @@ def update_command(
             server_url = f"http://{manager.state.pi_address}:{manager.state.pi_port}"
             api_token = manager.state.api_token
 
+    # No Pi to talk to: behave exactly like --laptop-only (no Pi column, no Pi
+    # updates, no Pi version lookups) instead of listing Pi packages as unknown.
+    if not laptop_only and not pi_only and ssh_client is None:
+        console.print("[yellow]Could not connect to the Pi — checking laptop packages only.[/yellow]")
+        laptop_only = True
+        server_url = None
+        api_token = None
+
     # Resolve which manifest to use
     if bundle_tag:
         resolved = bundle_tag
