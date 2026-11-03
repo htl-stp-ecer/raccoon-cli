@@ -469,12 +469,13 @@ def _update_laptop(
         console.print(
             "[yellow]raccoon is running from this project's environment, which Windows "
             "locks while running.[/yellow]\n"
-            f"pyproject.toml is updated — run [cyan]uv sync{' --reinstall' if force else ''}[/cyan] "
+            f"pyproject.toml is updated — run [cyan]uv sync --refresh{' --reinstall' if force else ''}[/cyan] "
             f"in {project_root} to finish."
         )
         return
 
-    cmd = [uv, "sync"] + (["--reinstall"] if force else [])
+    # --refresh: a just-released version may be missing from uv's cached index.
+    cmd = [uv, "sync", "--refresh"] + (["--reinstall"] if force else [])
     result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
     if result.returncode != 0:
         _error_badge(console, f"uv sync failed:\n{result.stderr.strip()}")
