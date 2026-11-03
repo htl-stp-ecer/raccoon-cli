@@ -22,7 +22,10 @@ def _setup(monkeypatch):
         c = MagicMock()
         stdout = MagicMock()
         stdout.read.return_value = b"tok123\n"
-        c.exec_command.return_value = (MagicMock(), stdout, MagicMock())
+        stdout.channel.recv_exit_status.return_value = 0
+        stderr = MagicMock()
+        stderr.read.return_value = b""
+        c.exec_command.return_value = (MagicMock(), stdout, stderr)
         clients.append(c)
         return c
 

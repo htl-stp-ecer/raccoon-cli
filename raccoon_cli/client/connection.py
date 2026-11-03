@@ -8,6 +8,7 @@ from typing import Optional
 import yaml
 
 from raccoon_cli import __version__ as CLIENT_VERSION
+from raccoon_cli.client.ssh_connect import API_TOKEN_FILE, read_api_token
 
 
 # Minimum required paramiko version for proper SSH protocol support
@@ -128,7 +129,7 @@ class ConnectionManager:
     """
 
     GLOBAL_CONFIG_PATH = Path.home() / ".raccoon" / "config.yml"
-    TOKEN_FILE_PATH = ".raccoon/api_token"  # Path on Pi
+    TOKEN_FILE_PATH = API_TOKEN_FILE  # Path on Pi
 
     def __init__(self):
         self._state = ConnectionState()
@@ -180,9 +181,7 @@ class ConnectionManager:
             return None
 
         try:
-            # Read the token file
-            stdin, stdout, stderr = client.exec_command(f"cat ~/{self.TOKEN_FILE_PATH}")
-            token = stdout.read().decode().strip()
+            token = read_api_token(client)
         except Exception:
             client.close()
             return None
@@ -194,7 +193,7 @@ class ConnectionManager:
         else:
             client.close()
 
-        return token or None
+        return token
 
     async def connect(
         self,
@@ -253,19 +252,44 @@ class ConnectionManager:
                     api_token = pi.get("api_token")
                     break
 
+        self.adopt_session(
+            address=address,
+            port=port,
+            user=user,
+            ssh_client=self._ssh_client,
+            api_token=api_token,
+            hostname=data.get("hostname"),
+            version=data.get("version"),
+        )
+
+        return True
+
+    def adopt_session(
+        self,
+        *,
+        address: str,
+        port: int,
+        user: str,
+        ssh_client,
+        api_token: Optional[str],
+        hostname: Optional[str] = None,
+        version: Optional[str] = None,
+    ) -> None:
+        """Record an already established, authenticated SSH session as the current connection."""
+        if self._ssh_client is not None and self._ssh_client is not ssh_client:
+            self._ssh_client.close()
+        self._ssh_client = ssh_client
         self._state = ConnectionState(
             connected=True,
             pi_address=address,
             pi_port=port,
             pi_user=user,
-            pi_hostname=data.get("hostname"),
-            pi_version=data.get("version"),
+            pi_hostname=hostname,
+            pi_version=version,
             api_token=api_token,
             connected_at=datetime.utcnow().isoformat(),
             discovery_method="manual",
         )
-
-        return True
 
     def connect_sync(
         self,

@@ -1,18 +1,26 @@
 """Connect command - establish connection to a Raccoon Pi."""
 
 import asyncio
-from typing import Optional
 
 import click
 from rich.console import Console
-from rich.prompt import Confirm
+from rich.prompt import Prompt
 
 from raccoon_cli.client.connection import (
-    get_connection_manager,
     ParamikoVersionError,
+    check_paramiko_version,
+    get_connection_manager,
     print_paramiko_version_error,
+    CLIENT_VERSION,
+    _warn_version_mismatch,
 )
 from raccoon_cli.client.discovery import check_address
+from raccoon_cli.client.ssh_connect import (
+    ApiTokenError,
+    SSHConnectError,
+    open_ssh_session,
+    read_api_token,
+)
 from raccoon_cli.project import find_project_root
 
 
@@ -33,7 +41,10 @@ def connect_command(
 ) -> None:
     """Connect to a Raccoon Pi server at ADDRESS.
 
-    ADDRESS is the IP address or hostname of the Pi.
+    ADDRESS is the IP address or hostname of the Pi. Logs in with your SSH
+    key; if the Pi does not accept it yet, asks for the password once and
+    installs the key (generating one if you have none). Then reads the
+    raccoon-server API key from the Pi.
 
     Examples:
         raccoon connect 192.168.4.1
@@ -42,49 +53,66 @@ def connect_command(
     """
     console: Console = ctx.obj.get("console", Console())
 
-    # Check if the Pi is reachable
-    console.print(f"[cyan]Checking connection to {address}:{port}...[/cyan]")
-    result = asyncio.run(check_address(address, port))
-
-    if not result:
-        console.print(f"[red]Failed to connect to {address}:{port}[/red]")
-        console.print("Make sure the Pi is running and raccoon-server is started.")
-        return
-
-    # Connect
-    manager = get_connection_manager()
     try:
-        success = asyncio.run(
-            manager.connect(address=address, port=port, user=user)
-        )
+        check_paramiko_version()
     except ParamikoVersionError as e:
         print_paramiko_version_error(e, console)
         raise SystemExit(1)
 
-    if not success:
-        console.print(f"[red]Failed to connect to {address}:{port}[/red]")
-        return
+    # 1. SSH: public key first, password + key deposit as fallback
+    console.print(f"[cyan]Connecting to {user}@{address}...[/cyan]")
+    try:
+        ssh = open_ssh_session(
+            address,
+            user,
+            ask_password=lambda: Prompt.ask(
+                f"Password for {user}@{address}", password=True, console=console
+            ),
+            log=lambda msg: console.print(f"[dim]{msg}[/dim]"),
+        )
+    except SSHConnectError as e:
+        console.print(f"[red]Failed to connect to {user}@{address}: {e}[/red]")
+        raise SystemExit(1)
+    console.print("[green]Connected![/green]")
 
+    # 2. API key; without it nothing that talks to raccoon-server works
+    console.print("[cyan]Retrieving API key...[/cyan]")
+    try:
+        token = read_api_token(ssh)
+    except ApiTokenError as e:
+        ssh.close()
+        console.print(f"[red]Failed to retrieve the API key from {address}: {e}[/red]")
+        console.print("[red]Aborting, connection not saved.[/red]")
+        raise SystemExit(1)
+    console.print("[green]API key retrieved.[/green]")
+
+    # 3. Server info (hostname, version). Informational, the SSH side is already done.
+    info = asyncio.run(check_address(address, port, retries=2))
+
+    manager = get_connection_manager()
+    manager.adopt_session(
+        address=address,
+        port=port,
+        user=user,
+        ssh_client=ssh,
+        api_token=token,
+        hostname=info.hostname if info else None,
+        version=info.version if info else None,
+    )
     state = manager.state
-    console.print(f"[green]Connected to {state.pi_hostname}[/green]")
+
+    console.print(f"  Host:    {state.pi_hostname or address}")
     console.print(f"  Address: {state.pi_address}:{state.pi_port}")
-    _warn_about_contract(console, state)
-    console.print(f"  Version: {state.pi_version or 'unknown'}")
-
-    # Check API token status
-    if state.api_token:
-        console.print(f"  Auth:    [green]API token retrieved via SSH[/green]")
+    if info:
+        if info.version != CLIENT_VERSION:
+            _warn_version_mismatch(CLIENT_VERSION, info.version)
+        _warn_about_contract(console, state)
+        console.print(f"  Version: {state.pi_version or 'unknown'}")
     else:
-        # SSH key auth failed - offer to set up keys
-        console.print(f"  Auth:    [yellow]SSH key authentication failed[/yellow]")
-        console.print()
-
-        if Confirm.ask("Set up SSH key authentication now?", default=True):
-            _setup_ssh_and_retry(console, manager, address, user)
-        else:
-            console.print()
-            console.print("[yellow]Warning: Without SSH key auth, remote commands will fail.[/yellow]")
-            console.print(f"Run [cyan]raccoon connect {address}[/cyan] again to set up SSH keys.")
+        console.print(
+            f"[yellow]  raccoon-server did not answer on port {port}; "
+            "start it on the Pi before using remote commands.[/yellow]"
+        )
 
     # Save connection
     if save:
@@ -97,27 +125,6 @@ def connect_command(
         if project_root:
             manager.save_to_project(project_root)
             console.print(f"  [dim]Saved to raccoon.project.yml[/dim]")
-
-
-def _setup_ssh_and_retry(console: Console, manager, address: str, user: str) -> None:
-    """Set up SSH key authentication and retry fetching the API token."""
-    from raccoon_cli.client.ssh_keys import setup_ssh_key_interactive
-
-    console.print()
-    key = setup_ssh_key_interactive(address, user, console)
-
-    if key:
-        # Retry fetching the API token
-        console.print()
-        console.print("[dim]Fetching API token...[/dim]")
-
-        token = manager._fetch_api_token_via_ssh(address, user)
-        if token:
-            manager._state.api_token = token
-            console.print(f"  Auth:    [green]API token retrieved via SSH[/green]")
-        else:
-            console.print("[yellow]SSH key works but couldn't fetch API token.[/yellow]")
-            console.print("[dim]The raccoon-server may not be fully configured on the Pi.[/dim]")
 
 
 @click.command(name="disconnect")

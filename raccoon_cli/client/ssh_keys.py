@@ -1,21 +1,25 @@
 """SSH key management for Raccoon client."""
 
-import getpass
 import os
+import shlex
 from pathlib import Path
 from typing import Optional, Tuple
 
 import paramiko
 
 
+class SSHKeyError(Exception):
+    """Raised when a key cannot be loaded, generated or installed on a target."""
+
+
 class SSHKeyManager:
     """
-    Manages SSH key generation and deployment for Raccoon.
+    Manages the local SSH key pair and installs its public half on a target.
 
     Handles:
-    - Checking for existing SSH keys
-    - Generating new key pairs (Ed25519)
-    - Uploading public keys to remote hosts
+    - Finding an existing key (Ed25519 preferred, RSA fallback)
+    - Generating a new Ed25519 key pair when none exists
+    - Appending the public key to a target's ``authorized_keys``
     """
 
     # Prefer Ed25519, fall back to RSA
@@ -27,35 +31,56 @@ class SSHKeyManager:
     def __init__(self):
         self.ssh_dir = Path.home() / ".ssh"
 
-    def get_default_key_path(self) -> Path:
-        """Get the default SSH key path (Ed25519)."""
-        return self.ssh_dir / "id_ed25519"
-
     def find_existing_key(self) -> Optional[Tuple[Path, paramiko.PKey]]:
         """
-        Find an existing SSH private key.
+        Find a usable SSH private key.
 
         Returns:
-            Tuple of (path, key) if found, None otherwise
+            Tuple of (path, key) for the first key that loads, None otherwise
         """
         for key_name, key_class in self.KEY_TYPES:
             key_path = self.ssh_dir / key_name
             if key_path.exists():
                 try:
-                    key = key_class.from_private_key_file(str(key_path))
-                    return key_path, key
+                    return key_path, key_class.from_private_key_file(str(key_path))
                 except Exception:
-                    # Key exists but couldn't be loaded (maybe passphrase protected)
-                    # Try loading with SSH agent
-                    pass
+                    # Exists but cannot be loaded (e.g. passphrase protected)
+                    continue
         return None
 
-    def has_ssh_key(self) -> bool:
-        """Check if any SSH key exists."""
-        for key_name, _ in self.KEY_TYPES:
-            if (self.ssh_dir / key_name).exists():
-                return True
-        return False
+    def unloadable_key_files(self) -> list[Path]:
+        """Key files present on disk. Used when none loads, so they are never overwritten."""
+        return [
+            self.ssh_dir / name
+            for name, _ in self.KEY_TYPES
+            if (self.ssh_dir / name).exists()
+        ]
+
+    def ensure_key(self) -> Tuple[Path, paramiko.PKey, bool]:
+        """
+        Return a usable key, generating one if no key file exists at all.
+
+        Returns:
+            Tuple of (path, key, generated)
+
+        Raises:
+            SSHKeyError: A key file exists but cannot be loaded. It is left
+                untouched; overwriting a user's key would lock them out elsewhere.
+        """
+        existing = self.find_existing_key()
+        if existing:
+            return (*existing, False)
+
+        blocked = self.unloadable_key_files()
+        if blocked:
+            names = ", ".join(str(p) for p in blocked)
+            raise SSHKeyError(
+                f"{names} exists but cannot be loaded (passphrase protected?). "
+                "Remove the passphrase or move the file, then try again."
+            )
+
+        path, key = self.generate_key()
+        return path, key, True
 
     def generate_key(self, key_path: Optional[Path] = None) -> Tuple[Path, paramiko.PKey]:
         """
@@ -97,158 +122,31 @@ class SSHKeyManager:
         """Get the public key in OpenSSH format."""
         return f"{key.get_name()} {key.get_base64()}"
 
-    def upload_public_key(
-        self,
-        host: str,
-        username: str,
-        key: paramiko.PKey,
-        password: str,
-    ) -> bool:
+    def deposit_public_key(self, client: paramiko.SSHClient, key: paramiko.PKey) -> None:
         """
-        Upload a public key to a remote host using password authentication.
+        Append the public key to ``~/.ssh/authorized_keys`` on the connected target.
+
+        Equivalent to ``ssh-copy-id``: creates the directory and file with the
+        right permissions and adds the key only if it is not already present.
 
         Args:
-            host: Remote hostname or IP
-            username: SSH username
-            key: The key pair (we'll upload the public key)
-            password: Password for authentication
+            client: An already authenticated SSH client (any method)
+            key: The key pair whose public half is installed
 
-        Returns:
-            True if successful
+        Raises:
+            SSHKeyError: The remote command failed
         """
-        pub_key = self.get_public_key_string(key)
-
-        try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(
-                hostname=host,
-                username=username,
-                password=password,
-                look_for_keys=False,
-                allow_agent=False,
-            )
-
-            # Create .ssh directory and add key to authorized_keys
-            commands = [
-                "mkdir -p ~/.ssh",
-                "chmod 700 ~/.ssh",
-                "touch ~/.ssh/authorized_keys",
-                "chmod 600 ~/.ssh/authorized_keys",
-                # Add key if not already present
-                f'grep -q "{key.get_base64()}" ~/.ssh/authorized_keys || echo "{pub_key} raccoon-client" >> ~/.ssh/authorized_keys',
-            ]
-
-            for cmd in commands:
-                stdin, stdout, stderr = client.exec_command(cmd)
-                stdout.read()  # Wait for completion
-
-            client.close()
-            return True
-
-        except paramiko.AuthenticationException:
-            return False
-        except Exception:
-            return False
-
-    def test_key_auth(self, host: str, username: str, key: paramiko.PKey) -> bool:
-        """
-        Test if key authentication works.
-
-        Args:
-            host: Remote hostname or IP
-            username: SSH username
-            key: The private key to test
-
-        Returns:
-            True if authentication succeeded
-        """
-        try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(
-                hostname=host,
-                username=username,
-                pkey=key,
-                look_for_keys=False,
-                allow_agent=False,
-            )
-            client.close()
-            return True
-        except paramiko.AuthenticationException:
-            return False
-        except Exception:
-            return False
-
-
-def setup_ssh_key_interactive(
-    host: str,
-    username: str,
-    console=None,
-) -> Optional[paramiko.PKey]:
-    """
-    Interactive SSH key setup.
-
-    Checks for existing keys, generates if needed, and uploads to remote host.
-
-    Args:
-        host: Remote hostname or IP
-        username: SSH username
-        console: Rich console for output (optional)
-
-    Returns:
-        The SSH key if setup successful, None otherwise
-    """
-    from rich.console import Console
-    from rich.prompt import Prompt, Confirm
-
-    console = console or Console()
-    manager = SSHKeyManager()
-
-    # Check for existing key
-    existing = manager.find_existing_key()
-
-    if existing:
-        key_path, key = existing
-        console.print(f"[dim]Found existing SSH key: {key_path}[/dim]")
-
-        # Test if it already works
-        if manager.test_key_auth(host, username, key):
-            console.print("[green]SSH key authentication already working![/green]")
-            return key
-    else:
-        # Generate new key
-        console.print("[cyan]No SSH key found. Generating new SSH key...[/cyan]")
-        key_path, key = manager.generate_key()
-        console.print(f"[green]Generated new SSH key: {key_path}[/green]")
-
-    # Need to upload key
-    console.print()
-    console.print(f"[cyan]Setting up SSH key authentication with {host}...[/cyan]")
-    console.print("[dim]This requires your password once to upload the public key.[/dim]")
-
-    # Get password
-    password = Prompt.ask(f"Password for {username}@{host}", password=True)
-
-    if not password:
-        console.print("[yellow]Cancelled.[/yellow]")
-        return None
-
-    # Upload key
-    console.print("[dim]Uploading public key...[/dim]")
-
-    if manager.upload_public_key(host, username, key, password):
-        console.print("[green]SSH key uploaded successfully![/green]")
-
-        # Verify it works
-        if manager.test_key_auth(host, username, key):
-            console.print("[green]SSH key authentication is now working![/green]")
-            return key
-        else:
-            console.print("[yellow]Key uploaded but authentication still failing.[/yellow]")
-            console.print("[dim]The Pi may need sshd restarted or have different auth settings.[/dim]")
-            return None
-    else:
-        console.print("[red]Failed to upload SSH key.[/red]")
-        console.print("[dim]Check your password and try again.[/dim]")
-        return None
+        b64 = shlex.quote(key.get_base64())
+        line = shlex.quote(f"{self.get_public_key_string(key)} raccoon-client")
+        command = (
+            "mkdir -p ~/.ssh && chmod 700 ~/.ssh "
+            "&& touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys "
+            f"&& (grep -qF {b64} ~/.ssh/authorized_keys "
+            # Leading newline: a file without trailing newline must not swallow the key
+            f"|| printf '\\n%s\\n' {line} >> ~/.ssh/authorized_keys)"
+        )
+        _, stdout, stderr = client.exec_command(command)
+        status = stdout.channel.recv_exit_status()
+        if status != 0:
+            detail = stderr.read().decode(errors="replace").strip()
+            raise SSHKeyError(detail or f"remote command exited with status {status}")

@@ -56,9 +56,12 @@ from raccoon_cli.client.output_handler import (
 )
 
 # SSH key management
-from raccoon_cli.client.ssh_keys import (
-    SSHKeyManager,
-    setup_ssh_key_interactive,
+from raccoon_cli.client.ssh_keys import SSHKeyError, SSHKeyManager
+from raccoon_cli.client.ssh_connect import (
+    ApiTokenError,
+    SSHConnectError,
+    open_ssh_session,
+    read_api_token,
 )
 
 __all__ = [
@@ -94,6 +97,10 @@ __all__ = [
     "OutputHandler",
     "stream_command_output",
     # SSH key management
+    "SSHKeyError",
     "SSHKeyManager",
-    "setup_ssh_key_interactive",
+    "SSHConnectError",
+    "ApiTokenError",
+    "open_ssh_session",
+    "read_api_token",
 ]
