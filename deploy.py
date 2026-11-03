@@ -5,11 +5,11 @@ Copies the wheel from this machine to the Pi and installs it there. Releases are
 installed by `raccoon update` (from PyPI), not by this script.
 
 Usage:
-    # the wheel from the last build.py run (marks raccoon-cli as "dev" in the Pi's bundle file)
-    python3 deploy.py --host 192.168.4.1
+    python3 deploy.py --host 192.168.4.1                          # the wheel from the last build.py run
+    python3 deploy.py --host 192.168.4.1 --artifact my.whl        # a specific wheel
 
-    # a specific wheel, leaving the bundle file alone
-    python3 deploy.py --host 192.168.4.1 --release --artifact raccoon_cli-181-py3-none-any.whl
+raccoon-cli is set to "dev" in the Pi's /etc/raccoon-bundle.json: a deployed wheel
+is a custom build.
 """
 
 from __future__ import annotations
@@ -100,12 +100,6 @@ def main() -> None:
     parser.add_argument("--host", required=True, help="Pi address")
     parser.add_argument("--user", default="pi", help="SSH user (default: pi)")
     parser.add_argument("--artifact", help="wheel to install (default: the one in builds/manifest.json)")
-    parser.add_argument(
-        "--release",
-        action="store_true",
-        help="this is a release: leave /etc/raccoon-bundle.json alone "
-        f'(without it {COMPONENT} is set to "dev" there, marking a custom build)',
-    )
     parser.add_argument("--ssh-params", default="", help='extra ssh/scp options, e.g. "-o StrictHostKeyChecking=no"')
     args = parser.parse_args()
 
@@ -130,13 +124,12 @@ def main() -> None:
     # A user-level install would shadow the system-wide one.
     pi.run("python3 -m pip uninstall raccoon-cli -y --break-system-packages 2>/dev/null || true", check=False)
     pi.run(f"sudo pip3 install --break-system-packages --force-reinstall --no-deps {shlex.quote(remote_wheel)}")
-    # raccoon-transport comes from PyPI, not from this release.
+    # raccoon-transport comes from PyPI, not from the wheel.
     pi.run(f"sudo pip3 install --break-system-packages --upgrade raccoon-transport {shlex.quote(remote_wheel)}")
 
     # The bundle file must be right before the service starts: it checks itself against it.
-    if not args.release:
-        print(f'Marking {COMPONENT} as "dev" in {BUNDLE_FILE}...')
-        pi.run("sudo python3 -", stdin=MARK_DEV % {"path": BUNDLE_FILE, "component": COMPONENT})
+    print(f'Marking {COMPONENT} as "dev" in {BUNDLE_FILE}...')
+    pi.run("sudo python3 -", stdin=MARK_DEV % {"path": BUNDLE_FILE, "component": COMPONENT})
 
     print("Configuring systemd service and running migrations...")
     pi.run("sudo python3 -m raccoon_cli.server.cli post-install")

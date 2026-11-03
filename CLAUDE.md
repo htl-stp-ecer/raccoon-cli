@@ -20,7 +20,7 @@ raccoon --help                      # View CLI help
 ```bash
 python3 build.py                    # wheel (incl. web IDE) in Docker -> builds/, version 0.0
 python3 build.py --no-webide        # without the web IDE
-python3 deploy.py --host 192.168.4.1   # install builds/ wheel on the Pi, marks raccoon-cli "dev" in the bundle file
+python3 deploy.py --host 192.168.4.1   # install the builds/ wheel on the Pi, sets raccoon-cli to "dev" in its bundle file
 ```
 Only `build.py` and `deploy.py` build and install; CI runs `build.py` too. `deploy.py` is for local builds only: it copies a wheel to the Pi and installs it there. Releases are installed by `raccoon update` (from PyPI), not by `deploy.py`.
 
