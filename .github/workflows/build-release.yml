@@ -134,13 +134,8 @@ jobs:
 
             ### Pi server
 
-            ```bash
-            gh release download v${{ needs.version.outputs.number }} -R ${{ github.repository }} -p "*.whl" -p deploy.py
-            python3 deploy.py --host 192.168.4.1 --release --artifact ${{ steps.artifacts.outputs.raccoon_whl }}
-            ```
-          files: |
-            builds/raccoon_cli-*.whl
-            deploy.py
+            `raccoon update` installs it on the Pi (from PyPI).
+          files: builds/raccoon_cli-*.whl
 
       # raccoon-image keeps its dev manifest (bundles/dev.json) up to date from this.
       # The pins in raccoon-example no longer follow single releases: only Create

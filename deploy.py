@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""deploy.py — install a raccoon-cli wheel on a Pi.
+"""deploy.py — install a local raccoon-cli wheel on a Pi (for development).
 
-Standard library only, so it also runs when downloaded on its own next to a
-release wheel.
+Copies the wheel from this machine to the Pi and installs it there. Releases are
+installed by `raccoon update` (from PyPI), not by this script.
 
 Usage:
-    # local build from ./builds (marks raccoon-cli as "dev" in the Pi's bundle file)
+    # the wheel from the last build.py run (marks raccoon-cli as "dev" in the Pi's bundle file)
     python3 deploy.py --host 192.168.4.1
 
-    # a release wheel (leaves the bundle file alone)
+    # a specific wheel, leaving the bundle file alone
     python3 deploy.py --host 192.168.4.1 --release --artifact raccoon_cli-181-py3-none-any.whl
 """
 
