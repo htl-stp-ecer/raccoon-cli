@@ -43,6 +43,21 @@ def _error_badge(console: Console, message: str) -> None:
     console.print(f"[bold white on red] ERROR [/bold white on red] {message}")
 
 
+def _flush_stdin() -> None:
+    """Discard keystrokes buffered while we were busy (e.g. during network checks).
+
+    Otherwise a stray Enter is consumed by the next prompt and silently accepts
+    its default.
+    """
+    try:
+        if sys.stdin.isatty():
+            import termios
+
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except (ImportError, OSError, ValueError, AttributeError):
+        pass
+
+
 @click.command(name="update")
 @click.option("--check", "check_only", is_flag=True, help="Only check, don't install")
 @click.option("--laptop-only", is_flag=True, help="Only update laptop packages")
@@ -188,6 +203,7 @@ def update_command(
         console.print(f"[blue]Ahead of bundle (skipped):[/blue] {ahead_names}")
 
     console.print()
+    _flush_stdin()
     if not Confirm.ask("Proceed with updates?", default=True):
         console.print("[dim]Aborted.[/dim]")
         return
