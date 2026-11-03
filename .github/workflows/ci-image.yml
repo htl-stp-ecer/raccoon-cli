@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - .github/docker/Dockerfile
+      - Dockerfile
   workflow_dispatch:
 
 env:
@@ -29,7 +29,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .github/docker
+          context: .
+          file: Dockerfile
           push: true
           tags: |
             ${{ env.IMAGE }}:latest

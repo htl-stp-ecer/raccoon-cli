@@ -14,3 +14,4 @@ raccoon_cli.egg-info
 dist
 .raccoon
 web-ide-dist
+builds/

@@ -86,11 +86,6 @@ jobs:
   build-and-release:
     needs: [test, version]
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/${{ github.repository_owner }}/raccoon-cli-ci:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: write
 
@@ -104,49 +99,13 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: web-ide/package-lock.json
+      # The same script that builds locally: wheel incl. web IDE, written to builds/.
+      - name: Build
+        run: python3 build.py --version ${{ needs.version.outputs.number }}
 
-      - name: Install web-IDE dependencies
-        run: npm install
-        working-directory: web-ide
-
-      - name: Cache pip
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ hashFiles('pyproject.toml') }}
-          restore-keys: pip-
-
-      - name: Install build tools
-        run: pip3 install build wheel setuptools
-
-      # --- Build raccoon wheel (includes web-IDE) ---
-      - name: Build raccoon wheel
-        run: |
-          rm -rf dist
-          python3 -m build --wheel
-        env:
-          BUILD_NUMBER: ${{ needs.version.outputs.number }}
-
-      # --- Bundle server tarball (wheel + install.py for Pi) ---
-      - name: Bundle server release
-        run: |
-          mkdir -p server-release
-          cp dist/raccoon_cli-*.whl server-release/
-          cp install.py server-release/
-          cd server-release && tar czf ../raccoon-server-v${{ needs.version.outputs.number }}.tar.gz *
-
-      # --- Resolve artifact filenames ---
       - name: Resolve artifact filenames
         id: artifacts
-        run: |
-          echo "raccoon_whl=$(basename dist/raccoon_cli-*.whl)" >> "$GITHUB_OUTPUT"
-          echo "server_tar=raccoon-server-v${{ needs.version.outputs.number }}.tar.gz" >> "$GITHUB_OUTPUT"
+        run: echo "raccoon_whl=$(basename builds/raccoon_cli-*.whl)" >> "$GITHUB_OUTPUT"
 
       # --- Create GitHub Release ---
       - name: Create GitHub Release
@@ -176,11 +135,12 @@ jobs:
             ### Pi server
 
             ```bash
-            gh release download v${{ needs.version.outputs.number }} -R ${{ github.repository }} -p "${{ steps.artifacts.outputs.server_tar }}" && tar xzf ${{ steps.artifacts.outputs.server_tar }} && RPI_HOST=192.168.4.1 python3 install.py
+            gh release download v${{ needs.version.outputs.number }} -R ${{ github.repository }} -p "*.whl" -p deploy.py
+            python3 deploy.py --host 192.168.4.1 --release --artifact ${{ steps.artifacts.outputs.raccoon_whl }}
             ```
           files: |
-            dist/raccoon_cli-*.whl
-            raccoon-server-v${{ needs.version.outputs.number }}.tar.gz
+            builds/raccoon_cli-*.whl
+            deploy.py
 
       # raccoon-image keeps its dev manifest (bundles/dev.json) up to date from this.
       # The pins in raccoon-example no longer follow single releases: only Create
@@ -218,7 +178,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: raccoon-cli-wheel
-          path: dist/raccoon_cli-*.whl
+          path: builds/raccoon_cli-*.whl
 
   publish-pypi:
     needs: build-and-release

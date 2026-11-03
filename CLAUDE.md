@@ -10,11 +10,19 @@ Raccoon is a toolchain CLI for Botball robot development using Raspberry Pi (Wom
 
 ### Development
 ```bash
-pip install -e .                    # Install locally for development
+pip install -e .                    # Install locally for development (no web IDE)
 pytest tests/                       # Run all tests
 pytest tests/test_sftp_sync.py -v   # Run specific test file
 raccoon --help                      # View CLI help
 ```
+
+### Build and deploy
+```bash
+python3 build.py                    # wheel (incl. web IDE) in Docker -> builds/, version 0.0
+python3 build.py --no-webide        # without the web IDE
+python3 deploy.py --host 192.168.4.1   # install builds/ wheel on the Pi, marks raccoon-cli "dev" in the bundle file
+```
+Only `build.py` and `deploy.py` build and install; CI runs `build.py` too. Releases ship the wheel and `deploy.py` (`--release` leaves the bundle file alone).
 
 ### CLI Usage (after installation)
 ```bash
