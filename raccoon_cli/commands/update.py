@@ -215,9 +215,13 @@ def update_command(
 
         # Order matters: all binaries and packages first (above), then the bundle file,
         # then the restart. A service must never start against a bundle file that names
-        # another transport than the one just installed. The dev bundle has no contract
-        # and leaves the file alone (a hand-set `dev` stays until the next normal update).
-        if resolved != "dev" and manifest:
+        # another transport than the one just installed. A dev update has no contract of
+        # its own: it writes `dev` as the version of exactly the components it installed
+        # and leaves the rest of the file (other versions, contract_hash) as it is.
+        if resolved == "dev":
+            if _mark_components_dev(console, ssh_client, [s.info.name for s in pi_updates], manifest):
+                _restart_pi_services(console, ssh_client)
+        elif manifest:
             if _install_bundle_file(console, ssh_client, manifest):
                 _restart_pi_services(console, ssh_client)
 
@@ -860,6 +864,42 @@ def _install_bundle_file(console: Console, ssh_client, manifest: dict) -> bool:
         return False
     console.print(f"[green]{BUNDLE_FILE} -> bundle {manifest.get('bundle', '?')}[/green]")
     return True
+
+
+def _read_bundle_file(ssh_client) -> Optional[dict]:
+    """The bundle file on the Pi as a dict, or None when missing or unreadable."""
+    import json
+
+    try:
+        sftp = ssh_client.open_sftp()
+        try:
+            with sftp.open(BUNDLE_FILE, "r") as handle:
+                data = json.loads(handle.read().decode())
+        finally:
+            sftp.close()
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _mark_components_dev(console: Console, ssh_client, names: list[str], fallback: Optional[dict]) -> bool:
+    """Set ``"dev"`` as the version of ``names`` in the Pi's bundle file. True on success.
+
+    Everything else in the file stays. Without a readable file the dev manifest is the
+    base, so the file still names the components that were not touched.
+    """
+    if not names:
+        return False
+    document = _read_bundle_file(ssh_client)
+    if document is None:
+        document = {"bundle": "dev", **{k: v for k, v in (fallback or {}).items() if k != "bundle"}}
+    components = document.get("components")
+    if not isinstance(components, dict):
+        components = {}
+    for name in names:
+        components[name] = "dev"
+    document["components"] = components
+    return _install_bundle_file(console, ssh_client, document)
 
 
 def _restart_pi_services(console: Console, ssh_client) -> None:

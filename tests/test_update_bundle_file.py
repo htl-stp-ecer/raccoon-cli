@@ -77,6 +77,7 @@ def run_update(monkeypatch, resolved_args, manifest=MANIFEST):
     monkeypatch.setattr(upd, "_update_pi", lambda *a, **kw: steps.append("install"))
     monkeypatch.setattr(upd, "_run_post_install", lambda *a, **kw: steps.append("post-install"))
     monkeypatch.setattr(upd, "_install_bundle_file", lambda *a, **kw: steps.append("bundle-file") or True)
+    monkeypatch.setattr(upd, "_mark_components_dev", lambda *a, **kw: steps.append("mark-dev") or True)
     monkeypatch.setattr(upd, "_restart_pi_services", lambda *a, **kw: steps.append("restart"))
     result = CliRunner().invoke(upd.update_command, ["--pi-only", *resolved_args], obj={"console": C()}, input="y\n")
     assert result.exit_code == 0, result.output
@@ -87,6 +88,53 @@ def test_order_is_install_then_bundle_file_then_restart(monkeypatch):
     assert run_update(monkeypatch, []) == ["install", "post-install", "bundle-file", "restart"]
 
 
-def test_dev_update_leaves_the_bundle_file_alone(monkeypatch):
+def test_dev_update_marks_the_installed_components_as_dev(monkeypatch):
     dev = {"bundle": "dev", "components": {"raccoon-lib": "v155", "raccoon-transport": ""}}
-    assert run_update(monkeypatch, ["--dev"], manifest=dev) == ["install", "post-install"]
+    assert run_update(monkeypatch, ["--dev"], manifest=dev) == ["install", "post-install", "mark-dev", "restart"]
+
+
+class FileSsh(FakeSsh):
+    """FakeSsh whose sftp can also read an existing /etc/raccoon-bundle.json."""
+
+    def __init__(self, existing=None):
+        super().__init__()
+        self.existing = existing
+
+    def open_sftp(self):
+        sftp = super().open_sftp()
+        if self.existing is None:
+            sftp.open.side_effect = FileNotFoundError
+        else:
+            handle = MagicMock()
+            handle.__enter__.return_value.read.return_value = json.dumps(self.existing).encode()
+            sftp.open.return_value = handle
+        return sftp
+
+
+def test_mark_dev_changes_only_the_named_components():
+    existing = {
+        "bundle": "2026.11.03",
+        "contract_hash": "93ac36836810c9fe",
+        "components": {"raccoon-lib": "v156", "raccoon-cli": "v174", "botui": "v75"},
+    }
+    ssh = FileSsh(existing)
+    assert upd._mark_components_dev(Console(), ssh, ["raccoon-lib", "botui"], None) is True
+    written = json.loads(ssh.uploads[0][1])
+    assert written["components"] == {"raccoon-lib": "dev", "raccoon-cli": "v174", "botui": "dev"}
+    assert written["bundle"] == "2026.11.03"
+    assert written["contract_hash"] == "93ac36836810c9fe"
+
+
+def test_mark_dev_without_a_file_starts_from_the_dev_manifest():
+    dev = {"bundle": "dev", "components": {"raccoon-lib": "v155", "botui": "v77"}}
+    ssh = FileSsh(None)
+    assert upd._mark_components_dev(Console(), ssh, ["botui"], dev) is True
+    written = json.loads(ssh.uploads[0][1])
+    assert written["bundle"] == "dev"
+    assert written["components"] == {"raccoon-lib": "v155", "botui": "dev"}
+
+
+def test_mark_dev_with_nothing_installed_writes_nothing():
+    ssh = FileSsh({"bundle": "x", "components": {}})
+    assert upd._mark_components_dev(Console(), ssh, [], None) is False
+    assert ssh.uploads == []
