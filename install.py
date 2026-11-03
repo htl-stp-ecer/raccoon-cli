@@ -7,10 +7,13 @@ Usage:
 Env vars:
     RPI_HOST  — Pi IP address (default: 192.168.4.1)
     RPI_USER  — Pi SSH user   (default: pi)
+    RPI_SSH_OPTS — extra ssh/scp options, e.g. "-o StrictHostKeyChecking=no"
+                   (``raccoon update`` sets this to match its own SSH policy)
 """
 
 import glob
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -44,11 +47,14 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     return result
 
 
+def _ssh_opts() -> list[str]:
+    return shlex.split(os.environ.get("RPI_SSH_OPTS", ""))
+
+
 def ssh(host: str, user: str, command: str, check: bool = True) -> int:
     """Run a command on the Pi via SSH."""
     result = subprocess.run(
-        ["ssh", "-o", "ConnectTimeout=5", f"{user}@{host}", command],
-        capture_output=not check,
+        ["ssh", "-o", "ConnectTimeout=5", *_ssh_opts(), f"{user}@{host}", command],
     )
     if check and result.returncode != 0:
         print(f"ERROR: SSH command failed: {command}")
@@ -58,7 +64,7 @@ def ssh(host: str, user: str, command: str, check: bool = True) -> int:
 
 def scp(sources: list[str], dest: str) -> None:
     """Copy files to the Pi via SCP."""
-    run(["scp", *sources, dest])
+    run(["scp", *_ssh_opts(), *sources, dest])
 
 
 def main() -> None:
@@ -83,7 +89,8 @@ def main() -> None:
     # --- Test SSH connection ---
     print("Testing SSH connection...")
     if ssh(host, user, "true", check=False) != 0:
-        print(f"ERROR: Cannot connect to {user}@{host}")
+        print(f"ERROR: Cannot connect to {user}@{host} (see the ssh message above).")
+        print(f"  Host key changed (e.g. after flashing a new image)?  ssh-keygen -R {host}")
         sys.exit(1)
 
     # --- Stop service ---

@@ -48,8 +48,9 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         repo="htl-stp-ecer/raccoon-cli",
         pip_name="raccoon-cli",
         targets=["laptop", "pi"],
-        pi_install="tarball",
-        pi_asset="raccoon-server-v*.tar.gz",
+        # Same wheel as on PyPI: install it over the existing SSH connection
+        # (pip3 install raccoon-cli==N) instead of running the tarball's install.py.
+        pi_install="pypi",
     ),
     PackageInfo(
         name="raccoon-lib",

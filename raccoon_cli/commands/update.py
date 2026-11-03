@@ -796,6 +796,13 @@ def _update_pi_tarball(
         env = os.environ.copy()
         env["RPI_HOST"] = pi_host
         env["RPI_USER"] = pi_user
+        # The CLI's own Paramiko connection (AutoAddPolicy, no known_hosts) already
+        # reached the Pi; give the release's install.py the same host-key policy,
+        # otherwise system ssh aborts after every re-flash ("host key changed").
+        env.setdefault(
+            "RPI_SSH_OPTS",
+            "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR",
+        )
 
         result = subprocess.run(
             [sys.executable, install_script],
