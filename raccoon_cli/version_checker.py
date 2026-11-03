@@ -76,7 +76,7 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         targets=["pi"],
         version_cmd="cat /home/pi/stp-velox/version 2>/dev/null",
         pi_install="deb",
-        pi_asset="stp-velox_*_arm64.deb",
+        pi_asset="botui_*_arm64.deb",
     ),
     PackageInfo(
         name="stm32-data-reader",
