@@ -11,7 +11,8 @@ from fastapi import APIRouter
 router = APIRouter(tags=["version"])
 
 _BOTUI_VERSION_FILE = "/home/pi/stp-velox/version"
-_STM32_BINARY = "/home/pi/stm32_data_reader/stm32_data_reader"
+# The .deb installs the reader to /usr/bin; the old tarball install used /home/pi/stm32_data_reader.
+_STM32_BINARIES = ("/usr/bin/stm32_data_reader", "/home/pi/stm32_data_reader/stm32_data_reader")
 _CAM_BINARY = "/usr/local/bin/raccoon-cam"
 
 
@@ -42,6 +43,14 @@ def _binary_version(binary_path: str) -> Optional[str]:
     return None
 
 
+def _stm32_version() -> Optional[str]:
+    for binary in _STM32_BINARIES:
+        version = _binary_version(binary)
+        if version:
+            return version
+    return None
+
+
 def _file_version(path: str) -> Optional[str]:
     try:
         content = Path(path).read_text().strip()
@@ -62,7 +71,7 @@ async def get_versions() -> dict:
         "raccoon-cli": _pip_version("raccoon-cli"),
         "raccoon-lib": _pip_version("raccoon-library"),
         "raccoon-transport": _pip_version("raccoon-transport"),
-        "stm32-data-reader": _binary_version(_STM32_BINARY),
+        "stm32-data-reader": _stm32_version(),
         "raccoon-cam": _binary_version(_CAM_BINARY),
         "botui": ui_version,
         "ui": ui_version,

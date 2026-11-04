@@ -156,9 +156,9 @@ def _live_botui() -> Optional[str]:
 
 
 def _live_stm32() -> Optional[str]:
-    from raccoon_cli.server.routes.version import _STM32_BINARY, _binary_version
+    from raccoon_cli.server.routes.version import _stm32_version
 
-    return _binary_version(_STM32_BINARY)
+    return _stm32_version()
 
 
 _LIVE_COMPONENTS = (

@@ -83,9 +83,13 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         repo="htl-stp-ecer/stm32-data-reader",
         pip_name=None,
         targets=["pi"],
-        version_cmd="/home/pi/stm32_data_reader/stm32_data_reader --version 2>/dev/null",
-        pi_install="tarball",
-        pi_asset="stm32_data_reader-v*.tar.gz",
+        # The .deb installs to /usr/bin; the old tarball install used /home/pi/stm32_data_reader.
+        version_cmd=(
+            "(/usr/bin/stm32_data_reader --version"
+            " || /home/pi/stm32_data_reader/stm32_data_reader --version) 2>/dev/null"
+        ),
+        pi_install="deb",
+        pi_asset="stm32-data-reader_*_arm64.deb",
     ),
     PackageInfo(
         name="raccoon-cam",

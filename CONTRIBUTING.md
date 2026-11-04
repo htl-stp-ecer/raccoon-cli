@@ -12,6 +12,8 @@ cd raccoon-cli
 pip install -e .
 ```
 
+A wheel including the web IDE is built in Docker with `python3 build.py` (result in `builds/`, add `--no-webide` to skip the IDE). `python3 deploy.py --host <pi>` installs it on a Pi.
+
 Run tests:
 
 ```bash
