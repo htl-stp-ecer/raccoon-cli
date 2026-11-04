@@ -9,7 +9,8 @@ Usage:
     python3 deploy.py --host 192.168.4.1 --artifact my.whl        # a specific wheel
 
 raccoon-cli is set to "dev" in the Pi's /etc/raccoon-bundle.json: a deployed wheel
-is a custom build.
+is a custom build. If raccoon-transport is "dev" there too (a transport deployed with its
+own deploy.py), it is left as it is: the wheel is installed without dependencies.
 """
 
 from __future__ import annotations
@@ -52,6 +53,14 @@ os.replace(tmp, path)
 os.makedirs("/run/raccoon", exist_ok=True)
 os.chmod("/run/raccoon", 0o1777)
 """
+
+
+# Exit code 0 on the Pi if raccoon-transport is "dev" in the bundle file.
+IS_TRANSPORT_DEV = (
+    "python3 -c \"import json,sys; "
+    f"sys.exit(0 if json.load(open('{BUNDLE_FILE}')).get('components',{{}}).get('raccoon-transport')=='dev' else 1)\" "
+    "2>/dev/null"
+)
 
 
 def fail(message: str) -> None:
@@ -124,8 +133,13 @@ def main() -> None:
     # A user-level install would shadow the system-wide one.
     pi.run("python3 -m pip uninstall raccoon-cli -y --break-system-packages 2>/dev/null || true", check=False)
     pi.run(f"sudo pip3 install --break-system-packages --force-reinstall --no-deps {shlex.quote(remote_wheel)}")
-    # raccoon-transport comes from PyPI, not from the wheel.
-    pi.run(f"sudo pip3 install --break-system-packages --upgrade raccoon-transport {shlex.quote(remote_wheel)}")
+    # raccoon-transport comes from PyPI, not from the wheel, unless a local build of it is
+    # installed ("dev" in the bundle file): that one must not be replaced.
+    if pi.run(IS_TRANSPORT_DEV, check=False) == 0 and \
+            pi.run("python3 -c 'import raccoon_transport'", check=False) == 0:
+        print('raccoon-transport is "dev" in the bundle file: keeping the installed one.')
+    else:
+        pi.run(f"sudo pip3 install --break-system-packages --upgrade raccoon-transport {shlex.quote(remote_wheel)}")
 
     # The bundle file must be right before the service starts: it checks itself against it.
     print(f'Marking {COMPONENT} as "dev" in {BUNDLE_FILE}...')
