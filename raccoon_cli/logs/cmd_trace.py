@@ -2,8 +2,9 @@
 
 The stm32-data-reader writes a receive-side command trace to a JSONL file when
 its ``WOMBAT_CMD_TRACE`` environment variable names a writable path (the systemd
-unit sets it to ``/home/pi/stm32_data_reader/cmd_trace.jsonl`` and truncates the
-file on each reader restart). Each line records one motor/servo/chassis command
+unit sets it to ``/var/lib/stm32-data-reader/cmd_trace.jsonl``, or to
+``/home/pi/stm32_data_reader/cmd_trace.jsonl`` for an install from before the .deb, and
+truncates the file on each reader restart). Each line records one motor/servo/chassis command
 as its transport handler fires (stage ``recv``) and as a servo position is staged
 into the SPI buffer for the STM32 (stage ``spi``).
 
@@ -35,7 +36,7 @@ from typing import List, Tuple
 
 # Packaged default from the stm32-data-reader systemd unit. Used as a fallback
 # when the running service's ``WOMBAT_CMD_TRACE`` can't be read.
-DEFAULT_CMD_TRACE_PATH = Path("/home/pi/stm32_data_reader/cmd_trace.jsonl")
+DEFAULT_CMD_TRACE_PATH = Path("/var/lib/stm32-data-reader/cmd_trace.jsonl")
 
 _STM32_SERVICE = "stm32_data_reader.service"
 _CMD_TRACE_ENV = "WOMBAT_CMD_TRACE"

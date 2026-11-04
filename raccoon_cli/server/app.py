@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     # mismatch (it reports it) and refuses runs instead.
     from raccoon_cli import contract_status
 
-    contract_status.record_server_start(config.version)
+    contract_status.refresh_server_start()
 
     try:
         NetworkManager().restore_persisted_network_mode()

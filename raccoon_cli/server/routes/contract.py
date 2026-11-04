@@ -10,5 +10,5 @@ router = APIRouter(prefix="/api/v1", tags=["contract"])
 @router.get("/contract")
 async def get_contract() -> dict:
     """Expected hash and transport version from the bundle file, dev mode, and every
-    component's startup-check result with its activity (read from the status files)."""
-    return contract_status.local_summary()
+    component's startup-check result with its activity (read from the status files, after re-checking this server's own version)."""
+    return contract_status.fresh_summary()

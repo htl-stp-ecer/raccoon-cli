@@ -1,0 +1,9 @@
+.git
+builds
+dist
+web-ide/node_modules
+web-ide/dist
+web-ide/.angular
+raccoon_cli/web-ide-dist
+__pycache__
+.pytest_cache

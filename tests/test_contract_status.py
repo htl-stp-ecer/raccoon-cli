@@ -238,3 +238,45 @@ def test_server_version_check_message(tmp_path):
 
 def test_server_version_check_without_a_readable_bundle(tmp_path):
     assert contract_status.version_check("58", str(tmp_path / "missing.json")) is None
+
+
+def _stale_stm(device):
+    """A reader that started on an old version: its status file still says mismatch."""
+    from raccoon_transport.contract_check import ComponentCheck
+
+    device.write_bundle(**{"stm32-data-reader": "v2"})
+    stale = ComponentCheck(name="version", result="version-mismatch", expected="v2",
+                           message="component version mismatch: stm32-data-reader is v1 but bundle b expects v2")
+    device.report("stm32-data-reader", HASH, component_check=stale)
+
+
+def _live(monkeypatch, stm_version):
+    monkeypatch.setattr(contract_status, "installed_version", lambda: "173")
+    monkeypatch.setattr(contract_status, "_LIVE_COMPONENTS",
+                        (("stm32-data-reader", "stm32-data-reader", lambda: stm_version),))
+
+
+def test_stale_status_does_not_deny_a_run_after_an_update(device, monkeypatch):
+    _stale_stm(device)
+    _live(monkeypatch, "v2")  # updated since the reader last started
+    assert contract_status.refusal_message(contract_status.local_summary())  # the status file alone refuses
+    assert contract_status.current_refusal() is None
+    fresh = contract_status.fresh_summary()
+    entry = next(c for c in fresh["components"] if c["component"] == "stm32-data-reader")
+    assert entry["component_version"] == "v2"
+    assert entry["result"] == "ok"
+    assert fresh["ok"] and "stm32-data-reader" not in fresh["blocking"]
+
+
+def test_a_real_mismatch_still_denies_a_run(device, monkeypatch):
+    _stale_stm(device)
+    _live(monkeypatch, "v1")  # really still the old version
+    assert "stm32-data-reader" in contract_status.current_refusal()
+
+
+def test_fresh_summary_keeps_a_transport_failure(device, monkeypatch):
+    device.write_bundle(**{"stm32-data-reader": "v2"})
+    device.report("stm32-data-reader", "ffffffffffffffff")  # built against another transport
+    _live(monkeypatch, "v2")
+    fresh = contract_status.fresh_summary()
+    assert "stm32-data-reader" in fresh["blocking"]

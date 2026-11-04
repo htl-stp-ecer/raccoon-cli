@@ -54,8 +54,9 @@ def _normalize_version(value: str) -> str:
     return value[1:] if value[:1] in ("v", "V") else value
 
 
-def version_check(version: str, bundle_file: Optional[str] = None):
-    """The server's own version against the ``raccoon-cli`` entry of the bundle file.
+def version_check(version: str, bundle_file: Optional[str] = None, *,
+                  key: str = SERVER_BUNDLE_KEY, component: str = SERVER_COMPONENT):
+    """A component's version against its entry of the bundle file (default: the server's ``raccoon-cli``).
 
     This is the server's own component check (specified in raccoon-transport,
     ``contract/COMPONENT_VERSION_CHECK.md``); the transport only merges its result.
@@ -71,32 +72,54 @@ def version_check(version: str, bundle_file: Optional[str] = None):
     if not isinstance(document, dict):
         return None
     components = document.get("components")
-    entry = components.get(SERVER_BUNDLE_KEY) if isinstance(components, dict) else None
+    entry = components.get(key) if isinstance(components, dict) else None
     bundle = document.get("bundle") if isinstance(document.get("bundle"), str) else None
 
     def result(outcome, message, reason=None, expected=None):
         return _check.ComponentCheck(name="version", result=outcome, message=message, reason=reason, expected=expected)
 
     if not isinstance(entry, str):
-        return result("bundle-fehler", f"bundle check failed: bundle file has no version for {SERVER_BUNDLE_KEY}: {path}",
+        return result("bundle-fehler", f"bundle check failed: bundle file has no version for {key}: {path}",
                       "version-field-missing")
     expected = entry.strip()
     if not expected:
-        return result("bundle-fehler", f"bundle check failed: bundle file has an empty version for {SERVER_BUNDLE_KEY}: {path}",
+        return result("bundle-fehler", f"bundle check failed: bundle file has an empty version for {key}: {path}",
                       "version-field-empty")
     if expected == "dev":
         return result(
             "dev-warnung",
-            f"component version check omitted ('{SERVER_BUNDLE_KEY}' is 'dev' in the bundle): "
-            f"{SERVER_COMPONENT} {version or 'unknown'} is not compared; mismatches are not enforced",
+            f"component version check omitted ('{key}' is 'dev' in the bundle): "
+            f"{component} {version or 'unknown'} is not compared; mismatches are not enforced",
             "version-omitted", expected)
     if _normalize_version(expected) != _normalize_version(version):
         return result(
             "version-mismatch",
-            f"component version mismatch: {SERVER_COMPONENT} is {version or 'unknown'} but bundle "
+            f"component version mismatch: {component} is {version or 'unknown'} but bundle "
             f"{bundle or 'unknown'} expects {expected}; update or reflash so all components match",
             None, expected)
     return result("ok", f"version ok: {version}", None, expected)
+
+
+def installed_version() -> str:
+    """The raccoon-cli version installed right now, read from the package metadata.
+
+    ``raccoon_cli.__version__`` is frozen at build time (a dev release says
+    ``0.0``) and the server process keeps the value it imported at start, so an
+    update or reinstall would never show. The metadata is re-read on every call.
+    """
+    from importlib import metadata
+
+    try:
+        return metadata.version("raccoon-cli")
+    except metadata.PackageNotFoundError:
+        from raccoon_cli import __version__
+
+        return __version__
+
+
+def refresh_server_start():
+    """Re-run the server's own startup check with the version installed now."""
+    return record_server_start(installed_version())
 
 
 def record_server_start(version: str):
@@ -121,6 +144,103 @@ def local_summary() -> dict[str, Any]:
     if _check is None:
         return unavailable_summary()
     return {"available": True, **_check.aggregate()}
+
+
+# Components that write a status file once at their own start. After an update their
+# file still names the old version, so the version is read again from what is installed.
+# (status component, bundle key, reader of the installed version)
+def _live_botui() -> Optional[str]:
+    from raccoon_cli.server.routes.version import _BOTUI_VERSION_FILE, _file_version
+
+    return _file_version(_BOTUI_VERSION_FILE)
+
+
+def _live_stm32() -> Optional[str]:
+    from raccoon_cli.server.routes.version import _stm32_version
+
+    return _stm32_version()
+
+
+_LIVE_COMPONENTS = (
+    ("botui", "botui", _live_botui),
+    ("stm32-data-reader", "stm32-data-reader", _live_stm32),
+)
+
+
+def _recheck_entry(entry: dict[str, Any], key: str, live: str) -> dict[str, Any]:
+    """The status entry with the version check redone for the version installed now.
+
+    A failure of the transport check itself (hash mismatch, broken bundle) stays as it
+    is: only a result that came from the version check is replaced.
+    """
+    old_check = entry.get("component_check") or {}
+    from_version_check = bool(old_check) and entry.get("result") == old_check.get("result")
+    transport_failed = _check.is_refusing(entry.get("result")) and not from_version_check
+    fresh = version_check(live, key=key, component=entry["component"])
+    updated = dict(entry, component_version=live)
+    if fresh is None:
+        return updated
+    updated["component_check"] = {
+        "name": fresh.name, "result": fresh.result, "message": fresh.message,
+        "reason": fresh.reason, "expected": fresh.expected,
+    }
+    if not transport_failed:
+        updated.update(result=fresh.result, reason=fresh.reason, message=fresh.message)
+    return updated
+
+
+def refresh_components(summary: dict[str, Any]) -> dict[str, Any]:
+    """Redo the version check of the other components with the versions installed now."""
+    if _check is None or not summary.get("available", True) or not summary.get("on_device", True):
+        return summary
+    live_by_name = {}
+    for name, key, reader in _LIVE_COMPONENTS:
+        try:
+            live = reader()
+        except Exception:
+            live = None
+        if live:
+            live_by_name[name] = (key, live)
+    if not live_by_name:
+        return summary
+    components = []
+    changed = set()
+    for entry in summary.get("components", []):
+        name = entry.get("component")
+        if name in live_by_name and isinstance(entry.get("component_check"), dict):
+            entry = _recheck_entry(entry, *live_by_name[name])
+            changed.add(name)
+        components.append(entry)
+    blocking = [b for b in summary.get("blocking", []) if b not in changed]
+    blocking += [
+        e["component"] for e in components
+        if e["component"] in changed and _check.is_refusing(e.get("result")) and (e.get("active") or e.get("persistent"))
+    ]
+    dev_components = [
+        e["component"] for e in components
+        if (e.get("component_check") or {}).get("result") == _check.DEV_WARNING and (e.get("active") or e.get("persistent"))
+    ]
+    return dict(summary, components=components, blocking=blocking, dev_components=dev_components, ok=not blocking)
+
+
+def fresh_summary() -> dict[str, Any]:
+    """Like :func:`local_summary`, but with every version read again from what is installed.
+
+    Status files are written once when a component starts, so after an update they still
+    name the old version. The server's own check is re-run and the other components'
+    version checks are redone against their installed versions.
+    """
+    refresh_server_start()
+    return refresh_components(local_summary())
+
+
+def current_refusal() -> Optional[str]:
+    """Refusal text for a run. A refusal is re-verified against freshly queried
+    versions before it stands, so a stale status file never denies a run."""
+    refusal = refusal_message(local_summary())
+    if refusal:
+        refusal = refusal_message(fresh_summary())
+    return refusal
 
 
 def refusal_message(summary: dict[str, Any]) -> Optional[str]:

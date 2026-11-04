@@ -9,7 +9,7 @@ from typing import Optional
 
 import yaml
 
-from raccoon_cli import __version__
+from raccoon_cli.contract_status import installed_version
 
 
 # Token file location (readable via SSH by authorized users)
@@ -31,7 +31,7 @@ class ServerConfig:
     api_token: Optional[str] = None
 
     # Server version (from package)
-    version: str = field(default_factory=lambda: __version__)
+    version: str = field(default_factory=installed_version)
 
     @classmethod
     def from_file(cls, path: Path) -> "ServerConfig":
