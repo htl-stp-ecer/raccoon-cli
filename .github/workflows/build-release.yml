@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Release: tag, GitHub release, PyPI and notify the other repositories. Untick to only build and test (also works on a branch)."
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -21,7 +26,7 @@ jobs:
   version:
     name: Release number
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && !inputs.release)
     outputs:
       number: ${{ steps.next.outputs.number }}
     steps:
@@ -109,6 +114,7 @@ jobs:
 
       # --- Create GitHub Release ---
       - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.version.outputs.number }}
@@ -142,6 +148,7 @@ jobs:
       # Bundle in raccoon-image moves them.
       - name: Create an app token for raccoon-image
         id: image-token
+        if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
         # The release is already published at this point; never fail the job (and with it
         # the PyPI upload that needs it) because the bundle could not be notified.
         continue-on-error: true
@@ -154,6 +161,7 @@ jobs:
           permission-contents: write
 
       - name: Trigger raccoon-image bundle
+        if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
         env:
           TOKEN: ${{ steps.image-token.outputs.token }}
         run: |
@@ -177,6 +185,7 @@ jobs:
 
   publish-pypi:
     needs: build-and-release
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.release)
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # required for PyPI Trusted Publishing
