@@ -54,7 +54,6 @@ raccoon/
 │   ├── routes/
 │   └── services/
 └── templates/              # Jinja2 scaffolding templates
-    ├── project_scaffold/   # project scaffold
     └── mission/            # raccoon missions create
 ```
 
@@ -134,16 +133,6 @@ Register it in `codegen/pipeline.py`:
 from .generators.my_generator import MyGenerator
 registry.register("my", MyGenerator())
 ```
-
----
-
-## Adding a project template
-
-Project scaffolding uses [Copier](https://copier.readthedocs.io/) with Jinja2 templates under `templates/project_scaffold/`.
-
-- Add a `.jinja` file at the path where it should be created in the new project
-- Use `{{ variable_name }}` for substitutions defined in `copier.yaml`
-- `raccoon.project.yml.jinja` is the root config template -- edit it if you're adding new top-level config keys
 
 ---
 
