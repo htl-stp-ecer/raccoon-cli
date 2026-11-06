@@ -27,6 +27,7 @@ logger = logging.getLogger("raccoon")
 EXAMPLE_REPO_URL = "https://github.com/htl-stp-ecer/raccoon-example"
 
 _MISSION_NUMBER_RE = re.compile(r"^[Mm](\d{3})")
+_MAX_AUTO_MISSION_NUMBER = 990
 _RESERVED_MISSION_NUMBERS = {0, 999}  # M000 = setup, M999 = shutdown
 
 
@@ -36,7 +37,12 @@ _RESERVED_MISSION_NUMBERS = {0, 999}  # M000 = setup, M999 = shutdown
 
 
 def get_next_mission_number(missions: list) -> int:
-    """Return the next mission number (highest non-reserved M-prefix + 10, min M010)."""
+    """Return the next mission number: next multiple of 10 above the highest
+    non-reserved M-prefix (min M010).
+
+    Raises:
+        ValueError: if the next number would exceed M990 (give an explicit number).
+    """
     highest = 0
     for entry in missions:
         name = list(entry.keys())[0] if isinstance(entry, dict) else str(entry)
@@ -45,7 +51,13 @@ def get_next_mission_number(missions: list) -> int:
             num = int(m.group(1))
             if num not in _RESERVED_MISSION_NUMBERS:
                 highest = max(highest, num)
-    return highest + 10
+    next_num = (highest // 10 + 1) * 10
+    if next_num > _MAX_AUTO_MISSION_NUMBER:
+        raise ValueError(
+            f"No automatic mission number available after M{_MAX_AUTO_MISSION_NUMBER}; "
+            "specify an explicit prefix, e.g. 'M995Name'."
+        )
+    return next_num
 
 
 def scaffold_project(name: str, target_dir: Path) -> Tuple[str, GitInitResult]:

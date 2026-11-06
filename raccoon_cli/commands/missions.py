@@ -8,6 +8,7 @@ the IDE backend uses as well.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import List
 
@@ -183,62 +184,81 @@ def missions_group() -> None:
 
 
 @missions_group.command(name="create")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.pass_context
-def create_command(ctx: click.Context, name: str) -> None:
-    """Create a new mission in the current project.
+def create_command(ctx: click.Context, names: tuple) -> None:
+    """Create one or more missions in the current project.
 
-    NAME must start with the mission number, e.g. M030Wave
-    (creates M030WaveMission). M000 and M999 are reserved for setup/shutdown.
+    Each NAME may start with a three-digit mission number, e.g. M030Wave
+    (creates M030WaveMission). Without a prefix the next free number in steps
+    of 10 is used (M010 ... M990); after M990 an explicit prefix is required.
+    M000 and M999 are reserved for setup/shutdown. M5 or M50 style prefixes
+    are rejected.
+
+    Example: raccoon missions create Drive Collect M500Wave
     """
     console: Console = ctx.obj["console"]
     project_root = _project_root()
 
-    number = mission_ops.mission_number(name.strip())
-    base = mission_ops.strip_number_prefix(name.strip()).lstrip("_- ")
-    if number is None or not base:
-        raise _fail(
-            MissionError(
-                f"Mission name must start with its number and have a name, "
-                f"e.g. 'M030Wave' (got '{name}')."
-            )
-        )
+    # Validate every name before creating anything.
+    parsed: list[tuple[str, str, int | None]] = []
+    for name in names:
+        stripped = name.strip()
+        m = re.match(r"^[Mm](\d+)", stripped)
+        if m:
+            if len(m.group(1)) != 3:
+                raise _fail(
+                    MissionError(
+                        f"Mission prefix must have exactly three digits, "
+                        f"e.g. 'M030Wave' (got '{name}')."
+                    )
+                )
+            number = int(m.group(1))
+            base = mission_ops.strip_number_prefix(stripped).lstrip("_- ")
+        else:
+            number = None
+            base = stripped
+        if not base:
+            raise _fail(MissionError(f"Mission needs a name, e.g. 'Wave' or 'M030Wave' (got '{name}')."))
+        parsed.append((name, base, number))
 
-    console.print(f"[cyan]Creating mission '{name}'...[/cyan]")
-    try:
-        mission_class = create_mission(project_root, base, number=number)
-    except (ValueError, FileExistsError, FileNotFoundError) as exc:
-        raise _fail(exc) from exc
+    for name, base, number in parsed:
+        console.print(f"[cyan]Creating mission '{name}'...[/cyan]")
+        try:
+            mission_class = create_mission(project_root, base, number=number)
+        except (ValueError, FileExistsError, FileNotFoundError) as exc:
+            raise _fail(exc) from exc
 
-    console.print(f"[green]\u2713 Mission '{mission_class}' created successfully[/green]")
-    console.print("[cyan]  Added to raccoon.project.yml[/cyan]")
+        console.print(f"[green]\u2713 Mission '{mission_class}' created successfully[/green]")
 
 
 @missions_group.command(name="remove")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.option("--keep-file", is_flag=True, help="Only remove it from the config, keep the mission file.")
 @click.pass_context
-def remove_command(ctx: click.Context, name: str, keep_file: bool) -> None:
-    """Remove a mission from the current project.
+def remove_command(ctx: click.Context, names: tuple, keep_file: bool) -> None:
+    """Remove one or more missions from the current project.
 
-    NAME is the mission name or just its number (e.g. Drive, M010Drive or M010).
+    Each NAME is the mission name or just its number, e.g.
+    raccoon missions remove M020 Drive M030Wave
     """
     console: Console = ctx.obj["console"]
     project_root = _project_root()
 
     try:
-        result = mission_ops.remove_mission(project_root, name, keep_file=keep_file)
+        results = mission_ops.remove_missions(project_root, names, keep_file=keep_file)
     except MissionError as exc:
         raise _fail(exc) from exc
 
-    if result.removed_from_config:
-        console.print(f"[green]\u2713 Removed '{result.class_name}' from raccoon.project.yml[/green]")
-    if result.file is None:
-        logger.warning(f"Mission file not found for '{result.class_name}'")
-    elif result.file_deleted:
-        console.print(f"[green]\u2713 Deleted {result.file.relative_to(project_root)}[/green]")
-    else:
-        console.print(f"[yellow]Mission file kept: {result.file.relative_to(project_root)}[/yellow]")
+    for result in results:
+        if result.removed_from_config:
+            console.print(f"[green]\u2713 Removed '{result.class_name}' from raccoon.project.yml[/green]")
+        if result.file is None:
+            logger.warning(f"Mission file not found for '{result.class_name}'")
+        elif result.file_deleted:
+            console.print(f"[green]\u2713 Deleted {result.file.relative_to(project_root)}[/green]")
+        else:
+            console.print(f"[yellow]Mission file kept: {result.file.relative_to(project_root)}[/yellow]")
 
 
 @missions_group.command(name="list")

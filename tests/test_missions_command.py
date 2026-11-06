@@ -207,12 +207,25 @@ def test_remove_and_rename_by_number(project):
     assert "m020_collect_mission.py" not in _files(project)
 
 
-@pytest.mark.parametrize("name", ["Wave", "M030", "M030_", "wave"])
-def test_cli_create_requires_prefix_and_name(project, name):
+@pytest.mark.parametrize("name", ["M030", "M030_", "M5Quick", "m50_quick", "M0030Quick"])
+def test_cli_create_rejects_bad_prefix_or_missing_name(project, name):
     result = CliRunner().invoke(main, ["--no-validate", "missions", "create", name])
     assert result.exit_code == 1
-    assert "must start with its number" in result.output
+    assert "three digits" in result.output or "needs a name" in result.output
     assert _names(project) == [mission_ops.mission_entry_name(e) for e in MISSIONS]
+
+
+def test_cli_create_without_prefix_auto_numbers(project):
+    assert _run("create", "Wave").exit_code == 0
+    assert "M030WaveMission" in _names(project)
+
+
+def test_auto_number_stops_after_m990():
+    from raccoon_cli.project_creation import get_next_mission_number
+
+    assert get_next_mission_number(["M980AMission"]) == 990
+    with pytest.raises(ValueError, match="explicit prefix"):
+        get_next_mission_number(["M990AMission"])
 
 
 @pytest.mark.parametrize("name, message", [("M010Other", "already used"), ("M999Late", "reserved"), ("M000Early", "reserved")])
@@ -222,8 +235,8 @@ def test_cli_create_rejects_used_or_reserved_numbers(project, name, message):
     assert not any("Other" in n or "Late" in n or "Early" in n for n in _names(project))
 
 
-def test_cli_create_accepts_short_number_and_separator(project):
-    assert _run("create", "m5_quick_turn").exit_code == 0
+def test_cli_create_accepts_separator(project):
+    assert _run("create", "m005_quick_turn").exit_code == 0
     assert "M005QuickTurnMission" in _names(project)
     assert "m005_quick_turn_mission.py" in _files(project)
 
@@ -232,3 +245,54 @@ def test_shared_create_mission_without_number_still_auto_numbers(project):
     from raccoon_cli.project_creation import create_mission
 
     assert create_mission(project, "Auto") == "M030AutoMission"
+
+
+def test_cli_remove_multiple_mixed_forms(project):
+    assert _run("create", "Wave").exit_code == 0
+    result = _run("remove", "M020", "Wave", "M010DriveMission")
+    assert result.exit_code == 0
+    names = _names(project)
+    assert not any(n.startswith(("M010", "M020", "M030")) for n in names)
+
+
+def test_cli_remove_multiple_is_all_or_nothing(project):
+    before = _names(project)
+    assert _run("remove", "M020", "Nope").exit_code == 1
+    assert _run("remove", "M020", "Collect").exit_code == 1
+    assert _names(project) == before
+
+
+def test_resolve_skip_indices_by_prefix():
+    assert mission_ops.resolve_skip_indices(MISSIONS, ["010", "020"]) == {1, 2}
+
+
+@pytest.mark.parametrize(
+    "numbers, message",
+    [(["000"], "cannot be skipped"), (["999"], "cannot be skipped"),
+     (["050"], "no mission with prefix"), (["10"], "three digits"), (["1"], "three digits")],
+)
+def test_resolve_skip_indices_rejects(numbers, message):
+    with pytest.raises(MissionError, match=message):
+        mission_ops.resolve_skip_indices(MISSIONS, numbers)
+
+
+@pytest.mark.parametrize("flag", ["--no-m000", "--no-m999", "--no-m050", "--no-m1"])
+def test_cli_run_rejects_bad_no_m_before_executing(project, flag):
+    result = CliRunner().invoke(main, ["--no-validate", "run", "--local", flag])
+    assert result.exit_code == 1
+    assert "--no-m" in result.output
+
+
+def test_cli_create_multiple_auto_and_explicit(project):
+    assert _run("create", "Wave", "M500Spin", "Dance").exit_code == 0
+    names = _names(project)
+    for n in ("M030WaveMission", "M500SpinMission", "M510DanceMission"):
+        assert n in names
+
+
+def test_cli_create_multiple_validates_all_before_creating(project):
+    before = _names(project)
+    result = CliRunner().invoke(main, ["--no-validate", "missions", "create", "Wave", "M5Bad"])
+    assert result.exit_code == 1
+    assert _names(project) == before
+
