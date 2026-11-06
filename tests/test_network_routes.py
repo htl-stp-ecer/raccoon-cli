@@ -246,11 +246,11 @@ def test_network_manager_access_point_mode_starts_hotspot(tmp_path: Path, monkey
 
     assert started_configs == [
         {
-            "ssid": "STP-Velox-Robot",
-            "password": "Robot123!",
+            "ssid": "RaccoonOS",
+            "password": "raccoonos",
             "band": "band5GHz",
             "channel": 0,
-            "encryptionType": "wpa3Personal",
+            "encryptionType": "wpa2Personal",
             "hidden": False,
             "maxClients": 8,
         }
@@ -264,7 +264,6 @@ def test_network_manager_restore_restarts_saved_hotspot_config(
     state_path.write_text("""
 {
   "network_mode": "access_point",
-  "saved_networks": [],
   "access_point_config": {
     "ssid": "RobotNet",
     "password": "secret123",
@@ -544,9 +543,201 @@ def test_network_manager_stop_access_point_stops_saved_ssid_connection(
     manager.stop_access_point()
 
     assert commands == [
+        ["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"],
         ["nmcli", "connection", "down", "RobotNet"],
         ["nmcli", "connection", "delete", "RobotNet"],
         ["nmcli", "connection", "down", "STP-Velox-AP"],
         ["nmcli", "connection", "delete", "STP-Velox-AP"],
         ["reset"],
     ]
+
+
+def _hotspot_config(**overrides):
+    return {
+        "ssid": "RobotNet",
+        "password": "secret123",
+        "band": "band2_4GHz",
+        "channel": 6,
+        "encryptionType": "wpa2Personal",
+        "hidden": False,
+        "maxClients": 8,
+        **overrides,
+    }
+
+
+def _hotspot_manager(tmp_path: Path, monkeypatch, commands, fail_sae=False):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    monkeypatch.setattr(manager, "stop_access_point", lambda: None)
+    monkeypatch.setattr(
+        manager, "_ensure_wifi_enabled", lambda: commands.append(["ensure"])
+    )
+    monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        if fail_sae and "sae" in command and "add" in command:
+            raise RuntimeError("sae unsupported")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+    return manager
+
+
+def _add_command(commands):
+    return next(c for c in commands if c[:3] == ["nmcli", "connection", "add"])
+
+
+def test_start_access_point_creates_wpa2_profile_with_pmf_disabled(
+    tmp_path: Path, monkeypatch
+):
+    commands: list = []
+    manager = _hotspot_manager(tmp_path, monkeypatch, commands)
+
+    applied = manager.start_access_point(_hotspot_config(hidden=True))
+
+    assert commands[0] == ["ensure"]
+    add = _add_command(commands)
+    assert "hotspot" not in add
+    assert add[add.index("wifi-sec.pmf") + 1] == "disable"
+    assert add[add.index("wifi-sec.key-mgmt") + 1] == "wpa-psk"
+    assert add[add.index("802-11-wireless.hidden") + 1] == "yes"
+    assert add[add.index("802-11-wireless.channel") + 1] == "6"
+    assert commands[-1] == ["nmcli", "connection", "up", "STP-Velox-AP"]
+    assert applied["encryptionType"] == "wpa2Personal"
+
+
+def test_start_access_point_wpa3_requires_pmf(tmp_path: Path, monkeypatch):
+    commands: list = []
+    manager = _hotspot_manager(tmp_path, monkeypatch, commands)
+
+    applied = manager.start_access_point(_hotspot_config(encryptionType="wpa3Personal"))
+
+    add = _add_command(commands)
+    assert add[add.index("wifi-sec.key-mgmt") + 1] == "sae"
+    assert add[add.index("wifi-sec.pmf") + 1] == "required"
+    assert applied["encryptionType"] == "wpa3Personal"
+
+
+def test_start_access_point_falls_back_to_wpa2_when_sae_fails(
+    tmp_path: Path, monkeypatch
+):
+    commands: list = []
+    manager = _hotspot_manager(tmp_path, monkeypatch, commands, fail_sae=True)
+
+    applied = manager.start_access_point(_hotspot_config(encryptionType="wpa3Personal"))
+
+    assert applied["encryptionType"] == "wpa2Personal"
+    adds = [c for c in commands if c[:3] == ["nmcli", "connection", "add"]]
+    assert adds[0][adds[0].index("wifi-sec.key-mgmt") + 1] == "sae"
+    assert adds[1][adds[1].index("wifi-sec.key-mgmt") + 1] == "wpa-psk"
+    assert ["nmcli", "connection", "delete", "STP-Velox-AP"] in commands
+
+
+def test_start_access_point_open_has_no_security(tmp_path: Path, monkeypatch):
+    commands: list = []
+    manager = _hotspot_manager(tmp_path, monkeypatch, commands)
+
+    applied = manager.start_access_point(
+        _hotspot_config(encryptionType="open", password="")
+    )
+
+    assert not any(arg.startswith("wifi-sec") for arg in _add_command(commands))
+    assert applied["encryptionType"] == "open"
+
+
+def test_stop_access_point_keeps_client_profile_with_same_name(
+    tmp_path: Path, monkeypatch
+):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager.save_access_point_config(_hotspot_config())
+    monkeypatch.setattr(manager, "_reset_wifi_interface", lambda: None)
+    monkeypatch.setattr(
+        manager,
+        "_wifi_profiles",
+        lambda: [
+            {"uuid": "u1", "name": "RobotNet", "ssid": "RobotNet", "mode": "infrastructure"}
+        ],
+    )
+    commands = []
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: commands.append(command)
+        or CompletedProcess(command, 0, stdout="", stderr=""),
+    )
+
+    manager.stop_access_point()
+
+    assert ["nmcli", "connection", "delete", "RobotNet"] not in commands
+    assert ["nmcli", "connection", "delete", "STP-Velox-AP"] in commands
+
+
+def test_forget_never_deletes_hotspot_profile(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    monkeypatch.setattr(
+        manager,
+        "_wifi_profiles",
+        lambda: [
+            {"uuid": "ap", "name": "STP-Velox-AP", "ssid": "RobotNet", "mode": "ap"},
+            {"uuid": "c1", "name": "RobotNet", "ssid": "RobotNet", "mode": "infrastructure"},
+        ],
+    )
+    commands = []
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: commands.append(command)
+        or CompletedProcess(command, 0, stdout="", stderr=""),
+    )
+
+    manager.forget("RobotNet")
+
+    assert commands == [["nmcli", "connection", "delete", "uuid", "c1"]]
+
+
+def test_lan_only_failsafe_reenables_wifi_after_cable_loss(
+    tmp_path: Path, monkeypatch
+):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager._persist_network_mode("lan_only")
+    monkeypatch.setattr(manager, "is_ethernet_cable_connected", lambda: False)
+    monkeypatch.setattr(manager, "is_access_point_active", lambda: False)
+    monkeypatch.setattr(manager, "_ensure_wifi_enabled", lambda: None)
+
+    assert manager.lan_only_failsafe_tick() is False
+    assert manager.lan_only_failsafe_tick() is False
+    assert manager.lan_only_failsafe_tick() is True
+    assert manager.get_network_mode() == "client"
+
+
+def test_lan_only_failsafe_ignores_connected_cable(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager._persist_network_mode("lan_only")
+    monkeypatch.setattr(manager, "is_ethernet_cable_connected", lambda: True)
+
+    for _ in range(5):
+        assert manager.lan_only_failsafe_tick() is False
+    assert manager.get_network_mode() == "lan_only"
+
+
+def test_count_access_point_clients_counts_live_neighbours(
+    tmp_path: Path, monkeypatch
+):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
+    neighbours = (
+        '[{"dst":"10.42.0.10","lladdr":"AA:AA:AA:AA:AA:01","state":["REACHABLE"]},'
+        '{"dst":"fe80::1","lladdr":"aa:aa:aa:aa:aa:01","state":["STALE"]},'
+        '{"dst":"10.42.0.11","lladdr":"aa:aa:aa:aa:aa:02","state":["STALE"]},'
+        '{"dst":"10.42.0.12","lladdr":"aa:aa:aa:aa:aa:03","state":["FAILED"]},'
+        '{"dst":"10.42.0.13","state":["INCOMPLETE"]}]'
+    )
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: CompletedProcess(
+            command, 0, stdout=neighbours, stderr=""
+        ),
+    )
+
+    assert manager.count_access_point_clients() == 2

@@ -5,17 +5,24 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
+AP_CONNECTION_NAME = "STP-Velox-AP"
+
+
 class NetworkManager:
-    """Thin wrapper around nmcli/ip with persisted network UI state."""
+    """Thin wrapper around nmcli/ip. Saved networks live in NetworkManager;
+    only the network mode and hotspot config are persisted locally."""
 
     def __init__(self, state_path: Path | None = None) -> None:
         self.state_path = state_path or (
             Path.home() / ".raccoon" / "network_state.json"
         )
+        self._lan_cable_missing_ticks = 0
 
     def scan_networks(self) -> list[dict[str, Any]]:
         self._ensure_wifi_enabled()
@@ -78,6 +85,14 @@ class NetworkManager:
         encryption_type: str,
         credentials: dict[str, Any],
     ) -> None:
+        if self._lacks_secrets(encryption_type, credentials):
+            # Reconnect a profile NetworkManager already knows (e.g. one added
+            # with nmcli or the UI); its secrets are stored in NetworkManager.
+            profile = self._find_wifi_profile(ssid)
+            if profile is not None:
+                self._run(["nmcli", "connection", "up", "uuid", profile["uuid"]])
+                return
+
         self._delete_existing_connection(ssid)
         wifi_interface = self._get_wifi_interface()
         if wifi_interface is None:
@@ -138,35 +153,7 @@ class NetworkManager:
             raise
 
     def forget(self, ssid: str) -> None:
-        normalized = self._normalize_ssid(ssid)
-        try:
-            self._run(["nmcli", "connection", "delete", ssid])
-        except Exception:
-            result = self._run(
-                ["nmcli", "-t", "-f", "UUID", "connection", "show"], check=False
-            )
-            uuids = [
-                line.strip() for line in result.stdout.splitlines() if line.strip()
-            ]
-            for uuid in uuids:
-                show_result = self._run(
-                    [
-                        "nmcli",
-                        "-t",
-                        "-f",
-                        "802-11-wireless.ssid",
-                        "connection",
-                        "show",
-                        uuid,
-                    ],
-                    check=False,
-                )
-                if show_result.stdout.strip() == normalized:
-                    self._run(
-                        ["nmcli", "connection", "delete", "uuid", uuid], check=False
-                    )
-                    break
-        self.remove_saved_network(normalized)
+        self._delete_wifi_profiles(ssid)
 
     def get_device_info(self) -> dict[str, Any]:
         interfaces = self._network_interfaces()
@@ -248,6 +235,8 @@ class NetworkManager:
 
     def start_access_point(self, config: dict[str, Any]) -> dict[str, Any]:
         self.stop_access_point()
+        # LAN-only mode switches the radio off; the hotspot needs it on.
+        self._ensure_wifi_enabled()
         wifi_interface = self._get_wifi_interface()
         if wifi_interface is None:
             raise RuntimeError("No Wi-Fi interface found")
@@ -258,35 +247,115 @@ class NetworkManager:
             channel = self.find_best_channel(band)
             config = {**config, "channel": channel}
 
-        args = [
-            "nmcli",
-            "device",
-            "wifi",
-            "hotspot",
-            "ifname",
-            wifi_interface,
-            "con-name",
-            "STP-Velox-AP",
-            "ssid",
-            config["ssid"],
-        ]
         password = config.get("password") or ""
-        if password:
-            args.extend(["password", password])
+        encryption = config.get("encryptionType")
+        if encryption == "open" or not password:
+            config = {**config, "encryptionType": "open"}
+            self._create_access_point_profile(wifi_interface, config, band, None)
+        elif encryption == "wpa3Personal":
+            try:
+                self._create_access_point_profile(wifi_interface, config, band, "sae")
+            except Exception:
+                # Not every Wi-Fi driver can host WPA3 (SAE); fall back to WPA2.
+                self._remove_access_point_profile()
+                config = {**config, "encryptionType": "wpa2Personal"}
+                self._create_access_point_profile(
+                    wifi_interface, config, band, "wpa-psk"
+                )
+        else:
+            self._create_access_point_profile(wifi_interface, config, band, "wpa-psk")
 
-        band_value = self._band_nmcli_value(band)
-        if channel > 0 and band != "bandAuto":
-            args.extend(["band", band_value, "channel", str(channel)])
-        elif band != "bandAuto":
-            args.extend(["band", band_value])
-
-        self._run(args)
         self.save_access_point_config(config)
         self._persist_network_mode("access_point")
         return config
 
+    def _remove_access_point_profile(self) -> None:
+        self._run(["nmcli", "connection", "down", AP_CONNECTION_NAME], check=False)
+        self._run(["nmcli", "connection", "delete", AP_CONNECTION_NAME], check=False)
+
+    def _create_access_point_profile(
+        self,
+        wifi_interface: str,
+        config: dict[str, Any],
+        band: str,
+        key_mgmt: str | None,
+    ) -> None:
+        """Create and start the hotspot profile.
+
+        Not `nmcli device wifi hotspot`: its profile leaves protected management
+        frames (PMF) at the default, which the Pi's Wi-Fi driver rejects ("key
+        setting validation failed"), so the hotspot never came up. PMF is
+        disabled for WPA2 and required for WPA3.
+
+        `maxClients` cannot be applied: NetworkManager has no such option.
+        """
+        if band == "bandAuto":
+            band = self.find_best_wifi_band()
+        channel = int(config.get("channel") or 0)
+
+        args = [
+            "nmcli",
+            "connection",
+            "add",
+            "type",
+            "wifi",
+            "ifname",
+            wifi_interface,
+            "con-name",
+            AP_CONNECTION_NAME,
+            "autoconnect",
+            "no",
+            "ssid",
+            config["ssid"],
+            "802-11-wireless.mode",
+            "ap",
+            "802-11-wireless.band",
+            self._band_nmcli_value(band),
+            "ipv4.method",
+            "shared",
+            "ipv6.method",
+            "ignore",
+        ]
+        if channel > 0:
+            args.extend(["802-11-wireless.channel", str(channel)])
+        if config.get("hidden"):
+            args.extend(["802-11-wireless.hidden", "yes"])
+        if key_mgmt is not None:
+            args.extend(
+                [
+                    "wifi-sec.key-mgmt",
+                    key_mgmt,
+                    "wifi-sec.psk",
+                    config["password"],
+                    "wifi-sec.proto",
+                    "rsn",
+                    "wifi-sec.pairwise",
+                    "ccmp",
+                    "wifi-sec.group",
+                    "ccmp",
+                    "wifi-sec.pmf",
+                    "required" if key_mgmt == "sae" else "disable",
+                ]
+            )
+
+        try:
+            self._run(args)
+            self._run(["nmcli", "connection", "up", AP_CONNECTION_NAME])
+        except Exception:
+            self._remove_access_point_profile()
+            raise
+
     def stop_access_point(self) -> None:
+        profiles = {p["name"]: p for p in self._wifi_profiles()}
         for connection_name in self._access_point_connection_names():
+            profile = profiles.get(connection_name)
+            if (
+                connection_name != AP_CONNECTION_NAME
+                and profile is not None
+                and profile["mode"] != "ap"
+            ):
+                # A normal Wi-Fi profile that shares the hotspot's SSID.
+                continue
             self._run(["nmcli", "connection", "down", connection_name], check=False)
             self._run(["nmcli", "connection", "delete", connection_name], check=False)
         self._reset_wifi_interface()
@@ -335,6 +404,33 @@ class NetworkManager:
 
         return False
 
+    def count_access_point_clients(self) -> int:
+        """Devices currently connected to the hotspot.
+
+        Counted from the neighbour table of the hotspot interface (`iw` is not
+        installed on the robot). A device that just left can still be counted
+        for a short while until its entry expires.
+        """
+        wifi_interface = self._get_wifi_interface()
+        if wifi_interface is None:
+            return 0
+        result = self._run(
+            ["ip", "-j", "neigh", "show", "dev", wifi_interface], check=False
+        )
+        if result.returncode != 0:
+            return 0
+        try:
+            entries = json.loads(result.stdout or "[]")
+        except ValueError:
+            return 0
+        live_states = {"REACHABLE", "DELAY", "PROBE", "STALE"}
+        macs = {
+            entry["lladdr"].lower()
+            for entry in entries
+            if entry.get("lladdr") and live_states & set(entry.get("state", []))
+        }
+        return len(macs)
+
     def get_access_point_config(self) -> dict[str, Any] | None:
         return self._load_state().get("access_point_config")
 
@@ -348,11 +444,11 @@ class NetworkManager:
         if saved_config is not None:
             return saved_config
         return {
-            "ssid": "STP-Velox-Robot",
-            "password": "Robot123!",
+            "ssid": "RaccoonOS",
+            "password": "raccoonos",
             "band": self.find_best_wifi_band(),
             "channel": 0,
-            "encryptionType": "wpa3Personal",
+            "encryptionType": "wpa2Personal",
             "hidden": False,
             "maxClients": 8,
         }
@@ -362,8 +458,8 @@ class NetworkManager:
         saved_config = self.get_access_point_config()
         if saved_config and saved_config.get("ssid"):
             names.append(str(saved_config["ssid"]))
-        if "STP-Velox-AP" not in names:
-            names.append("STP-Velox-AP")
+        if AP_CONNECTION_NAME not in names:
+            names.append(AP_CONNECTION_NAME)
         return names
 
     def find_best_wifi_band(self) -> str:
@@ -436,28 +532,40 @@ class NetworkManager:
         )
 
     def get_saved_networks(self) -> list[dict[str, Any]]:
-        return list(self._load_state().get("saved_networks", []))
+        """Saved Wi-Fi networks, read live from NetworkManager's profiles."""
+        networks: dict[str, dict[str, Any]] = {}
+        for profile in self._wifi_profiles():
+            if profile["mode"] == "ap" or not profile["ssid"]:
+                continue
+            ssid = profile["ssid"]
+            encryption = self._encryption_from_key_mgmt(profile["key_mgmt"])
+            if encryption.endswith("Enterprise"):
+                credentials: dict[str, Any] = {
+                    "credentialsType": "enterprise",
+                    "username": "",
+                    "password": "",
+                }
+            else:
+                credentials = {"credentialsType": "personal", "password": ""}
+            network = {
+                "ssid": ssid,
+                "encryptionType": encryption,
+                "credentials": credentials,
+                "lastConnected": datetime.fromtimestamp(
+                    profile["timestamp"], tz=timezone.utc
+                ).isoformat(),
+                "autoConnect": profile["autoconnect"],
+            }
+            existing = networks.get(ssid)
+            if existing is None or network["lastConnected"] > existing["lastConnected"]:
+                networks[ssid] = network
+        return list(networks.values())
 
     def save_network(self, network: dict[str, Any]) -> None:
-        state = self._load_state()
-        networks = [
-            item
-            for item in state.get("saved_networks", [])
-            if item.get("ssid") != network.get("ssid")
-        ]
-        networks.append(network)
-        state["saved_networks"] = networks
-        self._save_state(state)
+        """No-op: NetworkManager owns saved networks; connecting creates them."""
 
     def remove_saved_network(self, ssid: str) -> None:
-        normalized = self._normalize_ssid(ssid)
-        state = self._load_state()
-        state["saved_networks"] = [
-            item
-            for item in state.get("saved_networks", [])
-            if self._normalize_ssid(item.get("ssid", "")) != normalized
-        ]
-        self._save_state(state)
+        self._delete_wifi_profiles(ssid)
 
     def get_saved_network(self, ssid: str) -> dict[str, Any] | None:
         normalized = self._normalize_ssid(ssid)
@@ -476,12 +584,58 @@ class NetworkManager:
         self._persist_network_mode("lan_only")
 
     def disable_lan_only_mode(self) -> None:
-        self._run(["nmcli", "radio", "wifi", "on"])
-        self._persist_network_mode("client")
+        self.set_network_mode("client")
 
     def is_lan_only_mode_active(self) -> bool:
+        if self.get_network_mode() != "lan_only":
+            return False
         result = self._run(["nmcli", "radio", "wifi"], check=False)
         return result.returncode == 0 and "disabled" in result.stdout.lower()
+
+    def lan_only_failsafe_tick(self, max_missing_ticks: int = 3) -> bool:
+        """Turn Wi-Fi back on if LAN-only mode lost its cable.
+
+        Without it the robot would be unreachable. Returns True if it acted.
+        """
+        if self.get_network_mode() != "lan_only":
+            self._lan_cable_missing_ticks = 0
+            return False
+        if self.is_ethernet_cable_connected():
+            self._lan_cable_missing_ticks = 0
+            return False
+        self._lan_cable_missing_ticks += 1
+        if self._lan_cable_missing_ticks < max_missing_ticks:
+            return False
+        self._lan_cable_missing_ticks = 0
+        self.disable_lan_only_mode()
+        return True
+
+    def run_network_watchdog(
+        self,
+        stop: threading.Event,
+        retry_restore: bool = False,
+        interval: float = 10.0,
+        max_restore_attempts: int = 6,
+    ) -> None:
+        """Background loop: retry a failed boot restore, then guard LAN-only."""
+        attempts = 0
+        while not stop.wait(interval):
+            try:
+                if retry_restore:
+                    attempts += 1
+                    try:
+                        self.restore_persisted_network_mode()
+                        retry_restore = False
+                    except Exception as exc:
+                        print(f"Retrying network restore ({attempts}): {exc}")
+                        if attempts >= max_restore_attempts:
+                            retry_restore = False
+                            if self.get_network_mode() == "lan_only":
+                                self.disable_lan_only_mode()
+                    continue
+                self.lan_only_failsafe_tick()
+            except Exception as exc:
+                print(f"Network watchdog error: {exc}")
 
     def is_ethernet_cable_connected(self) -> bool:
         interfaces = self._network_interfaces()
@@ -641,14 +795,15 @@ class NetworkManager:
         self._run(["nmcli", "device", "wifi", "rescan"], check=False)
 
     def _delete_existing_connection(self, ssid: str) -> None:
-        direct = self._run(["nmcli", "connection", "delete", ssid], check=False)
-        if direct.returncode == 0:
-            return
+        self._delete_wifi_profiles(ssid)
 
-        list_result = self._run(
+    def _wifi_profiles(self) -> list[dict[str, Any]]:
+        """All Wi-Fi connection profiles known to NetworkManager."""
+        listing = self._run(
             ["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"], check=False
         )
-        for line in list_result.stdout.splitlines():
+        profiles: list[dict[str, Any]] = []
+        for line in listing.stdout.splitlines():
             parts = line.split(":")
             if len(parts) < 2:
                 continue
@@ -657,34 +812,95 @@ class NetworkManager:
                 "wireless" not in connection_type and "wifi" not in connection_type
             ):
                 continue
-            show_result = self._run(
+            show = self._run(
                 [
                     "nmcli",
-                    "-t",
-                    "-f",
-                    "802-11-wireless.ssid",
+                    "-g",
+                    "connection.id,connection.autoconnect,connection.timestamp,"
+                    "802-11-wireless.ssid,802-11-wireless.mode,"
+                    "802-11-wireless-security.key-mgmt",
                     "connection",
                     "show",
+                    "uuid",
                     uuid,
                 ],
                 check=False,
             )
-            if show_result.stdout.split(":")[-1].strip() == ssid:
-                self._run(["nmcli", "connection", "delete", "uuid", uuid], check=False)
+            if show.returncode != 0:
+                continue
+            values = (show.stdout.split("\n") + [""] * 6)[:6]
+            name, autoconnect, timestamp, ssid, mode, key_mgmt = (
+                v.strip() for v in values
+            )
+            try:
+                timestamp_value = int(timestamp)
+            except ValueError:
+                timestamp_value = 0
+            profiles.append(
+                {
+                    "uuid": uuid,
+                    "name": name,
+                    "ssid": ssid or name,
+                    "autoconnect": autoconnect.lower() != "no",
+                    "timestamp": timestamp_value,
+                    "mode": mode,
+                    "key_mgmt": key_mgmt,
+                }
+            )
+        return profiles
+
+    def _find_wifi_profile(self, ssid: str) -> dict[str, Any] | None:
+        normalized = self._normalize_ssid(ssid)
+        for profile in self._wifi_profiles():
+            if profile["mode"] == "ap":
+                continue
+            if profile["ssid"] in {ssid, normalized} or profile["name"] == ssid:
+                return profile
+        return None
+
+    def _delete_wifi_profiles(self, ssid: str) -> None:
+        """Delete every Wi-Fi profile for this SSID from NetworkManager."""
+        normalized = self._normalize_ssid(ssid)
+        for profile in self._wifi_profiles():
+            if profile["mode"] == "ap":
+                continue  # never delete the hotspot just because the SSID matches
+            if profile["ssid"] in {ssid, normalized} or profile["name"] == ssid:
+                self._run(
+                    ["nmcli", "connection", "delete", "uuid", profile["uuid"]],
+                    check=False,
+                )
+
+    @staticmethod
+    def _lacks_secrets(encryption_type: str, credentials: dict[str, Any]) -> bool:
+        if encryption_type in {"wpa2Personal", "wpa3Personal"}:
+            return not credentials.get("password")
+        if encryption_type in {"wpa2Enterprise", "wpa3Enterprise"}:
+            return not (credentials.get("username") and credentials.get("password"))
+        return False
+
+    @staticmethod
+    def _encryption_from_key_mgmt(key_mgmt: str) -> str:
+        if key_mgmt == "wpa-eap":
+            return "wpa2Enterprise"
+        if key_mgmt == "sae":
+            return "wpa3Personal"
+        if key_mgmt in {"", "none"}:
+            return "open"
+        return "wpa2Personal"
 
     def _load_state(self) -> dict[str, Any]:
         if not self.state_path.exists():
             return {
                 "network_mode": "client",
-                "saved_networks": [],
                 "access_point_config": None,
             }
         try:
-            return json.loads(self.state_path.read_text())
+            state = json.loads(self.state_path.read_text())
+            state.pop("saved_networks", None)  # legacy: NetworkManager owns this now
+            return state
         except Exception:
             return {
                 "network_mode": "client",
-                "saved_networks": [],
                 "access_point_config": None,
             }
 

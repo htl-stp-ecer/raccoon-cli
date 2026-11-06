@@ -64,6 +64,7 @@ class AccessPointConfigPayload(BaseModel):
 class AccessPointStatusPayload(BaseModel):
     isStarted: bool
     config: AccessPointConfigPayload | None = None
+    connectedClients: int = 0
 
 
 class AccessPointChannelPayload(BaseModel):
@@ -177,9 +178,13 @@ async def stop_access_point() -> dict[str, str]:
 
 @router.get("/access-point/status", response_model=AccessPointStatusPayload)
 async def access_point_status() -> dict[str, Any]:
+    is_started = _network_manager.is_access_point_active()
     return {
-        "isStarted": _network_manager.is_access_point_active(),
+        "isStarted": is_started,
         "config": _network_manager.get_access_point_config(),
+        "connectedClients": (
+            _network_manager.count_access_point_clients() if is_started else 0
+        ),
     }
 
 
