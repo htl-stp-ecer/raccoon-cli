@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
 class NetworkManager:
-    """Thin wrapper around nmcli/ip with persisted network UI state."""
+    """Thin wrapper around nmcli/ip. Saved networks live in NetworkManager;
+    only the network mode and hotspot config are persisted locally."""
 
     def __init__(self, state_path: Path | None = None) -> None:
         self.state_path = state_path or (
@@ -78,6 +80,14 @@ class NetworkManager:
         encryption_type: str,
         credentials: dict[str, Any],
     ) -> None:
+        if self._lacks_secrets(encryption_type, credentials):
+            # Reconnect a profile NetworkManager already knows (e.g. one added
+            # with nmcli or the UI); its secrets are stored in NetworkManager.
+            profile = self._find_wifi_profile(ssid)
+            if profile is not None:
+                self._run(["nmcli", "connection", "up", "uuid", profile["uuid"]])
+                return
+
         self._delete_existing_connection(ssid)
         wifi_interface = self._get_wifi_interface()
         if wifi_interface is None:
@@ -138,35 +148,7 @@ class NetworkManager:
             raise
 
     def forget(self, ssid: str) -> None:
-        normalized = self._normalize_ssid(ssid)
-        try:
-            self._run(["nmcli", "connection", "delete", ssid])
-        except Exception:
-            result = self._run(
-                ["nmcli", "-t", "-f", "UUID", "connection", "show"], check=False
-            )
-            uuids = [
-                line.strip() for line in result.stdout.splitlines() if line.strip()
-            ]
-            for uuid in uuids:
-                show_result = self._run(
-                    [
-                        "nmcli",
-                        "-t",
-                        "-f",
-                        "802-11-wireless.ssid",
-                        "connection",
-                        "show",
-                        uuid,
-                    ],
-                    check=False,
-                )
-                if show_result.stdout.strip() == normalized:
-                    self._run(
-                        ["nmcli", "connection", "delete", "uuid", uuid], check=False
-                    )
-                    break
-        self.remove_saved_network(normalized)
+        self._delete_wifi_profiles(ssid)
 
     def get_device_info(self) -> dict[str, Any]:
         interfaces = self._network_interfaces()
@@ -436,28 +418,40 @@ class NetworkManager:
         )
 
     def get_saved_networks(self) -> list[dict[str, Any]]:
-        return list(self._load_state().get("saved_networks", []))
+        """Saved Wi-Fi networks, read live from NetworkManager's profiles."""
+        networks: dict[str, dict[str, Any]] = {}
+        for profile in self._wifi_profiles():
+            if profile["mode"] == "ap" or not profile["ssid"]:
+                continue
+            ssid = profile["ssid"]
+            encryption = self._encryption_from_key_mgmt(profile["key_mgmt"])
+            if encryption.endswith("Enterprise"):
+                credentials: dict[str, Any] = {
+                    "credentialsType": "enterprise",
+                    "username": "",
+                    "password": "",
+                }
+            else:
+                credentials = {"credentialsType": "personal", "password": ""}
+            network = {
+                "ssid": ssid,
+                "encryptionType": encryption,
+                "credentials": credentials,
+                "lastConnected": datetime.fromtimestamp(
+                    profile["timestamp"], tz=timezone.utc
+                ).isoformat(),
+                "autoConnect": profile["autoconnect"],
+            }
+            existing = networks.get(ssid)
+            if existing is None or network["lastConnected"] > existing["lastConnected"]:
+                networks[ssid] = network
+        return list(networks.values())
 
     def save_network(self, network: dict[str, Any]) -> None:
-        state = self._load_state()
-        networks = [
-            item
-            for item in state.get("saved_networks", [])
-            if item.get("ssid") != network.get("ssid")
-        ]
-        networks.append(network)
-        state["saved_networks"] = networks
-        self._save_state(state)
+        """No-op: NetworkManager owns saved networks; connecting creates them."""
 
     def remove_saved_network(self, ssid: str) -> None:
-        normalized = self._normalize_ssid(ssid)
-        state = self._load_state()
-        state["saved_networks"] = [
-            item
-            for item in state.get("saved_networks", [])
-            if self._normalize_ssid(item.get("ssid", "")) != normalized
-        ]
-        self._save_state(state)
+        self._delete_wifi_profiles(ssid)
 
     def get_saved_network(self, ssid: str) -> dict[str, Any] | None:
         normalized = self._normalize_ssid(ssid)
@@ -641,14 +635,15 @@ class NetworkManager:
         self._run(["nmcli", "device", "wifi", "rescan"], check=False)
 
     def _delete_existing_connection(self, ssid: str) -> None:
-        direct = self._run(["nmcli", "connection", "delete", ssid], check=False)
-        if direct.returncode == 0:
-            return
+        self._delete_wifi_profiles(ssid)
 
-        list_result = self._run(
+    def _wifi_profiles(self) -> list[dict[str, Any]]:
+        """All Wi-Fi connection profiles known to NetworkManager."""
+        listing = self._run(
             ["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"], check=False
         )
-        for line in list_result.stdout.splitlines():
+        profiles: list[dict[str, Any]] = []
+        for line in listing.stdout.splitlines():
             parts = line.split(":")
             if len(parts) < 2:
                 continue
@@ -657,34 +652,91 @@ class NetworkManager:
                 "wireless" not in connection_type and "wifi" not in connection_type
             ):
                 continue
-            show_result = self._run(
+            show = self._run(
                 [
                     "nmcli",
-                    "-t",
-                    "-f",
-                    "802-11-wireless.ssid",
+                    "-g",
+                    "connection.id,connection.autoconnect,connection.timestamp,"
+                    "802-11-wireless.ssid,802-11-wireless.mode,"
+                    "802-11-wireless-security.key-mgmt",
                     "connection",
                     "show",
+                    "uuid",
                     uuid,
                 ],
                 check=False,
             )
-            if show_result.stdout.split(":")[-1].strip() == ssid:
-                self._run(["nmcli", "connection", "delete", "uuid", uuid], check=False)
+            if show.returncode != 0:
+                continue
+            values = (show.stdout.split("\n") + [""] * 6)[:6]
+            name, autoconnect, timestamp, ssid, mode, key_mgmt = (
+                v.strip() for v in values
+            )
+            try:
+                timestamp_value = int(timestamp)
+            except ValueError:
+                timestamp_value = 0
+            profiles.append(
+                {
+                    "uuid": uuid,
+                    "name": name,
+                    "ssid": ssid or name,
+                    "autoconnect": autoconnect.lower() != "no",
+                    "timestamp": timestamp_value,
+                    "mode": mode,
+                    "key_mgmt": key_mgmt,
+                }
+            )
+        return profiles
+
+    def _find_wifi_profile(self, ssid: str) -> dict[str, Any] | None:
+        normalized = self._normalize_ssid(ssid)
+        for profile in self._wifi_profiles():
+            if profile["ssid"] in {ssid, normalized} or profile["name"] == ssid:
+                return profile
+        return None
+
+    def _delete_wifi_profiles(self, ssid: str) -> None:
+        """Delete every Wi-Fi profile for this SSID from NetworkManager."""
+        normalized = self._normalize_ssid(ssid)
+        for profile in self._wifi_profiles():
+            if profile["ssid"] in {ssid, normalized} or profile["name"] == ssid:
+                self._run(
+                    ["nmcli", "connection", "delete", "uuid", profile["uuid"]],
+                    check=False,
+                )
+
+    @staticmethod
+    def _lacks_secrets(encryption_type: str, credentials: dict[str, Any]) -> bool:
+        if encryption_type in {"wpa2Personal", "wpa3Personal"}:
+            return not credentials.get("password")
+        if encryption_type in {"wpa2Enterprise", "wpa3Enterprise"}:
+            return not (credentials.get("username") and credentials.get("password"))
+        return False
+
+    @staticmethod
+    def _encryption_from_key_mgmt(key_mgmt: str) -> str:
+        if key_mgmt == "wpa-eap":
+            return "wpa2Enterprise"
+        if key_mgmt == "sae":
+            return "wpa3Personal"
+        if key_mgmt in {"", "none"}:
+            return "open"
+        return "wpa2Personal"
 
     def _load_state(self) -> dict[str, Any]:
         if not self.state_path.exists():
             return {
                 "network_mode": "client",
-                "saved_networks": [],
                 "access_point_config": None,
             }
         try:
-            return json.loads(self.state_path.read_text())
+            state = json.loads(self.state_path.read_text())
+            state.pop("saved_networks", None)  # legacy: NetworkManager owns this now
+            return state
         except Exception:
             return {
                 "network_mode": "client",
-                "saved_networks": [],
                 "access_point_config": None,
             }
 

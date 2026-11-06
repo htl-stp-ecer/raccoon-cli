@@ -264,7 +264,6 @@ def test_network_manager_restore_restarts_saved_hotspot_config(
     state_path.write_text("""
 {
   "network_mode": "access_point",
-  "saved_networks": [],
   "access_point_config": {
     "ssid": "RobotNet",
     "password": "secret123",
