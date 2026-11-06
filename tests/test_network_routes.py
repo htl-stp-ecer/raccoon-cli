@@ -718,3 +718,26 @@ def test_lan_only_failsafe_ignores_connected_cable(tmp_path: Path, monkeypatch):
     for _ in range(5):
         assert manager.lan_only_failsafe_tick() is False
     assert manager.get_network_mode() == "lan_only"
+
+
+def test_count_access_point_clients_counts_live_neighbours(
+    tmp_path: Path, monkeypatch
+):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
+    neighbours = (
+        '[{"dst":"10.42.0.10","lladdr":"AA:AA:AA:AA:AA:01","state":["REACHABLE"]},'
+        '{"dst":"fe80::1","lladdr":"aa:aa:aa:aa:aa:01","state":["STALE"]},'
+        '{"dst":"10.42.0.11","lladdr":"aa:aa:aa:aa:aa:02","state":["STALE"]},'
+        '{"dst":"10.42.0.12","lladdr":"aa:aa:aa:aa:aa:03","state":["FAILED"]},'
+        '{"dst":"10.42.0.13","state":["INCOMPLETE"]}]'
+    )
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: CompletedProcess(
+            command, 0, stdout=neighbours, stderr=""
+        ),
+    )
+
+    assert manager.count_access_point_clients() == 2

@@ -404,6 +404,33 @@ class NetworkManager:
 
         return False
 
+    def count_access_point_clients(self) -> int:
+        """Devices currently connected to the hotspot.
+
+        Counted from the neighbour table of the hotspot interface (`iw` is not
+        installed on the robot). A device that just left can still be counted
+        for a short while until its entry expires.
+        """
+        wifi_interface = self._get_wifi_interface()
+        if wifi_interface is None:
+            return 0
+        result = self._run(
+            ["ip", "-j", "neigh", "show", "dev", wifi_interface], check=False
+        )
+        if result.returncode != 0:
+            return 0
+        try:
+            entries = json.loads(result.stdout or "[]")
+        except ValueError:
+            return 0
+        live_states = {"REACHABLE", "DELAY", "PROBE", "STALE"}
+        macs = {
+            entry["lladdr"].lower()
+            for entry in entries
+            if entry.get("lladdr") and live_states & set(entry.get("state", []))
+        }
+        return len(macs)
+
     def get_access_point_config(self) -> dict[str, Any] | None:
         return self._load_state().get("access_point_config")
 
