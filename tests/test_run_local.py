@@ -244,3 +244,56 @@ def test_single_program_guard_kills_stale_robot_programs(click_ctx, fake_project
         _ensure_single_active_program(fake_project, console)
 
     assert mock_kill.call_args_list == [call(111), call(222)]
+
+
+class _StderrPopen(_StreamPopen):
+    """_StreamPopen with a real stderr byte stream."""
+
+    def __init__(self, returncode, stderr_bytes):
+        super().__init__(returncode)
+        import io
+
+        self.stderr = io.BufferedReader(io.BytesIO(stderr_bytes))
+
+
+def _make_log(project, name="20260707T130000Z"):
+    run_dir = project / ".raccoon" / "runs" / name
+    run_dir.mkdir(parents=True)
+    log_path = run_dir / "libstp.jsonl"
+    log_path.write_text("")
+    return log_path
+
+
+def test_streaming_stderr_full_to_stdout_and_stderr_log(fake_project, capsys):
+    """On a crash the whole stderr is relayed unabridged and saved as stderr.log."""
+    tb = "\n".join(["Traceback (most recent call last):"]
+                   + [f'  File "x.py", line {i}, in f' for i in range(500)]
+                   + ["ImportError: boom"])
+    log_path = _make_log(fake_project)
+    fake = _StderrPopen(1, tb.encode())
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake):
+        rc = _run_local_streaming_jsonl(["x"], fake_project, {}, MagicMock(), log_path=log_path)
+
+    assert rc == 1
+    assert tb in capsys.readouterr().out
+    assert (log_path.parent / "stderr.log").read_text().strip() == tb
+    assert log_path.read_text() == ""  # JSONL stays untouched
+
+
+def test_streaming_no_stderr_no_file(fake_project, capsys):
+    log_path = _make_log(fake_project)
+    fake = _StderrPopen(0, b"")
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake):
+        _run_local_streaming_jsonl(["x"], fake_project, {}, MagicMock(), log_path=log_path)
+
+    assert not (log_path.parent / "stderr.log").exists()
+
+
+def test_streaming_stderr_on_success_saved_but_not_printed(fake_project, capsys):
+    log_path = _make_log(fake_project)
+    fake = _StderrPopen(0, b"DeprecationWarning: x")
+    with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake):
+        _run_local_streaming_jsonl(["x"], fake_project, {}, MagicMock(), log_path=log_path)
+
+    assert "DeprecationWarning" not in capsys.readouterr().out
+    assert (log_path.parent / "stderr.log").exists()

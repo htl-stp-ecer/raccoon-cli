@@ -470,21 +470,17 @@ def _run_local_with_tui(
 
     The child writes its run log to ``<run_dir>/libstp.jsonl`` with full detail
     and only warn/error to stdout; we send stdout to /dev/null and render the
-    JSONL in a live TUI instead. stderr is captured to a temp file (a pipe could
-    deadlock if a traceback fills the buffer) and its tail is shown on a non-zero
-    exit.
+    JSONL in a live TUI instead. stderr is buffered in RAM, written once to
+    ``<run_dir>/stderr.log`` after the run, and printed in full on a non-zero exit.
 
     When *log_path* is given (the exact ``<run_dir>/libstp.jsonl`` this run will
     write), the streamer tails it directly — race-free, no newest-file discovery.
     """
-    import tempfile
-
     from raccoon_cli.logs.live_stream import stream_run_logs
 
     runs_dir = project_root / ".raccoon" / "runs"
     title = project_root.name
 
-    err_file = tempfile.TemporaryFile(mode="w+b")
     started_at = time.monotonic()
     with _active_program_lock():
         _ensure_single_active_program(project_root, console)
@@ -493,7 +489,7 @@ def _run_local_with_tui(
             cwd=project_root,
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=err_file,
+            stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             start_new_session=(os.name == "posix"),
         )
@@ -502,6 +498,7 @@ def _run_local_with_tui(
             project_root=project_root,
             cmd_parts=cmd_parts,
         )
+    stderr_capture = _StderrCapture(getattr(proc, "stderr", None))
 
     original_sigint, original_sigterm = _install_termination_handlers()
     returncode: int | None = None
@@ -531,41 +528,72 @@ def _run_local_with_tui(
             "(use [cyan]--raw[/cyan] to see the program's stdout directly).[/dim]"
         )
 
-    # Surface a crash: a Python traceback goes to stderr, which the JSONL log and
-    # live view never see. Persist it into the run's libstp.jsonl as ERROR records
-    # (so it survives in `raccoon logs`) and echo a red tail panel for immediate
-    # feedback here — the live view has already closed.
-    if returncode not in (0, None):
-        err = _read_captured_stderr(err_file)
-        if err:
-            from raccoon_cli.logs.crash import append_crash_records, build_crash_records
-
-            records = build_crash_records(
-                err, elapsed=time.monotonic() - started_at, pid=proc.pid
-            )
-            if log_path is not None:
-                append_crash_records(log_path, records)
-            tail = "\n".join(err.splitlines()[-30:])
-            console.print(
-                Panel(
-                    Text(tail, style="red"),
-                    title="stderr (tail)",
-                    border_style="red",
-                )
-            )
-    with suppress(Exception):
-        err_file.close()
+    # stderr (a Python traceback, import errors, ...) never enters the JSONL log.
+    # It was buffered in RAM during the run; persist it once as stderr.log and,
+    # on a failed run, print it in full.
+    err = stderr_capture.collect()
+    _write_stderr_log(log_path, err)
+    if err and returncode not in (0, None):
+        console.print(
+            Panel(Text(err, style="red"), title="stderr", border_style="red")
+        )
 
     return returncode if returncode is not None else 0
 
 
-def _read_captured_stderr(err_file) -> str:
-    """Read back the child's captured stderr from its temp file (empty on error)."""
+STDERR_LOG_NAME = "stderr.log"
+
+
+class _StderrCapture:
+    """Drain a child's stderr pipe into RAM so nothing is written during the run.
+
+    A daemon thread keeps the pipe empty (a full pipe would block the child);
+    the chunks stay in memory until :meth:`collect` is called after the child
+    exited. ``stream`` may be ``None`` (e.g. a test double without a pipe).
+    """
+
+    def __init__(self, stream) -> None:
+        import threading
+
+        self._chunks: list[bytes] = []
+        self._stream = stream
+        self._thread = None
+        if stream is not None:
+            self._thread = threading.Thread(target=self._drain, daemon=True)
+            self._thread.start()
+
+    def _drain(self) -> None:
+        reader = getattr(self._stream, "read1", None) or self._stream.read
+        try:
+            while True:
+                chunk = reader(65536)
+                if not chunk:
+                    break
+                self._chunks.append(chunk)
+        except Exception:
+            pass
+
+    def collect(self) -> str:
+        """Wait (briefly) for the pipe to hit EOF and return all stderr text."""
+        if self._thread is not None:
+            # A grandchild may keep the pipe open; don't hang on it.
+            self._thread.join(timeout=2.0)
+        with suppress(Exception):
+            if self._stream is not None:
+                self._stream.close()
+        return b"".join(self._chunks).decode("utf-8", errors="replace").strip()
+
+
+def _write_stderr_log(log_path: Path | None, err: str) -> None:
+    """Write *err* to ``<run_dir>/stderr.log`` (once, only when non-empty)."""
+    if not err or log_path is None:
+        return
     try:
-        err_file.seek(0)
-        return err_file.read().decode("utf-8", errors="replace").strip()
-    except Exception:
-        return ""
+        run_dir = Path(log_path).parent
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / STDERR_LOG_NAME).write_text(err + "\n", encoding="utf-8")
+    except OSError:
+        pass  # persisting stderr must never mask the original crash
 
 
 def _run_local_streaming_jsonl(
@@ -583,11 +611,9 @@ def _run_local_streaming_jsonl(
     write each raw JSON line to stdout, which the server relays over the output
     WebSocket to the laptop, where it is parsed into the live viewer. The child's
     own warn/error stdout is dropped (the JSONL already carries those levels);
-    stderr is captured and its tail echoed on a crash so a traceback still
-    reaches the laptop.
+    stderr is buffered in RAM, written to ``stderr.log`` after the run and, on a
+    crash, echoed in full as plain text so the traceback still reaches the laptop.
     """
-    import tempfile
-
     from raccoon_cli.logs.live_stream import (
         DEFAULT_STREAM_LEVEL,
         follow_lines,
@@ -601,7 +627,6 @@ def _run_local_streaming_jsonl(
     # overrides the floor (e.g. "TRACE" to stream everything, "INFO" for even less).
     min_rank = level_rank(os.environ.get("RACCOON_STREAM_LEVEL", DEFAULT_STREAM_LEVEL))
 
-    err_file = tempfile.TemporaryFile(mode="w+b")
     started_at = time.monotonic()
     with _active_program_lock():
         _ensure_single_active_program(project_root, console)
@@ -610,7 +635,7 @@ def _run_local_streaming_jsonl(
             cwd=project_root,
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=err_file,
+            stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             start_new_session=(os.name == "posix"),
         )
@@ -619,6 +644,7 @@ def _run_local_streaming_jsonl(
             project_root=project_root,
             cmd_parts=cmd_parts,
         )
+    stderr_capture = _StderrCapture(getattr(proc, "stderr", None))
 
     original_sigint, original_sigterm = _install_termination_handlers()
     returncode: int | None = None
@@ -644,26 +670,14 @@ def _run_local_streaming_jsonl(
         with _active_program_lock():
             _clear_active_program_state(proc.pid)
 
-    # Surface a crash: a Python traceback goes to stderr, which is invisible to
-    # the JSONL stream. Convert it to ERROR JSONL records and (a) persist them in
-    # the run's libstp.jsonl and (b) emit them on stdout so the server relays them
-    # over the WebSocket and the laptop's viewer *parses* and renders them —
-    # earlier this echoed raw non-JSON tail lines, which the laptop silently drops.
-    if returncode not in (0, None):
-        err = _read_captured_stderr(err_file)
-        if err:
-            from raccoon_cli.logs.crash import append_crash_records, build_crash_records
-
-            records = build_crash_records(
-                err, elapsed=time.monotonic() - started_at, pid=proc.pid
-            )
-            if log_path is not None:
-                append_crash_records(log_path, records)
-            for line in records:
-                out.write(line + "\n")
-            out.flush()
-    with suppress(Exception):
-        err_file.close()
+    # stderr never enters the JSONL stream. Persist it once as stderr.log on the
+    # Pi and, on a failed run, send it in full as plain text: the server relays
+    # stdout over the WebSocket and the laptop prints non-JSON lines as-is.
+    err = stderr_capture.collect()
+    _write_stderr_log(log_path, err)
+    if err and returncode not in (0, None):
+        out.write(err + "\n")
+        out.flush()
 
     return returncode if returncode is not None else 0
 
