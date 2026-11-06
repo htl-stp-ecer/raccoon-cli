@@ -1,5 +1,6 @@
 """FastAPI application for the Raccoon server."""
 
+import threading
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -56,12 +57,26 @@ async def lifespan(app: FastAPI):
 
     contract_status.refresh_server_start()
 
+    network_manager = NetworkManager()
+    restored = True
     try:
-        NetworkManager().restore_persisted_network_mode()
+        network_manager.restore_persisted_network_mode()
     except Exception as exc:
+        restored = False
         print(f"Failed to restore persisted network mode: {exc}")
 
+    # Retries a failed restore (Wi-Fi/cable may not be ready at boot) and turns
+    # Wi-Fi back on if LAN-only mode loses its cable.
+    watchdog_stop = threading.Event()
+    threading.Thread(
+        target=network_manager.run_network_watchdog,
+        args=(watchdog_stop, not restored),
+        daemon=True,
+    ).start()
+
     yield
+
+    watchdog_stop.set()
 
     print("Raccoon Server shutting down...")
 

@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+AP_CONNECTION_NAME = "STP-Velox-AP"
 
 
 class NetworkManager:
@@ -18,6 +22,7 @@ class NetworkManager:
         self.state_path = state_path or (
             Path.home() / ".raccoon" / "network_state.json"
         )
+        self._lan_cable_missing_ticks = 0
 
     def scan_networks(self) -> list[dict[str, Any]]:
         self._ensure_wifi_enabled()
@@ -230,6 +235,8 @@ class NetworkManager:
 
     def start_access_point(self, config: dict[str, Any]) -> dict[str, Any]:
         self.stop_access_point()
+        # LAN-only mode switches the radio off; the hotspot needs it on.
+        self._ensure_wifi_enabled()
         wifi_interface = self._get_wifi_interface()
         if wifi_interface is None:
             raise RuntimeError("No Wi-Fi interface found")
@@ -248,7 +255,7 @@ class NetworkManager:
             "ifname",
             wifi_interface,
             "con-name",
-            "STP-Velox-AP",
+            AP_CONNECTION_NAME,
             "ssid",
             config["ssid"],
         ]
@@ -263,12 +270,65 @@ class NetworkManager:
             args.extend(["band", band_value])
 
         self._run(args)
+        config = self._apply_access_point_options(config)
         self.save_access_point_config(config)
         self._persist_network_mode("access_point")
         return config
 
+    def _apply_access_point_options(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Apply the settings `nmcli device wifi hotspot` has no arguments for.
+
+        `maxClients` cannot be applied: NetworkManager has no such option.
+        """
+        name = AP_CONNECTION_NAME
+        encryption = config.get("encryptionType")
+        hidden = bool(config.get("hidden"))
+        has_password = bool(config.get("password"))
+
+        if encryption == "open" or not has_password:
+            # nmcli invents a random password when none is given; remove it.
+            options = ["remove", "802-11-wireless-security"]
+            if hidden:
+                options += ["802-11-wireless.hidden", "yes"]
+            self._run(["nmcli", "connection", "modify", name, *options])
+            self._run(["nmcli", "connection", "up", name])
+            return {**config, "encryptionType": "open"}
+
+        wants_wpa3 = encryption == "wpa3Personal"
+        options: list[str] = []
+        if hidden:
+            options += ["802-11-wireless.hidden", "yes"]
+        if wants_wpa3:
+            options += ["802-11-wireless-security.key-mgmt", "sae"]
+        if not options:
+            return config
+
+        try:
+            self._run(["nmcli", "connection", "modify", name, *options])
+            self._run(["nmcli", "connection", "up", name])
+        except Exception:
+            if not wants_wpa3:
+                raise
+            # Not every Wi-Fi driver can host WPA3 (SAE); fall back to WPA2.
+            fallback = ["802-11-wireless-security.key-mgmt", "wpa-psk"]
+            if hidden:
+                fallback += ["802-11-wireless.hidden", "yes"]
+            self._run(["nmcli", "connection", "modify", name, *fallback])
+            self._run(["nmcli", "connection", "up", name])
+            return {**config, "encryptionType": "wpa2Personal"}
+        return config
+
     def stop_access_point(self) -> None:
+        profiles = {p["name"]: p for p in self._wifi_profiles()}
         for connection_name in self._access_point_connection_names():
+            profile = profiles.get(connection_name)
+            if (
+                connection_name != AP_CONNECTION_NAME
+                and profile is not None
+                and profile["mode"] != "ap"
+            ):
+                # A normal Wi-Fi profile that shares the hotspot's SSID.
+                continue
             self._run(["nmcli", "connection", "down", connection_name], check=False)
             self._run(["nmcli", "connection", "delete", connection_name], check=False)
         self._reset_wifi_interface()
@@ -344,8 +404,8 @@ class NetworkManager:
         saved_config = self.get_access_point_config()
         if saved_config and saved_config.get("ssid"):
             names.append(str(saved_config["ssid"]))
-        if "STP-Velox-AP" not in names:
-            names.append("STP-Velox-AP")
+        if AP_CONNECTION_NAME not in names:
+            names.append(AP_CONNECTION_NAME)
         return names
 
     def find_best_wifi_band(self) -> str:
@@ -470,12 +530,58 @@ class NetworkManager:
         self._persist_network_mode("lan_only")
 
     def disable_lan_only_mode(self) -> None:
-        self._run(["nmcli", "radio", "wifi", "on"])
-        self._persist_network_mode("client")
+        self.set_network_mode("client")
 
     def is_lan_only_mode_active(self) -> bool:
+        if self.get_network_mode() != "lan_only":
+            return False
         result = self._run(["nmcli", "radio", "wifi"], check=False)
         return result.returncode == 0 and "disabled" in result.stdout.lower()
+
+    def lan_only_failsafe_tick(self, max_missing_ticks: int = 3) -> bool:
+        """Turn Wi-Fi back on if LAN-only mode lost its cable.
+
+        Without it the robot would be unreachable. Returns True if it acted.
+        """
+        if self.get_network_mode() != "lan_only":
+            self._lan_cable_missing_ticks = 0
+            return False
+        if self.is_ethernet_cable_connected():
+            self._lan_cable_missing_ticks = 0
+            return False
+        self._lan_cable_missing_ticks += 1
+        if self._lan_cable_missing_ticks < max_missing_ticks:
+            return False
+        self._lan_cable_missing_ticks = 0
+        self.disable_lan_only_mode()
+        return True
+
+    def run_network_watchdog(
+        self,
+        stop: threading.Event,
+        retry_restore: bool = False,
+        interval: float = 10.0,
+        max_restore_attempts: int = 6,
+    ) -> None:
+        """Background loop: retry a failed boot restore, then guard LAN-only."""
+        attempts = 0
+        while not stop.wait(interval):
+            try:
+                if retry_restore:
+                    attempts += 1
+                    try:
+                        self.restore_persisted_network_mode()
+                        retry_restore = False
+                    except Exception as exc:
+                        print(f"Retrying network restore ({attempts}): {exc}")
+                        if attempts >= max_restore_attempts:
+                            retry_restore = False
+                            if self.get_network_mode() == "lan_only":
+                                self.disable_lan_only_mode()
+                    continue
+                self.lan_only_failsafe_tick()
+            except Exception as exc:
+                print(f"Network watchdog error: {exc}")
 
     def is_ethernet_cable_connected(self) -> bool:
         interfaces = self._network_interfaces()
@@ -692,6 +798,8 @@ class NetworkManager:
     def _find_wifi_profile(self, ssid: str) -> dict[str, Any] | None:
         normalized = self._normalize_ssid(ssid)
         for profile in self._wifi_profiles():
+            if profile["mode"] == "ap":
+                continue
             if profile["ssid"] in {ssid, normalized} or profile["name"] == ssid:
                 return profile
         return None
@@ -700,6 +808,8 @@ class NetworkManager:
         """Delete every Wi-Fi profile for this SSID from NetworkManager."""
         normalized = self._normalize_ssid(ssid)
         for profile in self._wifi_profiles():
+            if profile["mode"] == "ap":
+                continue  # never delete the hotspot just because the SSID matches
             if profile["ssid"] in {ssid, normalized} or profile["name"] == ssid:
                 self._run(
                     ["nmcli", "connection", "delete", "uuid", profile["uuid"]],
