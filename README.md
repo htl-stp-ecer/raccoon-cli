@@ -71,10 +71,10 @@ Projects are git repos created with the project helper script; run `raccoon` fro
 
 | Command | Description |
 |:--------|:------------|
-| `raccoon missions create <Mxxx><name>` | Add a mission; the number is required, e.g. `M030Wave` (`M000`/`M999` are reserved) |
+| `raccoon missions create <[Mxxx]name>...` | Add one or more missions; the number is optional (auto: M010, M020, ... M990), e.g. `Drive M500Wave` (`M000`/`M999` are reserved) |
 | `raccoon missions list` | List the project's missions |
 | `raccoon missions rename <name\|Mxxx> <new-name>` | Rename a mission (file, class and references; the M-number is kept) |
-| `raccoon missions remove <name\|Mxxx> [--keep-file]` | Remove a mission |
+| `raccoon missions remove <name\|Mxxx>... [--keep-file]` | Remove one or more missions |
 | `raccoon missions reorder [order...]` | Reorder missions (interactive without arguments) and renumber them |
 
 ### Hardware & code generation

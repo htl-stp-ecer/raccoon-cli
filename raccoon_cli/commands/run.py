@@ -40,6 +40,8 @@ from raccoon_cli.run_recording import (
     write_run_manifest,
 )
 
+from raccoon_cli import mission_ops
+
 logger = logging.getLogger("raccoon")
 
 _NO_MISSION_RE = re.compile(r"^--no-m(\d+)$")
@@ -71,17 +73,19 @@ def _extract_run_config(
     return args, None
 
 
-def _extract_skip_missions(args: tuple) -> tuple[tuple, set[int]]:
-    """Pull --no-mN flags out of args; return (remaining_args, skip_indices).
+def _extract_skip_missions(args: tuple) -> tuple[tuple, list[str]]:
+    """Pull --no-mXXX flags out of args; return (remaining_args, prefix_digits).
 
-    For example, ``("--no-m0", "--no-m2", "foo")`` → ``(("foo",), {0, 2})``.
+    For example, ``("--no-m010", "--no-m020", "foo")`` → ``(("foo",), ["010", "020"])``.
+    The prefixes are resolved to mission positions by
+    :func:`raccoon_cli.mission_ops.resolve_skip_indices`.
     """
     remaining = []
-    skip: set[int] = set()
+    skip: list[str] = []
     for arg in args:
         m = _NO_MISSION_RE.match(arg)
         if m:
-            skip.add(int(m.group(1)))
+            skip.append(m.group(1))
         else:
             remaining.append(arg)
     return tuple(remaining), skip
@@ -1407,7 +1411,8 @@ def run_command(
     ``raccoon run dev``). The configuration provides defaults for the
     flags below; explicit CLI flags still win.
 
-    Use --no-mN (e.g. --no-m0 --no-m2) to skip missions at those order indices.
+    Use --no-mXXX (e.g. --no-m010 --no-m030) to skip the missions with those
+    number prefixes. The setup/shutdown missions cannot be skipped.
     """
     console: Console = ctx.obj["console"]
 
@@ -1419,11 +1424,8 @@ def run_command(
     profile = not no_profile
 
     # Parse --no-mN flags out of the raw args before forwarding the rest
-    args, skip_missions = _extract_skip_missions(args)
-    if skip_missions:
-        console.print(
-            f"[dim]Skipping mission(s) at order: {sorted(skip_missions)}[/dim]"
-        )
+    args, skip_prefixes = _extract_skip_missions(args)
+    skip_missions: set[int] = set()
 
     try:
         project_root = require_project()
@@ -1433,6 +1435,21 @@ def run_command(
         config = load_project_config(project_root)
         if not isinstance(config, dict):
             raise ProjectError("raccoon.project.yml must be a mapping")
+
+        # Resolve --no-mXXX to mission positions before anything is executed.
+        if skip_prefixes:
+            try:
+                skip_missions = mission_ops.resolve_skip_indices(
+                    mission_ops._missions(config), skip_prefixes
+                )
+            except mission_ops.MissionError as exc:
+                console.print(f"[red]{exc}[/red]")
+                raise SystemExit(1) from exc
+            console.print(
+                "[dim]Skipping mission(s): "
+                + ", ".join(f"M{p}" for p in skip_prefixes)
+                + "[/dim]"
+            )
 
         # Resolve run configuration: first positional arg picks one if it
         # matches a known name. CLI flags then layer on top of the config.

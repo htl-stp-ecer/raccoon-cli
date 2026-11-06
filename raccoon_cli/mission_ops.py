@@ -215,6 +215,21 @@ def remove_mission(project_root: Path, query: str, *, keep_file: bool = False) -
     )
 
 
+def remove_missions(
+    project_root: Path, queries: Sequence[str], *, keep_file: bool = False
+) -> List[RemoveResult]:
+    """Remove several missions. All queries are resolved first, so a bad or
+    duplicate query aborts before anything is changed."""
+    missions = _load_missions(project_root)
+    resolved: List[str] = []
+    for query in queries:
+        class_name = _name(missions[resolve_mission(missions, query)])
+        if class_name in resolved:
+            raise MissionError(f"'{query}' refers to '{class_name}', which is already listed.")
+        resolved.append(class_name)
+    return [remove_mission(project_root, c, keep_file=keep_file) for c in resolved]
+
+
 # ---------------------------------------------------------------------------
 # Rename
 # ---------------------------------------------------------------------------
@@ -272,6 +287,35 @@ def is_pinned_setup(entry: Any) -> bool:
 
 def is_pinned_shutdown(entry: Any) -> bool:
     return mission_entry_kind(entry) == "shutdown"
+
+
+def resolve_skip_indices(missions: Sequence[Any], numbers: Sequence[str]) -> set[int]:
+    """Map mission number prefixes (``"010"``) to 0-based positions in *missions*.
+
+    Used by ``raccoon run --no-mXXX``. Raises :class:`MissionError` for
+    malformed or unknown numbers and for the setup/shutdown missions, which
+    cannot be skipped.
+    """
+    skip: set[int] = set()
+    for raw in numbers:
+        if len(raw) != 3:
+            raise MissionError(
+                f"--no-m{raw}: mission prefix must have exactly three digits, e.g. --no-m030."
+            )
+        number = int(raw)
+        matches = [
+            k for k, entry in enumerate(missions) if mission_number(_name(entry)) == number
+        ]
+        if not matches:
+            raise MissionError(f"--no-m{raw}: no mission with prefix M{raw}.")
+        for k in matches:
+            entry = missions[k]
+            if is_pinned_setup(entry) or is_pinned_shutdown(entry):
+                raise MissionError(
+                    f"--no-m{raw}: '{_name(entry)}' is the setup/shutdown mission and cannot be skipped."
+                )
+            skip.add(k)
+    return skip
 
 
 def resolve_order(missions: Sequence[Any], args: Sequence[str]) -> List[Any]:
