@@ -246,11 +246,11 @@ def test_network_manager_access_point_mode_starts_hotspot(tmp_path: Path, monkey
 
     assert started_configs == [
         {
-            "ssid": "STP-Velox-Robot",
-            "password": "Robot123!",
+            "ssid": "RaccoonOS",
+            "password": "raccoonos",
             "band": "band5GHz",
             "channel": 0,
-            "encryptionType": "wpa3Personal",
+            "encryptionType": "wpa2Personal",
             "hidden": False,
             "maxClients": 8,
         }
@@ -575,7 +575,7 @@ def _hotspot_manager(tmp_path: Path, monkeypatch, commands, fail_sae=False):
 
     def fake_run(command, check=True):
         commands.append(command)
-        if fail_sae and "sae" in command:
+        if fail_sae and "sae" in command and "add" in command:
             raise RuntimeError("sae unsupported")
         return CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -583,28 +583,38 @@ def _hotspot_manager(tmp_path: Path, monkeypatch, commands, fail_sae=False):
     return manager
 
 
-def test_start_access_point_enables_wifi_and_applies_wpa3_and_hidden(
+def _add_command(commands):
+    return next(c for c in commands if c[:3] == ["nmcli", "connection", "add"])
+
+
+def test_start_access_point_creates_wpa2_profile_with_pmf_disabled(
     tmp_path: Path, monkeypatch
 ):
     commands: list = []
     manager = _hotspot_manager(tmp_path, monkeypatch, commands)
 
-    applied = manager.start_access_point(
-        _hotspot_config(encryptionType="wpa3Personal", hidden=True)
-    )
+    applied = manager.start_access_point(_hotspot_config(hidden=True))
 
     assert commands[0] == ["ensure"]
-    assert [
-        "nmcli",
-        "connection",
-        "modify",
-        "STP-Velox-AP",
-        "802-11-wireless.hidden",
-        "yes",
-        "802-11-wireless-security.key-mgmt",
-        "sae",
-    ] in commands
+    add = _add_command(commands)
+    assert "hotspot" not in add
+    assert add[add.index("wifi-sec.pmf") + 1] == "disable"
+    assert add[add.index("wifi-sec.key-mgmt") + 1] == "wpa-psk"
+    assert add[add.index("802-11-wireless.hidden") + 1] == "yes"
+    assert add[add.index("802-11-wireless.channel") + 1] == "6"
     assert commands[-1] == ["nmcli", "connection", "up", "STP-Velox-AP"]
+    assert applied["encryptionType"] == "wpa2Personal"
+
+
+def test_start_access_point_wpa3_requires_pmf(tmp_path: Path, monkeypatch):
+    commands: list = []
+    manager = _hotspot_manager(tmp_path, monkeypatch, commands)
+
+    applied = manager.start_access_point(_hotspot_config(encryptionType="wpa3Personal"))
+
+    add = _add_command(commands)
+    assert add[add.index("wifi-sec.key-mgmt") + 1] == "sae"
+    assert add[add.index("wifi-sec.pmf") + 1] == "required"
     assert applied["encryptionType"] == "wpa3Personal"
 
 
@@ -617,19 +627,13 @@ def test_start_access_point_falls_back_to_wpa2_when_sae_fails(
     applied = manager.start_access_point(_hotspot_config(encryptionType="wpa3Personal"))
 
     assert applied["encryptionType"] == "wpa2Personal"
-    assert [
-        "nmcli",
-        "connection",
-        "modify",
-        "STP-Velox-AP",
-        "802-11-wireless-security.key-mgmt",
-        "wpa-psk",
-    ] in commands
+    adds = [c for c in commands if c[:3] == ["nmcli", "connection", "add"]]
+    assert adds[0][adds[0].index("wifi-sec.key-mgmt") + 1] == "sae"
+    assert adds[1][adds[1].index("wifi-sec.key-mgmt") + 1] == "wpa-psk"
+    assert ["nmcli", "connection", "delete", "STP-Velox-AP"] in commands
 
 
-def test_start_access_point_open_removes_generated_password(
-    tmp_path: Path, monkeypatch
-):
+def test_start_access_point_open_has_no_security(tmp_path: Path, monkeypatch):
     commands: list = []
     manager = _hotspot_manager(tmp_path, monkeypatch, commands)
 
@@ -637,14 +641,7 @@ def test_start_access_point_open_removes_generated_password(
         _hotspot_config(encryptionType="open", password="")
     )
 
-    assert [
-        "nmcli",
-        "connection",
-        "modify",
-        "STP-Velox-AP",
-        "remove",
-        "802-11-wireless-security",
-    ] in commands
+    assert not any(arg.startswith("wifi-sec") for arg in _add_command(commands))
     assert applied["encryptionType"] == "open"
 
 

@@ -247,76 +247,103 @@ class NetworkManager:
             channel = self.find_best_channel(band)
             config = {**config, "channel": channel}
 
-        args = [
-            "nmcli",
-            "device",
-            "wifi",
-            "hotspot",
-            "ifname",
-            wifi_interface,
-            "con-name",
-            AP_CONNECTION_NAME,
-            "ssid",
-            config["ssid"],
-        ]
         password = config.get("password") or ""
-        if password:
-            args.extend(["password", password])
+        encryption = config.get("encryptionType")
+        if encryption == "open" or not password:
+            config = {**config, "encryptionType": "open"}
+            self._create_access_point_profile(wifi_interface, config, band, None)
+        elif encryption == "wpa3Personal":
+            try:
+                self._create_access_point_profile(wifi_interface, config, band, "sae")
+            except Exception:
+                # Not every Wi-Fi driver can host WPA3 (SAE); fall back to WPA2.
+                self._remove_access_point_profile()
+                config = {**config, "encryptionType": "wpa2Personal"}
+                self._create_access_point_profile(
+                    wifi_interface, config, band, "wpa-psk"
+                )
+        else:
+            self._create_access_point_profile(wifi_interface, config, band, "wpa-psk")
 
-        band_value = self._band_nmcli_value(band)
-        if channel > 0 and band != "bandAuto":
-            args.extend(["band", band_value, "channel", str(channel)])
-        elif band != "bandAuto":
-            args.extend(["band", band_value])
-
-        self._run(args)
-        config = self._apply_access_point_options(config)
         self.save_access_point_config(config)
         self._persist_network_mode("access_point")
         return config
 
-    def _apply_access_point_options(self, config: dict[str, Any]) -> dict[str, Any]:
-        """Apply the settings `nmcli device wifi hotspot` has no arguments for.
+    def _remove_access_point_profile(self) -> None:
+        self._run(["nmcli", "connection", "down", AP_CONNECTION_NAME], check=False)
+        self._run(["nmcli", "connection", "delete", AP_CONNECTION_NAME], check=False)
+
+    def _create_access_point_profile(
+        self,
+        wifi_interface: str,
+        config: dict[str, Any],
+        band: str,
+        key_mgmt: str | None,
+    ) -> None:
+        """Create and start the hotspot profile.
+
+        Not `nmcli device wifi hotspot`: its profile leaves protected management
+        frames (PMF) at the default, which the Pi's Wi-Fi driver rejects ("key
+        setting validation failed"), so the hotspot never came up. PMF is
+        disabled for WPA2 and required for WPA3.
 
         `maxClients` cannot be applied: NetworkManager has no such option.
         """
-        name = AP_CONNECTION_NAME
-        encryption = config.get("encryptionType")
-        hidden = bool(config.get("hidden"))
-        has_password = bool(config.get("password"))
+        if band == "bandAuto":
+            band = self.find_best_wifi_band()
+        channel = int(config.get("channel") or 0)
 
-        if encryption == "open" or not has_password:
-            # nmcli invents a random password when none is given; remove it.
-            options = ["remove", "802-11-wireless-security"]
-            if hidden:
-                options += ["802-11-wireless.hidden", "yes"]
-            self._run(["nmcli", "connection", "modify", name, *options])
-            self._run(["nmcli", "connection", "up", name])
-            return {**config, "encryptionType": "open"}
-
-        wants_wpa3 = encryption == "wpa3Personal"
-        options: list[str] = []
-        if hidden:
-            options += ["802-11-wireless.hidden", "yes"]
-        if wants_wpa3:
-            options += ["802-11-wireless-security.key-mgmt", "sae"]
-        if not options:
-            return config
+        args = [
+            "nmcli",
+            "connection",
+            "add",
+            "type",
+            "wifi",
+            "ifname",
+            wifi_interface,
+            "con-name",
+            AP_CONNECTION_NAME,
+            "autoconnect",
+            "no",
+            "ssid",
+            config["ssid"],
+            "802-11-wireless.mode",
+            "ap",
+            "802-11-wireless.band",
+            self._band_nmcli_value(band),
+            "ipv4.method",
+            "shared",
+            "ipv6.method",
+            "ignore",
+        ]
+        if channel > 0:
+            args.extend(["802-11-wireless.channel", str(channel)])
+        if config.get("hidden"):
+            args.extend(["802-11-wireless.hidden", "yes"])
+        if key_mgmt is not None:
+            args.extend(
+                [
+                    "wifi-sec.key-mgmt",
+                    key_mgmt,
+                    "wifi-sec.psk",
+                    config["password"],
+                    "wifi-sec.proto",
+                    "rsn",
+                    "wifi-sec.pairwise",
+                    "ccmp",
+                    "wifi-sec.group",
+                    "ccmp",
+                    "wifi-sec.pmf",
+                    "required" if key_mgmt == "sae" else "disable",
+                ]
+            )
 
         try:
-            self._run(["nmcli", "connection", "modify", name, *options])
-            self._run(["nmcli", "connection", "up", name])
+            self._run(args)
+            self._run(["nmcli", "connection", "up", AP_CONNECTION_NAME])
         except Exception:
-            if not wants_wpa3:
-                raise
-            # Not every Wi-Fi driver can host WPA3 (SAE); fall back to WPA2.
-            fallback = ["802-11-wireless-security.key-mgmt", "wpa-psk"]
-            if hidden:
-                fallback += ["802-11-wireless.hidden", "yes"]
-            self._run(["nmcli", "connection", "modify", name, *fallback])
-            self._run(["nmcli", "connection", "up", name])
-            return {**config, "encryptionType": "wpa2Personal"}
-        return config
+            self._remove_access_point_profile()
+            raise
 
     def stop_access_point(self) -> None:
         profiles = {p["name"]: p for p in self._wifi_profiles()}
@@ -390,11 +417,11 @@ class NetworkManager:
         if saved_config is not None:
             return saved_config
         return {
-            "ssid": "STP-Velox-Robot",
-            "password": "Robot123!",
+            "ssid": "RaccoonOS",
+            "password": "raccoonos",
             "band": self.find_best_wifi_band(),
             "channel": 0,
-            "encryptionType": "wpa3Personal",
+            "encryptionType": "wpa2Personal",
             "hidden": False,
             "maxClients": 8,
         }
