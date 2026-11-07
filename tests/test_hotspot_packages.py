@@ -44,3 +44,14 @@ def test_offline_failure_is_not_fatal_and_leaves_services_alone(monkeypatch):
     calls = _patch(monkeypatch, False, [100, 100])
     cli._ensure_hotspot_packages()
     assert not any(c[0] == "systemctl" for c in calls)
+
+
+def test_shared_dnsmasq_config_removes_router_and_dns(tmp_path, monkeypatch):
+    target = tmp_path / "dnsmasq-shared.d" / "raccoon.conf"
+    monkeypatch.setattr(cli, "SHARED_DNSMASQ_CONF", target)
+
+    cli._install_shared_dnsmasq_config()
+
+    lines = target.read_text().splitlines()
+    assert "dhcp-option=3" in lines
+    assert "dhcp-option=6" in lines

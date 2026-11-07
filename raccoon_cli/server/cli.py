@@ -145,6 +145,30 @@ def install(user: str):
 HOTSPOT_PACKAGES = ("hostapd", "dnsmasq")
 
 
+SHARED_DNSMASQ_CONF = Path("/etc/NetworkManager/dnsmasq-shared.d/raccoon.conf")
+
+
+def _install_shared_dnsmasq_config() -> None:
+    """Make NetworkManager's shared-mode dnsmasq not advertise the robot.
+
+    It serves DHCP when the robot hosts the cable (Ethernet Mode) or runs the
+    NetworkManager fallback hotspot. Left alone it tells clients that the robot
+    is their router and DNS server, but the robot has no internet to share: a
+    laptop then sends all its traffic and lookups into a dead end. An empty
+    option removes it from the lease.
+    """
+    try:
+        SHARED_DNSMASQ_CONF.parent.mkdir(parents=True, exist_ok=True)
+        SHARED_DNSMASQ_CONF.write_text(
+            "# Written by raccoon post-install.\n"
+            "# The robot has no internet to share: no router, no DNS server.\n"
+            "dhcp-option=3\n"
+            "dhcp-option=6\n"
+        )
+    except OSError as exc:
+        console.print(f"[yellow]Could not write {SHARED_DNSMASQ_CONF}: {exc}[/yellow]")
+
+
 def _ensure_hotspot_packages() -> None:
     """Install hostapd + dnsmasq, which the Wi-Fi hotspot runs on.
 
@@ -190,6 +214,7 @@ def post_install(user: str):
     subprocess.run(["systemctl", "stop", "raccoon.service"], check=False)
     _do_install(user)
     _ensure_hotspot_packages()
+    _install_shared_dnsmasq_config()
     subprocess.run(["systemctl", "restart", "raccoon.service"], check=False)
     console.print("[green]Post-install complete.[/green]")
 

@@ -762,6 +762,9 @@ def test_start_access_point_uses_hostapd_with_plain_wpa_psk(
     hostname = socket.gethostname().split(".")[0]
     assert f"--host-record={hostname}.local,10.42.0.1" in dnsmasq
     assert "--local=/local/" in dnsmasq
+    # No default gateway and no DNS server handed to clients.
+    assert "--dhcp-option=3" in dnsmasq and "--dhcp-option=6" in dnsmasq
+    assert not any(arg.startswith(("--dhcp-option=3,", "--dhcp-option=6,")) for arg in dnsmasq)
     assert applied["encryptionType"] == "wpa2Personal"
 
 

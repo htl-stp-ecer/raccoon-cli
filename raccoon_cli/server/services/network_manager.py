@@ -447,8 +447,12 @@ class NetworkManager:
                 "--except-interface=lo",
                 f"--listen-address={AP_ADDRESS}",
                 f"--dhcp-range={AP_DHCP_RANGE}",
-                f"--dhcp-option=3,{AP_ADDRESS}",
-                f"--dhcp-option=6,{AP_ADDRESS}",
+                # No router and no DNS server in the lease. The robot has no
+                # internet to share; if it advertised itself, a laptop would
+                # route all its traffic and DNS through it and every lookup
+                # (also of geared-bot.local) would wait for timeouts.
+                "--dhcp-option=3",
+                "--dhcp-option=6",
                 "--no-resolv",
                 "--no-hosts",
                 # Clients use this dnsmasq as their DNS server but it has no
