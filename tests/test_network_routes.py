@@ -10,6 +10,12 @@ from raccoon_cli.server.config import ServerConfig
 from raccoon_cli.server.services.network_manager import NetworkManager
 
 
+@pytest.fixture(autouse=True)
+def _no_hostapd(monkeypatch):
+    """Default to the NetworkManager hotspot path; hostapd tests opt in."""
+    monkeypatch.setattr(NetworkManager, "_hostapd_available", lambda self: False)
+
+
 @pytest.fixture
 def server_client(tmp_path: Path, monkeypatch):
     config = ServerConfig(projects_dir=tmp_path / "programs", api_token="test-token")
@@ -741,3 +747,148 @@ def test_count_access_point_clients_counts_live_neighbours(
     )
 
     assert manager.count_access_point_clients() == 2
+
+
+def test_start_access_point_uses_hostapd_with_plain_wpa_psk(
+    tmp_path: Path, monkeypatch
+):
+    commands: list = []
+    manager = _hotspot_manager(tmp_path, monkeypatch, commands)
+    monkeypatch.setattr(NetworkManager, "_hostapd_available", lambda self: True)
+
+    applied = manager.start_access_point(_hotspot_config(hidden=True))
+
+    assert not any(c[:3] == ["nmcli", "connection", "add"] for c in commands)
+    assert ["nmcli", "device", "set", "wlan0", "managed", "no"] in commands
+    hostapd = next(c for c in commands if c[0] == "hostapd")
+    conf = Path(hostapd[-1])
+    text = conf.read_text()
+    assert "wpa_key_mgmt=WPA-PSK\n" in text
+    assert "SHA256" not in text
+    assert "ieee80211w=0" in text
+    assert "ssid=RobotNet" in text
+    assert "channel=6" in text
+    assert "ignore_broadcast_ssid=1" in text
+    assert "wpa_passphrase=secret123" in text
+    assert oct(conf.stat().st_mode & 0o777) == "0o600"
+    assert any(c[0] == "dnsmasq" for c in commands)
+    assert applied["encryptionType"] == "wpa2Personal"
+
+
+def test_hostapd_failure_falls_back_to_networkmanager(tmp_path: Path, monkeypatch):
+    commands: list = []
+    manager = _hotspot_manager(tmp_path, monkeypatch, commands)
+    monkeypatch.setattr(NetworkManager, "_hostapd_available", lambda self: True)
+    inner = manager._run
+
+    def failing_run(command, check=True):
+        if command[0] == "hostapd":
+            raise RuntimeError("hostapd failed")
+        return inner(command, check=check)
+
+    monkeypatch.setattr(manager, "_run", failing_run)
+
+    manager.start_access_point(_hotspot_config())
+
+    assert _add_command(commands)
+    assert commands[-1] == ["nmcli", "connection", "up", "STP-Velox-AP"]
+
+
+def test_hostapd_open_network_has_no_wpa_lines(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    monkeypatch.setattr(manager, "find_best_channel", lambda band: 1)
+    text = manager._hostapd_config(
+        "wlan0", _hotspot_config(encryptionType="open", password=""), "band2_4GHz", None
+    )
+    assert "wpa" not in text
+
+
+def test_hostapd_config_rejects_short_password(tmp_path: Path):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    with pytest.raises(ValueError):
+        manager._hostapd_config(
+            "wlan0", _hotspot_config(password="short"), "band2_4GHz", "wpa-psk"
+        )
+
+
+def test_run_timeout_is_a_clean_error(tmp_path: Path, monkeypatch):
+    import subprocess
+
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+
+    def boom(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], 25)
+
+    monkeypatch.setattr(subprocess, "run", boom)
+
+    with pytest.raises(RuntimeError, match="timed out after 25s"):
+        manager._run(["nmcli", "connection", "up", "x"])
+    assert manager._run(["nmcli", "connection", "up", "x"], check=False).returncode == 124
+
+
+def test_lan_only_sets_fixed_address_on_ethernet_profile(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        out = "Ethernet:802-3-ethernet\n" if command[:2] == ["nmcli", "-t"] else ""
+        return CompletedProcess(command, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+
+    manager._activate_first_ethernet_connection()
+
+    modify = next(c for c in commands if c[:3] == ["nmcli", "connection", "modify"])
+    assert modify[modify.index("ipv4.method") + 1] == "manual"
+    assert modify[modify.index("ipv4.addresses") + 1] == "192.168.124.1/24"
+    assert commands[-1] == ["nmcli", "connection", "up", "Ethernet"]
+
+
+def test_lan_only_creates_ethernet_profile_when_missing(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        out = "eth0:ethernet\n" if command[:3] == ["nmcli", "-t", "-f"] and "DEVICE,TYPE" in command else ""
+        return CompletedProcess(command, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+
+    manager._activate_first_ethernet_connection()
+
+    add = next(c for c in commands if c[:3] == ["nmcli", "connection", "add"])
+    assert add[add.index("ifname") + 1] == "eth0"
+    assert add[add.index("ipv4.addresses") + 1] == "192.168.124.1/24"
+
+
+def test_disabling_lan_only_restores_dhcp_only_for_our_address(
+    tmp_path: Path, monkeypatch
+):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager._persist_network_mode("lan_only")
+    commands: list = []
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        if command[:2] == ["nmcli", "-t"] and "NAME,TYPE" in command:
+            out = "Ethernet:802-3-ethernet\nOther:802-3-ethernet\n"
+        elif command[:2] == ["nmcli", "-g"]:
+            out = (
+                "manual\n192.168.124.1/24\n"
+                if command[-1] == "Ethernet"
+                else "manual\n10.0.0.5/24\n"
+            )
+        else:
+            out = ""
+        return CompletedProcess(command, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+    monkeypatch.setattr(manager, "is_access_point_active", lambda: False)
+    monkeypatch.setattr(manager, "_ensure_wifi_enabled", lambda: None)
+
+    manager.disable_lan_only_mode()
+
+    modified = [c[3] for c in commands if c[:3] == ["nmcli", "connection", "modify"]]
+    assert modified == ["Ethernet"]

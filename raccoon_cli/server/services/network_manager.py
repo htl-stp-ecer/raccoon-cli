@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -12,6 +14,15 @@ from typing import Any
 
 
 AP_CONNECTION_NAME = "STP-Velox-AP"
+
+# Hotspot network served by hostapd + dnsmasq (same range NetworkManager's
+# "shared" mode uses).
+AP_ADDRESS = "10.42.0.1"
+AP_PREFIX = 24
+AP_DHCP_RANGE = "10.42.0.10,10.42.0.254,255.255.255.0,1h"
+
+# Fixed address of the robot in LAN-only mode.
+LAN_ADDRESS = "192.168.124.1/24"
 
 
 class NetworkManager:
@@ -251,7 +262,7 @@ class NetworkManager:
         encryption = config.get("encryptionType")
         if encryption == "open" or not password:
             config = {**config, "encryptionType": "open"}
-            self._create_access_point_profile(wifi_interface, config, band, None)
+            self._create_wpa2_or_open_ap(wifi_interface, config, band, None)
         elif encryption == "wpa3Personal":
             try:
                 self._create_access_point_profile(wifi_interface, config, band, "sae")
@@ -259,11 +270,9 @@ class NetworkManager:
                 # Not every Wi-Fi driver can host WPA3 (SAE); fall back to WPA2.
                 self._remove_access_point_profile()
                 config = {**config, "encryptionType": "wpa2Personal"}
-                self._create_access_point_profile(
-                    wifi_interface, config, band, "wpa-psk"
-                )
+                self._create_wpa2_or_open_ap(wifi_interface, config, band, "wpa-psk")
         else:
-            self._create_access_point_profile(wifi_interface, config, band, "wpa-psk")
+            self._create_wpa2_or_open_ap(wifi_interface, config, band, "wpa-psk")
 
         self.save_access_point_config(config)
         self._persist_network_mode("access_point")
@@ -272,6 +281,164 @@ class NetworkManager:
     def _remove_access_point_profile(self) -> None:
         self._run(["nmcli", "connection", "down", AP_CONNECTION_NAME], check=False)
         self._run(["nmcli", "connection", "delete", AP_CONNECTION_NAME], check=False)
+
+    # -- hostapd hotspot ----------------------------------------------------
+    #
+    # NetworkManager (1.52) always hands wpa_supplicant `WPA-PSK WPA-PSK-SHA256`
+    # for a WPA2 hotspot, even with PMF disabled. The Pi's Wi-Fi firmware only
+    # advertises `WPA-PSK` in its beacon, so the 4-way handshake carries an AKM
+    # list that differs from the beacon and strict clients (wpa_supplicant 2.11,
+    # i.e. most Linux laptops) drop the connection with reason 17, which
+    # NetworkManager reports as "wrong password". hostapd lets us offer exactly
+    # `WPA-PSK`, so it is used whenever it is installed.
+
+    @property
+    def _ap_dir(self) -> Path:
+        return self.state_path.parent
+
+    @property
+    def _hostapd_pid_path(self) -> Path:
+        return self._ap_dir / "hostapd.pid"
+
+    @property
+    def _dnsmasq_pid_path(self) -> Path:
+        return self._ap_dir / "dnsmasq-ap.pid"
+
+    def _hostapd_available(self) -> bool:
+        return shutil.which("hostapd") is not None and shutil.which("dnsmasq") is not None
+
+    @staticmethod
+    def _pid_from(path: Path) -> int | None:
+        try:
+            return int(path.read_text().strip())
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _process_name(pid: int) -> str:
+        try:
+            return Path(f"/proc/{pid}/comm").read_text().strip()
+        except OSError:
+            return ""
+
+    def _hostapd_running(self) -> bool:
+        pid = self._pid_from(self._hostapd_pid_path)
+        return pid is not None and self._process_name(pid) == "hostapd"
+
+    def _create_wpa2_or_open_ap(
+        self,
+        wifi_interface: str,
+        config: dict[str, Any],
+        band: str,
+        key_mgmt: str | None,
+    ) -> None:
+        if self._hostapd_available():
+            try:
+                self._start_hostapd_ap(wifi_interface, config, band, key_mgmt)
+                return
+            except Exception as exc:
+                print(f"hostapd hotspot failed, falling back to NetworkManager: {exc}")
+                self._stop_hostapd_ap()
+        self._create_access_point_profile(wifi_interface, config, band, key_mgmt)
+
+    def _hostapd_config(
+        self,
+        wifi_interface: str,
+        config: dict[str, Any],
+        band: str,
+        key_mgmt: str | None,
+    ) -> str:
+        ssid = str(config["ssid"])
+        password = str(config.get("password") or "")
+        if "\n" in ssid or "\r" in ssid or "\n" in password or "\r" in password:
+            raise ValueError("SSID and password must not contain line breaks")
+        if key_mgmt is not None and not 8 <= len(password) <= 63:
+            raise ValueError("WPA2 password must be 8-63 characters")
+        channel = int(config.get("channel") or 0)
+        if channel <= 0:
+            channel = self.find_best_channel(band)
+        lines = [
+            f"interface={wifi_interface}",
+            "driver=nl80211",
+            f"ssid={ssid}",
+            f"hw_mode={'a' if self._band_nmcli_value(band) == 'a' else 'g'}",
+            f"channel={channel}",
+            "ieee80211n=1",
+            "wmm_enabled=1",
+            f"ignore_broadcast_ssid={1 if config.get('hidden') else 0}",
+            f"max_num_sta={int(config.get('maxClients') or 8)}",
+            "auth_algs=1",
+        ]
+        if key_mgmt is not None:
+            lines += [
+                "wpa=2",
+                "wpa_key_mgmt=WPA-PSK",
+                "rsn_pairwise=CCMP",
+                "ieee80211w=0",
+                f"wpa_passphrase={password}",
+            ]
+        return "\n".join(lines) + "\n"
+
+    def _start_hostapd_ap(
+        self,
+        wifi_interface: str,
+        config: dict[str, Any],
+        band: str,
+        key_mgmt: str | None,
+    ) -> None:
+        if band == "bandAuto":
+            band = self.find_best_wifi_band()
+        self._ap_dir.mkdir(parents=True, exist_ok=True)
+        conf_path = self._ap_dir / "hostapd.conf"
+        # Created 0600 up front: the file holds the Wi-Fi password.
+        fd = os.open(conf_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(self._hostapd_config(wifi_interface, config, band, key_mgmt))
+
+        self._run(["nmcli", "device", "set", wifi_interface, "managed", "no"])
+        self._run(["ip", "addr", "flush", "dev", wifi_interface])
+        self._run(
+            ["ip", "addr", "add", f"{AP_ADDRESS}/{AP_PREFIX}", "dev", wifi_interface]
+        )
+        self._run(["ip", "link", "set", wifi_interface, "up"])
+        self._run(["hostapd", "-B", "-P", str(self._hostapd_pid_path), str(conf_path)])
+        self._run(
+            [
+                "dnsmasq",
+                f"--interface={wifi_interface}",
+                "--bind-interfaces",
+                "--except-interface=lo",
+                f"--listen-address={AP_ADDRESS}",
+                f"--dhcp-range={AP_DHCP_RANGE}",
+                f"--dhcp-option=3,{AP_ADDRESS}",
+                f"--dhcp-option=6,{AP_ADDRESS}",
+                "--no-resolv",
+                "--no-hosts",
+                "--conf-file=/dev/null",
+                f"--pid-file={self._dnsmasq_pid_path}",
+            ]
+        )
+
+    def _stop_hostapd_ap(self) -> None:
+        """Stop the hostapd hotspot, if one was started. No-op otherwise."""
+        pids = {
+            "hostapd": self._pid_from(self._hostapd_pid_path),
+            "dnsmasq": self._pid_from(self._dnsmasq_pid_path),
+        }
+        if not any(pids.values()):
+            return
+        for name, pid in pids.items():
+            if pid is not None and self._process_name(pid) == name:
+                self._run(["kill", str(pid)], check=False)
+        for path in (self._hostapd_pid_path, self._dnsmasq_pid_path):
+            path.unlink(missing_ok=True)
+        wifi_interface = self._get_wifi_interface()
+        if wifi_interface:
+            self._run(["ip", "addr", "flush", "dev", wifi_interface], check=False)
+            self._run(
+                ["nmcli", "device", "set", wifi_interface, "managed", "yes"],
+                check=False,
+            )
 
     def _create_access_point_profile(
         self,
@@ -346,6 +513,7 @@ class NetworkManager:
             raise
 
     def stop_access_point(self) -> None:
+        self._stop_hostapd_ap()
         profiles = {p["name"]: p for p in self._wifi_profiles()}
         for connection_name in self._access_point_connection_names():
             profile = profiles.get(connection_name)
@@ -361,6 +529,8 @@ class NetworkManager:
         self._reset_wifi_interface()
 
     def is_access_point_active(self) -> bool:
+        if self._hostapd_running():
+            return True
         result = self._run(
             ["nmcli", "-t", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"],
             check=False,
@@ -584,6 +754,7 @@ class NetworkManager:
         self._persist_network_mode("lan_only")
 
     def disable_lan_only_mode(self) -> None:
+        self._restore_ethernet_dhcp()
         self.set_network_mode("client")
 
     def is_lan_only_mode_active(self) -> bool:
@@ -662,18 +833,69 @@ class NetworkManager:
             or device_info.get("macAddress"),
         }
 
-    def _activate_first_ethernet_connection(self) -> None:
+    def _ethernet_profile_names(self) -> list[str]:
         result = self._run(
             ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], check=False
         )
+        names: list[str] = []
         for line in result.stdout.splitlines():
-            if not line.strip():
+            parts = line.rsplit(":", 1)
+            if len(parts) == 2 and parts[1] == "802-3-ethernet":
+                names.append(parts[0])
+        return names
+
+    def _activate_first_ethernet_connection(self) -> None:
+        """Bring up wired networking with the robot's fixed LAN address.
+
+        The default profile uses DHCP; on a direct laptop-to-robot cable there
+        is no DHCP server, so `connection up` would wait for a lease until it
+        times out and the robot never gets an address.
+        """
+        profiles = self._ethernet_profile_names()
+        if profiles:
+            name = profiles[0]
+            self._run(
+                [
+                    "nmcli", "connection", "modify", name,
+                    "ipv4.method", "manual",
+                    "ipv4.addresses", LAN_ADDRESS,
+                    "ipv4.gateway", "",
+                ],
+                check=False,
+            )
+        else:
+            name = "Wired connection 1"
+            interfaces = self._get_ethernet_interfaces()
+            self._run(
+                [
+                    "nmcli", "connection", "add", "type", "ethernet",
+                    "con-name", name,
+                    *(["ifname", interfaces[0]] if interfaces else []),
+                    "ipv4.method", "manual",
+                    "ipv4.addresses", LAN_ADDRESS,
+                ],
+                check=False,
+            )
+        self._run(["nmcli", "connection", "up", name], check=False)
+
+    def _restore_ethernet_dhcp(self) -> None:
+        """Undo the fixed LAN address so wired networks hand out DHCP again."""
+        for name in self._ethernet_profile_names():
+            result = self._run(
+                ["nmcli", "-g", "ipv4.method,ipv4.addresses", "connection", "show", name],
+                check=False,
+            )
+            # Only touch profiles that still carry our fixed address.
+            if result.stdout.split() != ["manual", LAN_ADDRESS]:
                 continue
-            parts = line.split(":")
-            if len(parts) >= 2 and parts[1] == "802-3-ethernet":
-                self._run(["nmcli", "connection", "up", parts[0]], check=False)
-                return
-        self._run(["nmcli", "connection", "up", "Wired connection 1"], check=False)
+            self._run(
+                [
+                    "nmcli", "connection", "modify", name,
+                    "ipv4.method", "auto",
+                    "ipv4.addresses", "",
+                ],
+                check=False,
+            )
 
     def _connected_wifi_network(self) -> dict[str, Any] | None:
         result = self._run(
@@ -916,14 +1138,21 @@ class NetworkManager:
     def _run(
         self, command: list[str], *, check: bool = True
     ) -> subprocess.CompletedProcess[str]:
-        use_sudo = command[0] in {"nmcli", "ip", "iw", "iwlist"}
+        use_sudo = command[0] in {"nmcli", "ip", "iw", "iwlist", "hostapd", "dnsmasq", "kill"}
         full_command = ["sudo", *command] if use_sudo else command
-        result = subprocess.run(
-            full_command,
-            capture_output=True,
-            text=True,
-            timeout=25,
-        )
+        try:
+            result = subprocess.run(
+                full_command,
+                capture_output=True,
+                text=True,
+                timeout=25,
+            )
+        except subprocess.TimeoutExpired:
+            if check:
+                raise RuntimeError(f"{' '.join(command)} timed out after 25s") from None
+            return subprocess.CompletedProcess(
+                full_command, 124, stdout="", stderr="timed out"
+            )
         if check and result.returncode != 0:
             stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
             raise RuntimeError(f"{' '.join(command)} failed: {stderr}")
