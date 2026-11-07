@@ -840,7 +840,7 @@ def _run_post_install(console: Console, ssh_client) -> None:
 
     try:
         _, stdout, stderr = ssh_client.exec_command(
-            "sudo python3 -m raccoon_cli.server.cli post-install", timeout=120
+            "sudo python3 -m raccoon_cli.server.cli post-install", timeout=600
         )
         exit_code = stdout.channel.recv_exit_status()
         out = stdout.read().decode(errors="replace").strip()
