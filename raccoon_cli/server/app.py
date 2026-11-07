@@ -74,6 +74,20 @@ async def lifespan(app: FastAPI):
         daemon=True,
     ).start()
 
+    # Cable and mode changes for the UI (see network_events): the routes use the
+    # same hub, so a mode change from the UI is announced at once.
+    from raccoon_cli.server.services.network_events import network_events
+
+    network_events.set_provider(
+        lambda: {
+            "isCableConnected": network_manager.is_ethernet_cable_connected(),
+            "isActive": network_manager.is_lan_only_mode_active(),
+        }
+    )
+    threading.Thread(
+        target=network_events.run_watcher, args=(watchdog_stop,), daemon=True
+    ).start()
+
     yield
 
     watchdog_stop.set()

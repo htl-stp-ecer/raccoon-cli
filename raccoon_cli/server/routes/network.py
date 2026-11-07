@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from raccoon_cli.server.auth import require_auth
+from raccoon_cli.server.services.network_events import network_events
 from raccoon_cli.server.services.network_manager import NetworkManager
 
 router = APIRouter(
@@ -143,6 +144,7 @@ async def get_mode() -> dict[str, str]:
 async def set_mode(request: NetworkModeRequest) -> dict[str, str]:
     try:
         _network_manager.set_network_mode(request.mode)
+        network_events.refresh()
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -242,6 +244,7 @@ async def remove_saved_network(ssid: str) -> dict[str, str]:
 async def enable_lan_only_mode() -> dict[str, str]:
     try:
         _network_manager.enable_lan_only_mode()
+        network_events.refresh()
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -251,9 +254,22 @@ async def enable_lan_only_mode() -> dict[str, str]:
 async def disable_lan_only_mode() -> dict[str, str]:
     try:
         _network_manager.disable_lan_only_mode()
+        network_events.refresh()
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/lan/events")
+async def lan_events(
+    since: int = -1, timeout: float = Query(default=20.0, ge=0.0, le=30.0)
+) -> dict[str, Any]:
+    """Long poll: answers when the cable or the mode changed since [since].
+
+    Returns {version, isCableConnected, isActive}. Pass the returned version
+    as [since] on the next call; -1 returns the current state at once.
+    """
+    return await network_events.wait_async(since, timeout)
 
 
 @router.get("/lan/status", response_model=LanStatusPayload)

@@ -881,29 +881,40 @@ class NetworkManager:
             except Exception as exc:
                 print(f"Network watchdog error: {exc}")
 
-    def is_ethernet_cable_connected(self) -> bool:
-        interfaces = self._network_interfaces()
-        for device in self._get_ethernet_interfaces():
-            details = interfaces.get(device, {})
-            if details.get("carrier") == "1":
-                return True
-            if details.get("ipv4"):
-                return True
+    def is_ethernet_cable_connected(
+        self, interfaces: dict[str, dict[str, Any]] | None = None
+    ) -> bool:
+        """True while a cable is plugged into a wired port (link signal).
 
-            state = self._nmcli_device_state(device)
-            if state in {"connected", "connecting"}:
+        Only the carrier counts. An address on the port or NetworkManager
+        trying to connect says nothing about a cable: both lingered after a
+        mode change and made the robot think a cable had just been plugged in.
+        """
+        interfaces = interfaces if interfaces is not None else self._network_interfaces()
+        for device in self._get_ethernet_interfaces():
+            carrier = interfaces.get(device, {}).get("carrier")
+            if carrier == "1":
                 return True
+            if carrier is None:
+                # A port that is switched off cannot report a carrier, so a
+                # plugged cable would never be noticed. Switch it on; the next
+                # check sees the link.
+                self._run(["ip", "link", "set", device, "up"], check=False)
         return False
 
     def lan_status(self) -> dict[str, Any]:
-        device_info = self.get_device_info()
+        """Light status for polling (the UI asks every couple of seconds)."""
+        interfaces = self._network_interfaces()
+        devices = self._get_ethernet_interfaces()
+        details = next(
+            (interfaces[d] for d in devices if interfaces.get(d, {}).get("ipv4")),
+            interfaces.get(devices[0], {}) if devices else {},
+        )
         return {
             "isActive": self.is_lan_only_mode_active(),
-            "isCableConnected": device_info["ethernetCableConnected"],
-            "ipAddress": device_info.get("ethernetIpAddress")
-            or device_info.get("ipAddress"),
-            "macAddress": device_info.get("ethernetMacAddress")
-            or device_info.get("macAddress"),
+            "isCableConnected": self.is_ethernet_cable_connected(interfaces),
+            "ipAddress": details.get("ipv4") or self._get_primary_ip(),
+            "macAddress": details.get("mac"),
         }
 
     def _ethernet_profile_names(self) -> list[str]:
@@ -970,6 +981,10 @@ class NetworkManager:
             )
             # Applies the change to a running connection; no-op otherwise.
             self._run(["nmcli", "connection", "up", name], check=False)
+        # Without an address the port must stay switched on, or a plugged
+        # cable cannot be noticed.
+        for device in self._get_ethernet_interfaces():
+            self._run(["ip", "link", "set", device, "up"], check=False)
 
     def _ethernet_has_lan_address(self, attempts: int = 5) -> bool:
         """True once a wired port carries the fixed LAN address."""

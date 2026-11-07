@@ -994,3 +994,136 @@ def test_refresh_hotspot_hostname_restarts_only_a_running_hostapd_hotspot(
     monkeypatch.setattr(manager, "_hostapd_running", lambda: True)
     assert manager.refresh_hotspot_hostname() is True
     assert started == [_hotspot_config()]
+
+
+def _cable_manager(tmp_path: Path, monkeypatch, carrier, ipv4=None, state="connected"):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+    monkeypatch.setattr(manager, "_get_ethernet_interfaces", lambda: ["eth0"])
+    monkeypatch.setattr(
+        manager,
+        "_network_interfaces",
+        lambda: {"eth0": {"carrier": carrier, "ipv4": ipv4, "mac": "aa"}},
+    )
+    monkeypatch.setattr(manager, "_nmcli_device_state", lambda d: state)
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: commands.append(command)
+        or CompletedProcess(command, 0, stdout="", stderr=""),
+    )
+    return manager, commands
+
+
+def test_cable_counts_only_with_a_carrier(tmp_path: Path, monkeypatch):
+    # An address and a "connected" NetworkManager state are not a cable.
+    manager, _ = _cable_manager(
+        tmp_path, monkeypatch, carrier="0", ipv4="192.168.124.1", state="connected"
+    )
+    assert manager.is_ethernet_cable_connected() is False
+
+    manager, _ = _cable_manager(tmp_path, monkeypatch, carrier="1")
+    assert manager.is_ethernet_cable_connected() is True
+
+
+def test_cable_check_switches_on_a_port_that_is_down(tmp_path: Path, monkeypatch):
+    manager, commands = _cable_manager(tmp_path, monkeypatch, carrier=None)
+
+    assert manager.is_ethernet_cable_connected() is False
+    assert ["ip", "link", "set", "eth0", "up"] in commands
+
+
+def test_lan_status_is_light_and_uses_the_carrier(tmp_path: Path, monkeypatch):
+    manager, _ = _cable_manager(tmp_path, monkeypatch, carrier="1", ipv4="192.168.124.1")
+    monkeypatch.setattr(manager, "is_lan_only_mode_active", lambda: True)
+
+    status = manager.lan_status()
+
+    assert status == {
+        "isActive": True,
+        "isCableConnected": True,
+        "ipAddress": "192.168.124.1",
+        "macAddress": "aa",
+    }
+
+
+def test_network_events_wait_returns_on_change_and_on_timeout():
+    import threading
+    import time
+
+    from raccoon_cli.server.services.network_events import NetworkEvents
+
+    events = NetworkEvents()
+    assert events.publish({"isCableConnected": False, "isActive": False}) is True
+    assert events.publish({"isCableConnected": False, "isActive": False}) is False
+
+    # -1 answers at once with the current state.
+    first = events.wait(-1, 5)
+    assert first == {"version": 1, "isCableConnected": False, "isActive": False}
+
+    # Nothing changes: returns after the timeout with the same version.
+    started = time.monotonic()
+    assert events.wait(1, 0.2)["version"] == 1
+    assert time.monotonic() - started >= 0.2
+
+    # A change wakes the waiting call early.
+    threading.Timer(
+        0.1, lambda: events.publish({"isCableConnected": True, "isActive": False})
+    ).start()
+    started = time.monotonic()
+    woken = events.wait(1, 5)
+    assert woken["version"] == 2 and woken["isCableConnected"] is True
+    assert time.monotonic() - started < 2
+
+    # A version from before a server restart is answered at once.
+    assert events.wait(99, 5)["version"] == 2
+
+
+def test_lan_events_route(server_client, monkeypatch):
+    from raccoon_cli.server.routes import network as network_route
+
+    async def fake_wait(since, timeout):
+        return {"version": 3, "isCableConnected": True, "isActive": False}
+
+    monkeypatch.setattr(network_route.network_events, "wait_async", fake_wait)
+
+    response = server_client.get("/api/v1/network/lan/events?since=2", headers=_auth())
+
+    assert response.status_code == 200
+    assert response.json() == {"version": 3, "isCableConnected": True, "isActive": False}
+
+
+def test_network_events_wait_async_wakes_without_a_thread():
+    import asyncio
+    import time
+
+    from raccoon_cli.server.services.network_events import NetworkEvents
+
+    async def scenario():
+        events = NetworkEvents()
+        events.publish({"isCableConnected": False, "isActive": False})
+
+        # Already newer than the client's version: answered at once.
+        assert (await events.wait_async(-1, 5))["version"] == 1
+
+        # Unchanged: returns after the timeout.
+        started = time.monotonic()
+        assert (await events.wait_async(1, 0.2))["version"] == 1
+        assert time.monotonic() - started >= 0.2
+        assert events._waiters == []
+
+        # A change from another thread wakes the waiting coroutine early.
+        loop = asyncio.get_running_loop()
+        loop.call_later(
+            0.1,
+            lambda: loop.run_in_executor(
+                None, events.publish, {"isCableConnected": True, "isActive": False}
+            ),
+        )
+        started = time.monotonic()
+        woken = await events.wait_async(1, 5)
+        assert woken["version"] == 2 and woken["isCableConnected"] is True
+        assert time.monotonic() - started < 2
+        assert events._waiters == []
+
+    asyncio.run(scenario())
