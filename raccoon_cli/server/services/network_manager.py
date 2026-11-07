@@ -271,8 +271,10 @@ class NetworkManager:
 
     def start_access_point(self, config: dict[str, Any]) -> dict[str, Any]:
         self.stop_access_point()
-        # LAN-only mode switches the radio off; the hotspot needs it on.
-        self._ensure_wifi_enabled()
+        # Ethernet Mode switches the radio off; the hotspot needs it on. With
+        # hostapd the interface is held back from NetworkManager first, so that
+        # switching the radio on does not first connect to a saved Wi-Fi.
+        self._ensure_wifi_enabled(hold_unmanaged=self._hostapd_available())
         wifi_interface = self._get_wifi_interface()
         if wifi_interface is None:
             raise RuntimeError("No Wi-Fi interface found")
@@ -364,6 +366,11 @@ class NetworkManager:
             except Exception as exc:
                 print(f"hostapd hotspot failed, falling back to NetworkManager: {exc}")
                 self._stop_hostapd_ap()
+                # The fallback needs NetworkManager to manage the interface.
+                self._run(
+                    ["nmcli", "device", "set", wifi_interface, "managed", "yes"],
+                    check=False,
+                )
         self._create_access_point_profile(wifi_interface, config, band, key_mgmt)
 
     def _hostapd_config(
@@ -1220,13 +1227,26 @@ class NetworkManager:
                 return parts[1].strip().lower()
         return ""
 
-    def _ensure_wifi_enabled(self) -> None:
+    def _ensure_wifi_enabled(self, hold_unmanaged: bool = False) -> None:
+        """Switch the Wi-Fi radio on.
+
+        With [hold_unmanaged] the interface is taken away from NetworkManager
+        *before* the radio comes on (and stays unmanaged), so NetworkManager
+        has no chance to auto-connect to a saved network on the way to the
+        hotspot.
+        """
+        wifi_interface = self._get_wifi_interface()
+        if hold_unmanaged and wifi_interface:
+            self._run(
+                ["nmcli", "device", "set", wifi_interface, "managed", "no"],
+                check=False,
+            )
+
         result = self._run(["nmcli", "radio", "wifi"], check=False)
         if result.returncode == 0 and "disabled" in result.stdout.lower():
             self._run(["nmcli", "radio", "wifi", "on"])
 
-        wifi_interface = self._get_wifi_interface()
-        if wifi_interface:
+        if wifi_interface and not hold_unmanaged:
             self._run(
                 ["nmcli", "device", "set", wifi_interface, "managed", "yes"],
                 check=False,

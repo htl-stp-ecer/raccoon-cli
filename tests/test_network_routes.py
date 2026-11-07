@@ -586,7 +586,7 @@ def _hotspot_manager(tmp_path: Path, monkeypatch, commands, fail_sae=False):
     manager = NetworkManager(state_path=tmp_path / "network_state.json")
     monkeypatch.setattr(manager, "stop_access_point", lambda: None)
     monkeypatch.setattr(
-        manager, "_ensure_wifi_enabled", lambda: commands.append(["ensure"])
+        manager, "_ensure_wifi_enabled", lambda **kw: commands.append(["ensure"])
     )
     monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
 
@@ -923,7 +923,7 @@ def _lan_manager(tmp_path: Path, monkeypatch, *, lan_address_ok=True, hotspot_ac
     monkeypatch.setattr(manager, "is_ethernet_cable_connected", lambda: True)
     monkeypatch.setattr(manager, "_ethernet_has_address", lambda *a, **k: lan_address_ok)
     monkeypatch.setattr(manager, "is_access_point_active", lambda: hotspot_active)
-    monkeypatch.setattr(manager, "_ensure_wifi_enabled", lambda: events.append("wifi-on"))
+    monkeypatch.setattr(manager, "_ensure_wifi_enabled", lambda **kw: events.append("wifi-on"))
     monkeypatch.setattr(manager, "stop_access_point", lambda: events.append("stop-ap"))
     monkeypatch.setattr(manager, "start_access_point", lambda config: events.append("start-ap"))
     monkeypatch.setattr(manager, "_default_access_point_config", lambda: {})
@@ -1311,3 +1311,29 @@ def test_failed_ethernet_host_gives_the_hotspot_back(tmp_path: Path, monkeypatch
 
     assert events.index("stop-ap") < events.index("start-ap")
     assert ["nmcli", "radio", "wifi", "off"] not in events
+
+
+def test_hostapd_hotspot_holds_wlan_unmanaged_before_the_radio_comes_on(
+    tmp_path: Path, monkeypatch
+):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        out = "disabled\n" if command == ["nmcli", "radio", "wifi"] else ""
+        return CompletedProcess(command, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+    monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
+
+    manager._ensure_wifi_enabled(hold_unmanaged=True)
+
+    unmanaged = commands.index(["nmcli", "device", "set", "wlan0", "managed", "no"])
+    radio_on = commands.index(["nmcli", "radio", "wifi", "on"])
+    assert unmanaged < radio_on
+    assert ["nmcli", "device", "set", "wlan0", "managed", "yes"] not in commands
+
+    commands.clear()
+    manager._ensure_wifi_enabled()  # normal: managed again
+    assert ["nmcli", "device", "set", "wlan0", "managed", "yes"] in commands
