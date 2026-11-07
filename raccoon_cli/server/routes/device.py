@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from raccoon_cli.server.auth import require_auth
+from raccoon_cli.server.services.network_manager import NetworkManager
 from raccoon_cli.table_map import TableMapRequest
 
 router = APIRouter(prefix="/api/v1/device", tags=["device"])
@@ -294,6 +295,13 @@ async def update_hostname(request: HostnameRequest):
         raise HTTPException(status_code=500, detail=f"Failed to set hostname: {e.stderr.decode()}") from e
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="hostnamectl not available")
+
+    # Publish the new name: mDNS (Avahi) and, if the hotspot is on, its DNS.
+    subprocess.run(["sudo", "systemctl", "restart", "avahi-daemon"], capture_output=True)
+    try:
+        NetworkManager().refresh_hotspot_hostname()
+    except Exception as exc:
+        print(f"Could not restart the hotspot after the hostname change: {exc}")
 
     project_path = _get_project_path()
     return _build_connection_info(project_path)

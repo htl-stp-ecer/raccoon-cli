@@ -142,6 +142,67 @@ def install(user: str):
     subprocess.run(["systemctl", "status", "raccoon", "--no-pager", "-l"])
 
 
+HOTSPOT_PACKAGES = ("hostapd", "dnsmasq")
+
+
+SHARED_DNSMASQ_CONF = Path("/etc/NetworkManager/dnsmasq-shared.d/raccoon.conf")
+
+
+def _install_shared_dnsmasq_config() -> None:
+    """Make NetworkManager's shared-mode dnsmasq not advertise the robot.
+
+    It serves DHCP when the robot hosts the cable (Ethernet Mode) or runs the
+    NetworkManager fallback hotspot. Left alone it tells clients that the robot
+    is their router and DNS server, but the robot has no internet to share: a
+    laptop then sends all its traffic and lookups into a dead end. An empty
+    option removes it from the lease.
+    """
+    try:
+        SHARED_DNSMASQ_CONF.parent.mkdir(parents=True, exist_ok=True)
+        SHARED_DNSMASQ_CONF.write_text(
+            "# Written by raccoon post-install.\n"
+            "# The robot has no internet to share: no router, no DNS server.\n"
+            "dhcp-option=3\n"
+            "dhcp-option=6\n"
+        )
+    except OSError as exc:
+        console.print(f"[yellow]Could not write {SHARED_DNSMASQ_CONF}: {exc}[/yellow]")
+
+
+def _ensure_hotspot_packages() -> None:
+    """Install hostapd + dnsmasq, which the Wi-Fi hotspot runs on.
+
+    Never fatal: without them the server falls back to a NetworkManager
+    hotspot. Both services are disabled afterwards because the raccoon server
+    starts them itself, on demand; a system dnsmasq would hold port 53 and
+    break the hotspot.
+    """
+    if all(shutil.which(pkg) for pkg in HOTSPOT_PACKAGES):
+        return
+    console.print("Installing hotspot packages (hostapd, dnsmasq)...")
+    env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
+    install_cmd = ["apt-get", "install", "-y", "--no-install-recommends", *HOTSPOT_PACKAGES]
+    try:
+        result = subprocess.run(install_cmd, env=env, capture_output=True, text=True, timeout=240)
+        if result.returncode != 0:
+            # Stale package lists on a fresh image: refresh once and retry.
+            subprocess.run(["apt-get", "update"], env=env, capture_output=True, timeout=120)
+            result = subprocess.run(install_cmd, env=env, capture_output=True, text=True, timeout=240)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        console.print(f"[yellow]Could not install hotspot packages: {exc}[/yellow]")
+        return
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout).strip().splitlines()[-3:]
+        console.print(
+            "[yellow]Could not install hotspot packages (offline?); the hotspot "
+            "will use NetworkManager instead.[/yellow]\n" + "\n".join(tail)
+        )
+        return
+    for unit in HOTSPOT_PACKAGES:
+        subprocess.run(["systemctl", "disable", "--now", unit], check=False, capture_output=True)
+    subprocess.run(["systemctl", "mask", "hostapd"], check=False, capture_output=True)
+
+
 @main.command(name="post-install")
 @click.option("--user", default="pi", help="User the service runs as")
 def post_install(user: str):
@@ -152,6 +213,8 @@ def post_install(user: str):
 
     subprocess.run(["systemctl", "stop", "raccoon.service"], check=False)
     _do_install(user)
+    _ensure_hotspot_packages()
+    _install_shared_dnsmasq_config()
     subprocess.run(["systemctl", "restart", "raccoon.service"], check=False)
     console.print("[green]Post-install complete.[/green]")
 

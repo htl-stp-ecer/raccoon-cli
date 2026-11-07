@@ -65,13 +65,29 @@ async def lifespan(app: FastAPI):
         restored = False
         print(f"Failed to restore persisted network mode: {exc}")
 
+    # Cable and mode changes for the UI (see network_events): the routes use the
+    # same hub, so a mode change from the UI is announced at once.
+    from raccoon_cli.server.services.network_events import network_events
+
+    def _announce_network_change() -> None:
+        network_events.refresh()
+
+    network_events.set_provider(network_manager.network_snapshot)
+
     # Retries a failed restore (Wi-Fi/cable may not be ready at boot) and turns
     # Wi-Fi back on if LAN-only mode loses its cable.
     watchdog_stop = threading.Event()
     threading.Thread(
         target=network_manager.run_network_watchdog,
         args=(watchdog_stop, not restored),
+        # A mode change made by the server itself (cable lost, late boot
+        # restore) is announced to the UI as well.
+        kwargs={"on_change": _announce_network_change},
         daemon=True,
+    ).start()
+
+    threading.Thread(
+        target=network_events.run_watcher, args=(watchdog_stop,), daemon=True
     ).start()
 
     yield

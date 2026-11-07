@@ -1,3 +1,4 @@
+import socket
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -8,6 +9,12 @@ from raccoon_cli.server import app as app_module
 from raccoon_cli.server.app import create_app
 from raccoon_cli.server.config import ServerConfig
 from raccoon_cli.server.services.network_manager import NetworkManager
+
+
+@pytest.fixture(autouse=True)
+def _no_hostapd(monkeypatch):
+    """Default to the NetworkManager hotspot path; hostapd tests opt in."""
+    monkeypatch.setattr(NetworkManager, "_hostapd_available", lambda self: False)
 
 
 @pytest.fixture
@@ -244,10 +251,15 @@ def test_network_manager_access_point_mode_starts_hotspot(tmp_path: Path, monkey
 
     manager.set_network_mode("access_point")
 
+    import re
+
+    assert len(started_configs) == 1
+    password = started_configs[0].pop("password")
+    ssid = started_configs[0].pop("ssid")
+    assert re.fullmatch(r"raccoon\d{3}", password)
+    assert re.fullmatch(r"Raccoon-Robot-\d{3}", ssid)
     assert started_configs == [
         {
-            "ssid": "RaccoonOS",
-            "password": "raccoonos",
             "band": "band5GHz",
             "channel": 0,
             "encryptionType": "wpa2Personal",
@@ -255,6 +267,11 @@ def test_network_manager_access_point_mode_starts_hotspot(tmp_path: Path, monkey
             "maxClients": 8,
         }
     ]
+    # Kept: the next start uses the same password.
+    saved = manager.get_access_point_config()
+    assert (saved["ssid"], saved["password"]) == (ssid, password)
+    again = manager._default_access_point_config()
+    assert (again["ssid"], again["password"]) == (ssid, password)
 
 
 def test_network_manager_restore_restarts_saved_hotspot_config(
@@ -569,7 +586,7 @@ def _hotspot_manager(tmp_path: Path, monkeypatch, commands, fail_sae=False):
     manager = NetworkManager(state_path=tmp_path / "network_state.json")
     monkeypatch.setattr(manager, "stop_access_point", lambda: None)
     monkeypatch.setattr(
-        manager, "_ensure_wifi_enabled", lambda: commands.append(["ensure"])
+        manager, "_ensure_wifi_enabled", lambda **kw: commands.append(["ensure"])
     )
     monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
 
@@ -695,31 +712,6 @@ def test_forget_never_deletes_hotspot_profile(tmp_path: Path, monkeypatch):
     assert commands == [["nmcli", "connection", "delete", "uuid", "c1"]]
 
 
-def test_lan_only_failsafe_reenables_wifi_after_cable_loss(
-    tmp_path: Path, monkeypatch
-):
-    manager = NetworkManager(state_path=tmp_path / "network_state.json")
-    manager._persist_network_mode("lan_only")
-    monkeypatch.setattr(manager, "is_ethernet_cable_connected", lambda: False)
-    monkeypatch.setattr(manager, "is_access_point_active", lambda: False)
-    monkeypatch.setattr(manager, "_ensure_wifi_enabled", lambda: None)
-
-    assert manager.lan_only_failsafe_tick() is False
-    assert manager.lan_only_failsafe_tick() is False
-    assert manager.lan_only_failsafe_tick() is True
-    assert manager.get_network_mode() == "client"
-
-
-def test_lan_only_failsafe_ignores_connected_cable(tmp_path: Path, monkeypatch):
-    manager = NetworkManager(state_path=tmp_path / "network_state.json")
-    manager._persist_network_mode("lan_only")
-    monkeypatch.setattr(manager, "is_ethernet_cable_connected", lambda: True)
-
-    for _ in range(5):
-        assert manager.lan_only_failsafe_tick() is False
-    assert manager.get_network_mode() == "lan_only"
-
-
 def test_count_access_point_clients_counts_live_neighbours(
     tmp_path: Path, monkeypatch
 ):
@@ -741,3 +733,664 @@ def test_count_access_point_clients_counts_live_neighbours(
     )
 
     assert manager.count_access_point_clients() == 2
+
+
+def test_start_access_point_uses_hostapd_with_plain_wpa_psk(
+    tmp_path: Path, monkeypatch
+):
+    commands: list = []
+    manager = _hotspot_manager(tmp_path, monkeypatch, commands)
+    monkeypatch.setattr(NetworkManager, "_hostapd_available", lambda self: True)
+
+    applied = manager.start_access_point(_hotspot_config(hidden=True))
+
+    assert not any(c[:3] == ["nmcli", "connection", "add"] for c in commands)
+    assert ["nmcli", "device", "set", "wlan0", "managed", "no"] in commands
+    hostapd = next(c for c in commands if c[0] == "hostapd")
+    conf = Path(hostapd[-1])
+    text = conf.read_text()
+    assert "wpa_key_mgmt=WPA-PSK\n" in text
+    assert "SHA256" not in text
+    assert "ieee80211w=0" in text
+    assert "dtim_period=1" in text
+    assert "ssid=RobotNet" in text
+    assert "channel=6" in text
+    assert "ignore_broadcast_ssid=1" in text
+    assert "wpa_passphrase=secret123" in text
+    assert oct(conf.stat().st_mode & 0o777) == "0o600"
+    dnsmasq = next(c for c in commands if c[0] == "dnsmasq")
+    hostname = socket.gethostname().split(".")[0]
+    assert f"--host-record={hostname}.local,10.42.0.1" in dnsmasq
+    assert "--local=/local/" in dnsmasq
+    # No default gateway and no DNS server handed to clients.
+    assert "--dhcp-option=3" in dnsmasq and "--dhcp-option=6" in dnsmasq
+    assert not any(arg.startswith(("--dhcp-option=3,", "--dhcp-option=6,")) for arg in dnsmasq)
+    assert applied["encryptionType"] == "wpa2Personal"
+
+
+def test_hostapd_failure_falls_back_to_networkmanager(tmp_path: Path, monkeypatch):
+    commands: list = []
+    manager = _hotspot_manager(tmp_path, monkeypatch, commands)
+    monkeypatch.setattr(NetworkManager, "_hostapd_available", lambda self: True)
+    inner = manager._run
+
+    def failing_run(command, check=True):
+        if command[0] == "hostapd":
+            raise RuntimeError("hostapd failed")
+        return inner(command, check=check)
+
+    monkeypatch.setattr(manager, "_run", failing_run)
+
+    manager.start_access_point(_hotspot_config())
+
+    assert _add_command(commands)
+    assert commands[-1] == ["nmcli", "connection", "up", "STP-Velox-AP"]
+
+
+def test_hostapd_open_network_has_no_wpa_lines(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    monkeypatch.setattr(manager, "find_best_channel", lambda band: 1)
+    text = manager._hostapd_config(
+        "wlan0", _hotspot_config(encryptionType="open", password=""), "band2_4GHz", None
+    )
+    assert "wpa" not in text
+
+
+def test_hostapd_config_rejects_short_password(tmp_path: Path):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    with pytest.raises(ValueError):
+        manager._hostapd_config(
+            "wlan0", _hotspot_config(password="short"), "band2_4GHz", "wpa-psk"
+        )
+
+
+def test_run_timeout_is_a_clean_error(tmp_path: Path, monkeypatch):
+    import subprocess
+
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+
+    def boom(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], 25)
+
+    monkeypatch.setattr(subprocess, "run", boom)
+
+    with pytest.raises(RuntimeError, match="timed out after 25s"):
+        manager._run(["nmcli", "connection", "up", "x"])
+    assert manager._run(["nmcli", "connection", "up", "x"], check=False).returncode == 124
+
+
+def _activation_manager(tmp_path: Path, monkeypatch, *, dhcp_answers: bool, profiles="Ethernet:802-3-ethernet\n"):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        out = ""
+        if command[:3] == ["nmcli", "-t", "-f"] and "NAME,TYPE" in command:
+            out = profiles
+        elif command[:3] == ["nmcli", "-t", "-f"] and "DEVICE,TYPE" in command:
+            out = "eth0:ethernet\n"
+        # `connection up` while the profile still asks for DHCP fails when
+        # nobody answers; the shared profile comes up.
+        code = 0
+        if command[:2] == ["nmcli", "-w"] and not dhcp_answers:
+            code = 1
+        return CompletedProcess(command, code, stdout=out, stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+    monkeypatch.setattr(manager, "_ethernet_has_address", lambda *a, **k: True)
+    return manager, commands
+
+
+def _modifies(commands, method):
+    return [
+        c for c in commands
+        if c[:3] == ["nmcli", "connection", "modify"] and method in c
+    ]
+
+
+def test_ethernet_mode_is_a_client_when_dhcp_answers(tmp_path: Path, monkeypatch):
+    manager, commands = _activation_manager(tmp_path, monkeypatch, dhcp_answers=True)
+
+    assert manager._activate_first_ethernet_connection() == "client"
+
+    auto = _modifies(commands, "auto")[0]
+    assert auto[auto.index("ipv4.dhcp-timeout") + 1] == "10"
+    assert auto[auto.index("ipv4.may-fail") + 1] == "no"
+    assert _modifies(commands, "shared") == []
+
+
+def test_ethernet_mode_hosts_its_own_network_when_nobody_answers(
+    tmp_path: Path, monkeypatch
+):
+    manager, commands = _activation_manager(tmp_path, monkeypatch, dhcp_answers=False)
+
+    assert manager._activate_first_ethernet_connection() == "host"
+
+    shared = _modifies(commands, "shared")[0]
+    # Same address (and so DHCP range 10.42.0.10-254) as the hotspot.
+    assert shared[shared.index("ipv4.addresses") + 1] == "10.42.0.1/24"
+    assert commands[-1] == ["nmcli", "connection", "up", "Ethernet"]
+
+
+def test_ethernet_mode_creates_a_profile_when_missing(tmp_path: Path, monkeypatch):
+    manager, commands = _activation_manager(
+        tmp_path, monkeypatch, dhcp_answers=True, profiles=""
+    )
+
+    manager._activate_first_ethernet_connection()
+
+    add = next(c for c in commands if c[:3] == ["nmcli", "connection", "add"])
+    assert add[add.index("ifname") + 1] == "eth0"
+
+
+def test_ethernet_mode_fails_cleanly_without_any_address(tmp_path: Path, monkeypatch):
+    manager, _ = _activation_manager(tmp_path, monkeypatch, dhcp_answers=False)
+    monkeypatch.setattr(manager, "_ethernet_has_address", lambda *a, **k: False)
+
+    assert manager._activate_first_ethernet_connection() is None
+
+
+def test_ethernet_role_reads_the_profile_method(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    method = {"value": "shared"}
+    monkeypatch.setattr(manager, "_ethernet_connection_name", lambda: "Ethernet")
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: CompletedProcess(
+            command, 0, stdout=method["value"] + "\n", stderr=""
+        ),
+    )
+
+    assert manager._ethernet_role() == "host"
+    method["value"] = "auto"
+    assert manager._ethernet_role() == "client"
+    method["value"] = "disabled"
+    assert manager._ethernet_role() is None
+
+
+def _lan_manager(tmp_path: Path, monkeypatch, *, lan_address_ok=True, hotspot_active=False):
+    """A manager whose commands are recorded, with a cable plugged in."""
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    events: list = []
+
+    def fake_run(command, check=True):
+        events.append(command)
+        out = ""
+        if command[:3] == ["nmcli", "-t", "-f"] and "NAME,TYPE" in command:
+            out = "Ethernet:802-3-ethernet\nOther:802-3-ethernet\n"
+        return CompletedProcess(command, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+    monkeypatch.setattr(manager, "is_ethernet_cable_connected", lambda: True)
+    monkeypatch.setattr(manager, "_ethernet_has_address", lambda *a, **k: lan_address_ok)
+    monkeypatch.setattr(manager, "is_access_point_active", lambda: hotspot_active)
+    monkeypatch.setattr(manager, "_ensure_wifi_enabled", lambda **kw: events.append("wifi-on"))
+    monkeypatch.setattr(manager, "stop_access_point", lambda: events.append("stop-ap"))
+    monkeypatch.setattr(manager, "start_access_point", lambda config: events.append("start-ap"))
+    monkeypatch.setattr(manager, "_default_access_point_config", lambda: {})
+
+    return manager, events
+
+
+def _ethernet_disabled(events):
+    return [
+        c[3] for c in events
+        if isinstance(c, list) and c[:3] == ["nmcli", "connection", "modify"]
+        and "disabled" in c
+    ]
+
+
+def test_enable_lan_only_stops_hotspot_before_the_radio_goes_off(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch, hotspot_active=True)
+
+    manager.enable_lan_only_mode()
+
+    assert events.index("stop-ap") < events.index(["nmcli", "radio", "wifi", "off"])
+    assert manager.get_network_mode() == "lan_only"
+
+
+def test_enable_lan_only_brings_up_ethernet_before_wifi_goes_off(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch)
+
+    manager.enable_lan_only_mode()
+
+    up = next(
+        i for i, c in enumerate(events)
+        if isinstance(c, list) and c[:2] == ["nmcli", "-w"] and "up" in c
+    )
+    assert up < events.index(["nmcli", "radio", "wifi", "off"])
+
+
+def test_enable_lan_only_keeps_wifi_when_ethernet_gets_no_address(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(
+        tmp_path, monkeypatch, lan_address_ok=False, hotspot_active=True
+    )
+
+    with pytest.raises(RuntimeError, match="Wi-Fi was left unchanged"):
+        manager.enable_lan_only_mode()
+
+    assert ["nmcli", "radio", "wifi", "off"] not in events
+    assert manager.get_network_mode() == "client"
+
+
+@pytest.mark.parametrize("mode", ["client", "access_point"])
+def test_modes_without_lan_leave_ethernet_without_an_address(
+    tmp_path: Path, monkeypatch, mode
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(manager, "start_access_point", lambda config: None)
+    monkeypatch.setattr(manager, "_default_access_point_config", lambda: {})
+
+    manager.set_network_mode(mode)
+
+    assert _ethernet_disabled(events) == ["Ethernet", "Other"]
+
+
+def test_leaving_lan_only_ends_the_lan_address_and_turns_wifi_back_on(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch)
+    manager._persist_network_mode("lan_only")
+
+    manager.disable_lan_only_mode()
+
+    assert _ethernet_disabled(events) == ["Ethernet", "Other"]
+    assert "wifi-on" in events
+    assert manager.get_network_mode() == "client"
+
+
+def test_hotspot_to_client_stops_the_hotspot(tmp_path: Path, monkeypatch):
+    manager, events = _lan_manager(tmp_path, monkeypatch, hotspot_active=True)
+    manager._persist_network_mode("access_point")
+
+    manager.set_network_mode("client")
+
+    assert "stop-ap" in events
+    assert manager.get_network_mode() == "client"
+
+
+def test_refresh_hotspot_hostname_restarts_only_a_running_hostapd_hotspot(
+    tmp_path: Path, monkeypatch
+):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager.save_access_point_config(_hotspot_config())
+    started: list = []
+    monkeypatch.setattr(manager, "start_access_point", lambda c: started.append(c))
+
+    monkeypatch.setattr(manager, "_hostapd_running", lambda: False)
+    assert manager.refresh_hotspot_hostname() is False
+    assert started == []
+
+    monkeypatch.setattr(manager, "_hostapd_running", lambda: True)
+    assert manager.refresh_hotspot_hostname() is True
+    assert started == [_hotspot_config()]
+
+
+def _cable_manager(tmp_path: Path, monkeypatch, carrier, ipv4=None, state="connected"):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+    monkeypatch.setattr(manager, "_get_ethernet_interfaces", lambda: ["eth0"])
+    monkeypatch.setattr(
+        manager,
+        "_network_interfaces",
+        lambda: {"eth0": {"carrier": carrier, "ipv4": ipv4, "mac": "aa"}},
+    )
+    monkeypatch.setattr(manager, "_nmcli_device_state", lambda d: state)
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: commands.append(command)
+        or CompletedProcess(command, 0, stdout="", stderr=""),
+    )
+    return manager, commands
+
+
+def test_cable_counts_only_with_a_carrier(tmp_path: Path, monkeypatch):
+    # An address and a "connected" NetworkManager state are not a cable.
+    manager, _ = _cable_manager(
+        tmp_path, monkeypatch, carrier="0", ipv4="192.168.124.1", state="connected"
+    )
+    assert manager.is_ethernet_cable_connected() is False
+
+    manager, _ = _cable_manager(tmp_path, monkeypatch, carrier="1")
+    assert manager.is_ethernet_cable_connected() is True
+
+
+def test_cable_check_switches_on_a_port_that_is_down(tmp_path: Path, monkeypatch):
+    manager, commands = _cable_manager(tmp_path, monkeypatch, carrier=None)
+
+    assert manager.is_ethernet_cable_connected() is False
+    assert ["ip", "link", "set", "eth0", "up"] in commands
+
+
+def test_lan_status_is_light_and_uses_the_carrier(tmp_path: Path, monkeypatch):
+    manager, _ = _cable_manager(tmp_path, monkeypatch, carrier="1", ipv4="192.168.124.1")
+    monkeypatch.setattr(manager, "is_lan_only_mode_active", lambda: True)
+
+    status = manager.lan_status()
+
+    assert status == {
+        "isActive": True,
+        "isCableConnected": True,
+        "ipAddress": "192.168.124.1",
+        "macAddress": "aa",
+    }
+
+
+def test_network_events_wait_returns_on_change_and_on_timeout():
+    import threading
+    import time
+
+    from raccoon_cli.server.services.network_events import NetworkEvents
+
+    events = NetworkEvents()
+    assert events.publish({"isCableConnected": False, "isActive": False}) is True
+    assert events.publish({"isCableConnected": False, "isActive": False}) is False
+
+    # -1 answers at once with the current state.
+    first = events.wait(-1, 5)
+    assert first == {"version": 1, "isCableConnected": False, "isActive": False}
+
+    # Nothing changes: returns after the timeout with the same version.
+    started = time.monotonic()
+    assert events.wait(1, 0.2)["version"] == 1
+    assert time.monotonic() - started >= 0.2
+
+    # A change wakes the waiting call early.
+    threading.Timer(
+        0.1, lambda: events.publish({"isCableConnected": True, "isActive": False})
+    ).start()
+    started = time.monotonic()
+    woken = events.wait(1, 5)
+    assert woken["version"] == 2 and woken["isCableConnected"] is True
+    assert time.monotonic() - started < 2
+
+    # A version from before a server restart is answered at once.
+    assert events.wait(99, 5)["version"] == 2
+
+
+def test_lan_events_route(server_client, monkeypatch):
+    from raccoon_cli.server.routes import network as network_route
+
+    async def fake_wait(since, timeout):
+        return {"version": 3, "isCableConnected": True, "isActive": False}
+
+    monkeypatch.setattr(network_route.network_events, "wait_async", fake_wait)
+
+    response = server_client.get("/api/v1/network/lan/events?since=2", headers=_auth())
+
+    assert response.status_code == 200
+    assert response.json() == {"version": 3, "isCableConnected": True, "isActive": False}
+
+
+def test_network_events_wait_async_wakes_without_a_thread():
+    import asyncio
+    import time
+
+    from raccoon_cli.server.services.network_events import NetworkEvents
+
+    async def scenario():
+        events = NetworkEvents()
+        events.publish({"isCableConnected": False, "isActive": False})
+
+        # Already newer than the client's version: answered at once.
+        assert (await events.wait_async(-1, 5))["version"] == 1
+
+        # Unchanged: returns after the timeout.
+        started = time.monotonic()
+        assert (await events.wait_async(1, 0.2))["version"] == 1
+        assert time.monotonic() - started >= 0.2
+        assert events._waiters == []
+
+        # A change from another thread wakes the waiting coroutine early.
+        loop = asyncio.get_running_loop()
+        loop.call_later(
+            0.1,
+            lambda: loop.run_in_executor(
+                None, events.publish, {"isCableConnected": True, "isActive": False}
+            ),
+        )
+        started = time.monotonic()
+        woken = await events.wait_async(1, 5)
+        assert woken["version"] == 2 and woken["isCableConnected"] is True
+        assert time.monotonic() - started < 2
+        assert events._waiters == []
+
+    asyncio.run(scenario())
+
+
+def test_enable_ethernet_mode_returns_the_role_and_is_idempotent(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        manager, "_activate_first_ethernet_connection", lambda before_host=None: "host"
+    )
+
+    assert manager.enable_lan_only_mode() == "host"
+
+    # The UI enables twice (LAN call, then the mode call): the second one must
+    # not run the DHCP attempt again.
+    monkeypatch.setattr(
+        manager,
+        "_activate_first_ethernet_connection",
+        lambda: pytest.fail("activated twice"),
+    )
+    monkeypatch.setattr(manager, "_ethernet_role", lambda: "host")
+    assert manager.enable_lan_only_mode() == "host"
+
+
+def test_device_info_reports_the_ethernet_host_details(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager._persist_network_mode("lan_only")
+    monkeypatch.setattr(manager, "_ethernet_role", lambda: "host")
+    monkeypatch.setattr(manager, "_count_neighbours", lambda device: 2)
+
+    details = manager._ethernet_mode_details("lan_only", ["eth0"])
+
+    assert details == {
+        "ethernetRole": "host",
+        "ethernetConnectedDevices": 2,
+    }
+
+    client = manager._ethernet_mode_details("access_point", ["eth0"])
+    assert client == {
+        "ethernetRole": None,
+        "ethernetConnectedDevices": None,
+    }
+
+
+def test_network_snapshot_collects_what_the_ui_shows(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager._persist_network_mode("access_point")
+    monkeypatch.setattr(
+        manager,
+        "_network_interfaces",
+        lambda: {
+            "lo": {"ipv4": "127.0.0.1", "carrier": None},
+            "eth0": {"ipv4": None, "carrier": "0"},
+            "wlan0": {"ipv4": "10.42.0.1", "carrier": "1"},
+        },
+    )
+    monkeypatch.setattr(manager, "_get_ethernet_interfaces", lambda: ["eth0"])
+    monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
+    monkeypatch.setattr(manager, "is_lan_only_mode_active", lambda: False)
+    monkeypatch.setattr(manager, "is_access_point_active", lambda: True)
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: CompletedProcess(
+            command, 0, stdout="STP-Velox-AP\n", stderr=""
+        ),
+    )
+
+    assert manager.network_snapshot() == {
+        "mode": "access_point",
+        "isCableConnected": False,
+        "isActive": False,
+        "addresses": {"wlan0": "10.42.0.1"},
+        "wifiConnection": "STP-Velox-AP",
+        "hotspot": True,
+    }
+
+
+def test_ethernet_host_frees_the_hotspot_address_first(tmp_path: Path, monkeypatch):
+    manager, commands = _activation_manager(tmp_path, monkeypatch, dhcp_answers=False)
+    order: list = []
+    original_run = manager._run
+
+    def recording_run(command, check=True):
+        if command[:3] == ["nmcli", "connection", "modify"] and "shared" in command:
+            order.append("shared")
+        return original_run(command, check=check)
+
+    monkeypatch.setattr(manager, "_run", recording_run)
+
+    assert (
+        manager._activate_first_ethernet_connection(
+            before_host=lambda: order.append("hotspot-stopped")
+        )
+        == "host"
+    )
+    assert order == ["hotspot-stopped", "shared"]
+
+
+def test_ethernet_client_leaves_the_hotspot_alone_until_later(
+    tmp_path: Path, monkeypatch
+):
+    manager, _ = _activation_manager(tmp_path, monkeypatch, dhcp_answers=True)
+    stopped: list = []
+
+    assert (
+        manager._activate_first_ethernet_connection(
+            before_host=lambda: stopped.append(True)
+        )
+        == "client"
+    )
+    assert stopped == []  # the hotspot is only stopped for the host case here
+
+
+def test_watchdog_only_retries_the_boot_restore(tmp_path: Path, monkeypatch):
+    import threading
+
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager._persist_network_mode("lan_only")
+    calls: list = []
+    monkeypatch.setattr(manager, "restore_persisted_network_mode", lambda: calls.append("restore"))
+    changed: list = []
+
+    # No restore to retry: returns at once, never switches modes by itself.
+    manager.run_network_watchdog(threading.Event(), retry_restore=False, interval=0.01)
+    assert calls == []
+
+    manager.run_network_watchdog(
+        threading.Event(), retry_restore=True, interval=0.01, on_change=lambda: changed.append(1)
+    )
+    assert calls == ["restore"]
+    assert changed == [1]
+    assert manager.get_network_mode() == "lan_only"
+
+
+def test_failed_ethernet_host_gives_the_hotspot_back(tmp_path: Path, monkeypatch):
+    manager, events = _lan_manager(tmp_path, monkeypatch, hotspot_active=True)
+
+    def activation(before_host=None):
+        if before_host:
+            before_host()  # stops the hotspot to make room
+        return None  # ... but hosting still fails
+
+    monkeypatch.setattr(manager, "_activate_first_ethernet_connection", activation)
+
+    with pytest.raises(RuntimeError, match="Wi-Fi was left unchanged"):
+        manager.enable_lan_only_mode()
+
+    assert events.index("stop-ap") < events.index("start-ap")
+    assert ["nmcli", "radio", "wifi", "off"] not in events
+
+
+def test_hostapd_hotspot_holds_wlan_unmanaged_before_the_radio_comes_on(
+    tmp_path: Path, monkeypatch
+):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        out = "disabled\n" if command == ["nmcli", "radio", "wifi"] else ""
+        return CompletedProcess(command, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+    monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
+
+    manager._ensure_wifi_enabled(hold_unmanaged=True)
+
+    unmanaged = commands.index(["nmcli", "device", "set", "wlan0", "managed", "no"])
+    radio_on = commands.index(["nmcli", "radio", "wifi", "on"])
+    assert unmanaged < radio_on
+    assert ["nmcli", "device", "set", "wlan0", "managed", "yes"] not in commands
+
+    commands.clear()
+    manager._ensure_wifi_enabled()  # normal: managed again
+    assert ["nmcli", "device", "set", "wlan0", "managed", "yes"] in commands
+
+
+def _connect_manager(tmp_path: Path, monkeypatch, error: str):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+    monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
+    monkeypatch.setattr(manager, "_delete_existing_connection", lambda ssid: commands.append(("delete", ssid)))
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        if command[:3] == ["nmcli", "device", "wifi"] and command[3] == "connect":
+            raise RuntimeError(f"{' '.join(command)} failed: {error}")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+    return manager, commands
+
+
+def test_wrong_wifi_password_is_reported_as_such(tmp_path: Path, monkeypatch):
+    manager, commands = _connect_manager(
+        tmp_path,
+        monkeypatch,
+        "Error: Connection activation failed: (7) Secrets were required, but not provided.",
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        manager.connect("HomeNet", "wpa2Personal", {"password": "hunter2hunter2"})
+
+    assert str(raised.value) == "Wrong password"
+    # The profile with the rejected password is not left behind.
+    assert commands.count(("delete", "HomeNet")) == 2  # before and after
+
+
+def test_other_connect_errors_never_show_the_password(tmp_path: Path, monkeypatch):
+    manager, _ = _connect_manager(tmp_path, monkeypatch, "Error: something odd")
+
+    with pytest.raises(RuntimeError) as raised:
+        manager.connect("HomeNet", "wpa2Personal", {"password": "hunter2hunter2"})
+
+    assert "hunter2hunter2" not in str(raised.value)
+    assert "something odd" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("Error: No network with SSID 'HomeNet' found.", "Network not in range"),
+        ("Error: Connection activation failed: (53) The Wi-Fi network could not be found.", "Network not in range"),
+        ("Error: Failed to add/activate new connection: 802-11-wireless-security.psk: property is missing", "A password is needed"),
+        ("nmcli connection up uuid x timed out after 25s", "The network did not answer in time"),
+    ],
+)
+def test_connect_errors_get_a_readable_message(raw, expected):
+    assert str(NetworkManager._connect_error(RuntimeError(raw), "")) == expected

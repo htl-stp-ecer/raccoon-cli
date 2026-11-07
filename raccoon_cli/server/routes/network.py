@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from raccoon_cli.server.auth import require_auth
+from raccoon_cli.server.services.network_events import network_events
 from raccoon_cli.server.services.network_manager import NetworkManager
 
 router = APIRouter(
@@ -143,6 +144,7 @@ async def get_mode() -> dict[str, str]:
 async def set_mode(request: NetworkModeRequest) -> dict[str, str]:
     try:
         _network_manager.set_network_mode(request.mode)
+        network_events.refresh()
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -162,6 +164,7 @@ async def start_access_point(
 ) -> AccessPointConfigPayload:
     try:
         applied = _network_manager.start_access_point(config.model_dump())
+        network_events.refresh()
         return AccessPointConfigPayload(**applied)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -217,6 +220,15 @@ async def get_saved_network(ssid: str) -> dict[str, Any] | None:
     return _network_manager.get_saved_network(ssid)
 
 
+@router.get("/saved-password/{ssid:path}")
+async def get_saved_password(ssid: str) -> dict[str, str]:
+    """Password of one saved network, fetched when the user asks to see it."""
+    password = _network_manager.get_saved_password(ssid)
+    if password is None:
+        raise HTTPException(status_code=404, detail="Network not saved")
+    return {"password": password}
+
+
 @router.put("/saved")
 async def save_network(network: SavedNetworkPayload) -> dict[str, str]:
     _network_manager.save_network(network.model_dump())
@@ -232,8 +244,11 @@ async def remove_saved_network(ssid: str) -> dict[str, str]:
 @router.post("/lan/enable")
 async def enable_lan_only_mode() -> dict[str, str]:
     try:
-        _network_manager.enable_lan_only_mode()
-        return {"status": "ok"}
+        role = _network_manager.enable_lan_only_mode()
+        network_events.refresh()
+        # "client": got an address from the network; "host": none answered,
+        # the robot hosts the network itself.
+        return {"status": "ok", "role": role}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -242,9 +257,22 @@ async def enable_lan_only_mode() -> dict[str, str]:
 async def disable_lan_only_mode() -> dict[str, str]:
     try:
         _network_manager.disable_lan_only_mode()
+        network_events.refresh()
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/lan/events")
+async def lan_events(
+    since: int = -1, timeout: float = Query(default=20.0, ge=0.0, le=30.0)
+) -> dict[str, Any]:
+    """Long poll: answers when the cable or the mode changed since [since].
+
+    Returns {version, isCableConnected, isActive}. Pass the returned version
+    as [since] on the next call; -1 returns the current state at once.
+    """
+    return await network_events.wait_async(since, timeout)
 
 
 @router.get("/lan/status", response_model=LanStatusPayload)
