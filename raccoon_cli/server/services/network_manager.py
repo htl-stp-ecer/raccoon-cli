@@ -38,7 +38,6 @@ class NetworkManager:
         self.state_path = state_path or (
             Path.home() / ".raccoon" / "network_state.json"
         )
-        self._lan_cable_missing_ticks = 0
 
     def scan_networks(self) -> list[dict[str, Any]]:
         self._ensure_wifi_enabled()
@@ -391,6 +390,10 @@ class NetworkManager:
             f"channel={channel}",
             "ieee80211n=1",
             "wmm_enabled=1",
+            # Multicast (mDNS replies!) reaches a Wi-Fi client in power save only
+            # after a DTIM beacon. With the default period of 2 the replies came
+            # late or got lost and `geared-bot.local` took 30-60 s to resolve.
+            "dtim_period=1",
             f"ignore_broadcast_ssid={1 if config.get('hidden') else 0}",
             f"max_num_sta={int(config.get('maxClients') or 8)}",
             "auth_algs=1",
@@ -846,9 +849,22 @@ class NetworkManager:
                 return role
         # Ethernet first: if it cannot get an address, Wi-Fi stays as it is
         # and the robot does not become unreachable.
-        role = self._activate_first_ethernet_connection()
+        hotspot_released: list[bool] = []
+
+        def release_hotspot() -> None:
+            if self.is_access_point_active():
+                self.stop_access_point()
+                hotspot_released.append(True)
+
+        role = self._activate_first_ethernet_connection(before_host=release_hotspot)
         if role is None:
             self._disable_ethernet_ip()
+            if hotspot_released:
+                # It was stopped to make room; give the user their hotspot back.
+                try:
+                    self.start_access_point(self._default_access_point_config())
+                except Exception as exc:
+                    print(f"Could not restart the hotspot: {exc}")
             raise RuntimeError(
                 "Could not bring up the ethernet connection. Wi-Fi was left unchanged."
             )
@@ -869,24 +885,6 @@ class NetworkManager:
         result = self._run(["nmcli", "radio", "wifi"], check=False)
         return result.returncode == 0 and "disabled" in result.stdout.lower()
 
-    def lan_only_failsafe_tick(self, max_missing_ticks: int = 3) -> bool:
-        """Turn Wi-Fi back on if LAN-only mode lost its cable.
-
-        Without it the robot would be unreachable. Returns True if it acted.
-        """
-        if self.get_network_mode() != "lan_only":
-            self._lan_cable_missing_ticks = 0
-            return False
-        if self.is_ethernet_cable_connected():
-            self._lan_cable_missing_ticks = 0
-            return False
-        self._lan_cable_missing_ticks += 1
-        if self._lan_cable_missing_ticks < max_missing_ticks:
-            return False
-        self._lan_cable_missing_ticks = 0
-        self.disable_lan_only_mode()
-        return True
-
     def run_network_watchdog(
         self,
         stop: threading.Event,
@@ -895,7 +893,14 @@ class NetworkManager:
         max_restore_attempts: int = 6,
         on_change: Callable[[], None] | None = None,
     ) -> None:
-        """Background loop: retry a failed boot restore, then guard LAN-only."""
+        """Background loop: retry a failed boot restore, then stop.
+
+        Pulling the cable in Ethernet Mode no longer switches anything by
+        itself: the UI asks the user. (A timer that switched on its own raced
+        with that answer.)
+        """
+        if not retry_restore:
+            return
         attempts = 0
         while not stop.wait(interval):
             try:
@@ -912,9 +917,7 @@ class NetworkManager:
                             retry_restore = False
                             if self.get_network_mode() == "lan_only":
                                 self.disable_lan_only_mode()
-                    continue
-                if self.lan_only_failsafe_tick() and on_change:
-                    on_change()
+                    return
             except Exception as exc:
                 print(f"Network watchdog error: {exc}")
 
@@ -994,7 +997,9 @@ class NetworkManager:
                 names.append(parts[0])
         return names
 
-    def _activate_first_ethernet_connection(self) -> str | None:
+    def _activate_first_ethernet_connection(
+        self, before_host: Callable[[], None] | None = None
+    ) -> str | None:
         """Bring up the wired connection. Returns "client", "host" or None.
 
         First DHCP, with a short timeout. Only if nobody answers does the robot
@@ -1023,6 +1028,8 @@ class NetworkManager:
             return "client"
 
         # No DHCP server on this cable: host the network.
+        if before_host:
+            before_host()
         self._run(
             [
                 "nmcli", "connection", "modify", name,
