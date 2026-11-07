@@ -1340,3 +1340,57 @@ def test_hostapd_hotspot_holds_wlan_unmanaged_before_the_radio_comes_on(
     commands.clear()
     manager._ensure_wifi_enabled()  # normal: managed again
     assert ["nmcli", "device", "set", "wlan0", "managed", "yes"] in commands
+
+
+def _connect_manager(tmp_path: Path, monkeypatch, error: str):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+    monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
+    monkeypatch.setattr(manager, "_delete_existing_connection", lambda ssid: commands.append(("delete", ssid)))
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        if command[:3] == ["nmcli", "device", "wifi"] and command[3] == "connect":
+            raise RuntimeError(f"{' '.join(command)} failed: {error}")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+    return manager, commands
+
+
+def test_wrong_wifi_password_is_reported_as_such(tmp_path: Path, monkeypatch):
+    manager, commands = _connect_manager(
+        tmp_path,
+        monkeypatch,
+        "Error: Connection activation failed: (7) Secrets were required, but not provided.",
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        manager.connect("HomeNet", "wpa2Personal", {"password": "hunter2hunter2"})
+
+    assert str(raised.value) == "Wrong password"
+    # The profile with the rejected password is not left behind.
+    assert commands.count(("delete", "HomeNet")) == 2  # before and after
+
+
+def test_other_connect_errors_never_show_the_password(tmp_path: Path, monkeypatch):
+    manager, _ = _connect_manager(tmp_path, monkeypatch, "Error: something odd")
+
+    with pytest.raises(RuntimeError) as raised:
+        manager.connect("HomeNet", "wpa2Personal", {"password": "hunter2hunter2"})
+
+    assert "hunter2hunter2" not in str(raised.value)
+    assert "something odd" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("Error: No network with SSID 'HomeNet' found.", "Network not in range"),
+        ("Error: Connection activation failed: (53) The Wi-Fi network could not be found.", "Network not in range"),
+        ("Error: Failed to add/activate new connection: 802-11-wireless-security.psk: property is missing", "A password is needed"),
+        ("nmcli connection up uuid x timed out after 25s", "The network did not answer in time"),
+    ],
+)
+def test_connect_errors_get_a_readable_message(raw, expected):
+    assert str(NetworkManager._connect_error(RuntimeError(raw), "")) == expected

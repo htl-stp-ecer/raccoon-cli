@@ -105,7 +105,11 @@ class NetworkManager:
             # with nmcli or the UI); its secrets are stored in NetworkManager.
             profile = self._find_wifi_profile(ssid)
             if profile is not None:
-                self._run(["nmcli", "connection", "up", "uuid", profile["uuid"]])
+                try:
+                    self._run(["nmcli", "connection", "up", "uuid", profile["uuid"]])
+                except RuntimeError as exc:
+                    # The stored profile is kept; only the message is cleaned.
+                    raise self._connect_error(exc, "") from exc
                 return
 
         self._delete_existing_connection(ssid)
@@ -114,14 +118,23 @@ class NetworkManager:
             raise RuntimeError("No Wi-Fi interface found")
 
         if encryption_type == "open":
-            self._run(["nmcli", "device", "wifi", "connect", ssid])
+            try:
+                self._run(["nmcli", "device", "wifi", "connect", ssid])
+            except RuntimeError as exc:
+                self._delete_existing_connection(ssid)
+                raise self._connect_error(exc, "") from exc
             return
 
         if encryption_type in {"wpa2Personal", "wpa3Personal"}:
             password = credentials.get("password") or ""
-            self._run(
-                ["nmcli", "device", "wifi", "connect", ssid, "password", password]
-            )
+            try:
+                self._run(
+                    ["nmcli", "device", "wifi", "connect", ssid, "password", password]
+                )
+            except RuntimeError as exc:
+                # nmcli leaves a profile with the rejected password behind.
+                self._delete_existing_connection(ssid)
+                raise self._connect_error(exc, password) from exc
             return
 
         if encryption_type not in {"wpa2Enterprise", "wpa3Enterprise"}:
@@ -166,6 +179,30 @@ class NetworkManager:
             except Exception:
                 pass
             raise
+
+    @staticmethod
+    def _connect_error(exc: Exception, password: str) -> RuntimeError:
+        """A message for the UI instead of the raw nmcli command line.
+
+        The raw text contains the whole command, so also the password.
+        """
+        text = str(exc)
+        lowered = text.lower()
+        if "secrets were required" in lowered or "no secrets" in lowered:
+            return RuntimeError("Wrong password")
+        if (
+            "no network with ssid" in lowered
+            or "could not be found" in lowered
+            or "no suitable device" in lowered
+        ):
+            return RuntimeError("Network not in range")
+        if "property is missing" in lowered and "psk" in lowered:
+            return RuntimeError("A password is needed")
+        if "timeout expired" in lowered or "timed out" in lowered:
+            return RuntimeError("The network did not answer in time")
+        if password:
+            text = text.replace(password, "***")
+        return RuntimeError(text)
 
     def forget(self, ssid: str) -> None:
         self._delete_wifi_profiles(ssid)
