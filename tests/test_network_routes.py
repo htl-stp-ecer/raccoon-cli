@@ -840,41 +840,95 @@ def test_run_timeout_is_a_clean_error(tmp_path: Path, monkeypatch):
     assert manager._run(["nmcli", "connection", "up", "x"], check=False).returncode == 124
 
 
-def test_lan_only_sets_fixed_address_on_ethernet_profile(tmp_path: Path, monkeypatch):
+def _activation_manager(tmp_path: Path, monkeypatch, *, dhcp_answers: bool, profiles="Ethernet:802-3-ethernet\n"):
     manager = NetworkManager(state_path=tmp_path / "network_state.json")
     commands: list = []
 
     def fake_run(command, check=True):
         commands.append(command)
-        out = "Ethernet:802-3-ethernet\n" if command[:2] == ["nmcli", "-t"] else ""
-        return CompletedProcess(command, 0, stdout=out, stderr="")
+        out = ""
+        if command[:3] == ["nmcli", "-t", "-f"] and "NAME,TYPE" in command:
+            out = profiles
+        elif command[:3] == ["nmcli", "-t", "-f"] and "DEVICE,TYPE" in command:
+            out = "eth0:ethernet\n"
+        # `connection up` while the profile still asks for DHCP fails when
+        # nobody answers; the shared profile comes up.
+        code = 0
+        if command[:2] == ["nmcli", "-w"] and not dhcp_answers:
+            code = 1
+        return CompletedProcess(command, code, stdout=out, stderr="")
 
     monkeypatch.setattr(manager, "_run", fake_run)
+    monkeypatch.setattr(manager, "_ethernet_has_address", lambda *a, **k: True)
+    return manager, commands
 
-    manager._activate_first_ethernet_connection()
 
-    modify = next(c for c in commands if c[:3] == ["nmcli", "connection", "modify"])
-    assert modify[modify.index("ipv4.method") + 1] == "manual"
-    assert modify[modify.index("ipv4.addresses") + 1] == "192.168.124.1/24"
+def _modifies(commands, method):
+    return [
+        c for c in commands
+        if c[:3] == ["nmcli", "connection", "modify"] and method in c
+    ]
+
+
+def test_ethernet_mode_is_a_client_when_dhcp_answers(tmp_path: Path, monkeypatch):
+    manager, commands = _activation_manager(tmp_path, monkeypatch, dhcp_answers=True)
+
+    assert manager._activate_first_ethernet_connection() == "client"
+
+    auto = _modifies(commands, "auto")[0]
+    assert auto[auto.index("ipv4.dhcp-timeout") + 1] == "10"
+    assert auto[auto.index("ipv4.may-fail") + 1] == "no"
+    assert _modifies(commands, "shared") == []
+
+
+def test_ethernet_mode_hosts_its_own_network_when_nobody_answers(
+    tmp_path: Path, monkeypatch
+):
+    manager, commands = _activation_manager(tmp_path, monkeypatch, dhcp_answers=False)
+
+    assert manager._activate_first_ethernet_connection() == "host"
+
+    shared = _modifies(commands, "shared")[0]
+    # Same address (and so DHCP range 10.42.0.10-254) as the hotspot.
+    assert shared[shared.index("ipv4.addresses") + 1] == "10.42.0.1/24"
     assert commands[-1] == ["nmcli", "connection", "up", "Ethernet"]
 
 
-def test_lan_only_creates_ethernet_profile_when_missing(tmp_path: Path, monkeypatch):
-    manager = NetworkManager(state_path=tmp_path / "network_state.json")
-    commands: list = []
-
-    def fake_run(command, check=True):
-        commands.append(command)
-        out = "eth0:ethernet\n" if command[:3] == ["nmcli", "-t", "-f"] and "DEVICE,TYPE" in command else ""
-        return CompletedProcess(command, 0, stdout=out, stderr="")
-
-    monkeypatch.setattr(manager, "_run", fake_run)
+def test_ethernet_mode_creates_a_profile_when_missing(tmp_path: Path, monkeypatch):
+    manager, commands = _activation_manager(
+        tmp_path, monkeypatch, dhcp_answers=True, profiles=""
+    )
 
     manager._activate_first_ethernet_connection()
 
     add = next(c for c in commands if c[:3] == ["nmcli", "connection", "add"])
     assert add[add.index("ifname") + 1] == "eth0"
-    assert add[add.index("ipv4.addresses") + 1] == "192.168.124.1/24"
+
+
+def test_ethernet_mode_fails_cleanly_without_any_address(tmp_path: Path, monkeypatch):
+    manager, _ = _activation_manager(tmp_path, monkeypatch, dhcp_answers=False)
+    monkeypatch.setattr(manager, "_ethernet_has_address", lambda *a, **k: False)
+
+    assert manager._activate_first_ethernet_connection() is None
+
+
+def test_ethernet_role_reads_the_profile_method(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    method = {"value": "shared"}
+    monkeypatch.setattr(manager, "_ethernet_connection_name", lambda: "Ethernet")
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: CompletedProcess(
+            command, 0, stdout=method["value"] + "\n", stderr=""
+        ),
+    )
+
+    assert manager._ethernet_role() == "host"
+    method["value"] = "auto"
+    assert manager._ethernet_role() == "client"
+    method["value"] = "disabled"
+    assert manager._ethernet_role() is None
 
 
 def _lan_manager(tmp_path: Path, monkeypatch, *, lan_address_ok=True, hotspot_active=False):
@@ -891,7 +945,7 @@ def _lan_manager(tmp_path: Path, monkeypatch, *, lan_address_ok=True, hotspot_ac
 
     monkeypatch.setattr(manager, "_run", fake_run)
     monkeypatch.setattr(manager, "is_ethernet_cable_connected", lambda: True)
-    monkeypatch.setattr(manager, "_ethernet_has_lan_address", lambda *a, **k: lan_address_ok)
+    monkeypatch.setattr(manager, "_ethernet_has_address", lambda *a, **k: lan_address_ok)
     monkeypatch.setattr(manager, "is_access_point_active", lambda: hotspot_active)
     monkeypatch.setattr(manager, "_ensure_wifi_enabled", lambda: events.append("wifi-on"))
     monkeypatch.setattr(manager, "stop_access_point", lambda: events.append("stop-ap"))
@@ -924,7 +978,10 @@ def test_enable_lan_only_brings_up_ethernet_before_wifi_goes_off(
 
     manager.enable_lan_only_mode()
 
-    up = events.index(["nmcli", "connection", "up", "Ethernet"])
+    up = next(
+        i for i, c in enumerate(events)
+        if isinstance(c, list) and c[:2] == ["nmcli", "-w"] and "up" in c
+    )
     assert up < events.index(["nmcli", "radio", "wifi", "off"])
 
 
@@ -1127,3 +1184,42 @@ def test_network_events_wait_async_wakes_without_a_thread():
         assert events._waiters == []
 
     asyncio.run(scenario())
+
+
+def test_enable_ethernet_mode_returns_the_role_and_is_idempotent(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(manager, "_activate_first_ethernet_connection", lambda: "host")
+
+    assert manager.enable_lan_only_mode() == "host"
+
+    # The UI enables twice (LAN call, then the mode call): the second one must
+    # not run the DHCP attempt again.
+    monkeypatch.setattr(
+        manager,
+        "_activate_first_ethernet_connection",
+        lambda: pytest.fail("activated twice"),
+    )
+    monkeypatch.setattr(manager, "_ethernet_role", lambda: "host")
+    assert manager.enable_lan_only_mode() == "host"
+
+
+def test_device_info_reports_the_ethernet_host_details(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager._persist_network_mode("lan_only")
+    monkeypatch.setattr(manager, "_ethernet_role", lambda: "host")
+    monkeypatch.setattr(manager, "_count_neighbours", lambda device: 2)
+
+    details = manager._ethernet_mode_details("lan_only", ["eth0"])
+
+    assert details == {
+        "ethernetRole": "host",
+        "ethernetConnectedDevices": 2,
+    }
+
+    client = manager._ethernet_mode_details("access_point", ["eth0"])
+    assert client == {
+        "ethernetRole": None,
+        "ethernetConnectedDevices": None,
+    }

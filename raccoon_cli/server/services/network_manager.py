@@ -24,8 +24,10 @@ AP_ADDRESS = "10.42.0.1"
 AP_PREFIX = 24
 AP_DHCP_RANGE = "10.42.0.10,10.42.0.254,255.255.255.0,1h"
 
-# Fixed address of the robot in LAN-only mode.
-LAN_ADDRESS = "192.168.124.1/24"
+# Ethernet Mode: ask the wired network for an address (DHCP) first; if nobody
+# answers within this many seconds the robot hosts its own network, with the
+# same address and DHCP range as the hotspot.
+ETHERNET_DHCP_TIMEOUT = 10
 
 
 class NetworkManager:
@@ -207,9 +209,25 @@ class NetworkManager:
             "ethernetIpAddress": ethernet_details.get("ipv4"),
             "ethernetMacAddress": ethernet_details.get("mac"),
             "ethernetConnectionName": self._ethernet_connection_name(),
+            **self._ethernet_mode_details(mode, ethernet_interfaces),
             "wifiIpAddress": wifi_details.get("ipv4"),
             "wifiMacAddress": wifi_details.get("mac"),
             "connectedNetwork": self._connected_wifi_network(),
+        }
+
+    def _ethernet_mode_details(
+        self, mode: str, ethernet_interfaces: list[str]
+    ) -> dict[str, Any]:
+        """Role and, as host, the connected devices (Ethernet Mode only)."""
+        role = self._ethernet_role() if mode == "lan_only" else None
+        host = role == "host"
+        return {
+            "ethernetRole": role,
+            "ethernetConnectedDevices": (
+                self._count_neighbours(ethernet_interfaces[0])
+                if host and ethernet_interfaces
+                else None
+            ),
         }
 
     def get_network_mode(self) -> str:
@@ -614,9 +632,10 @@ class NetworkManager:
         wifi_interface = self._get_wifi_interface()
         if wifi_interface is None:
             return 0
-        result = self._run(
-            ["ip", "-j", "neigh", "show", "dev", wifi_interface], check=False
-        )
+        return self._count_neighbours(wifi_interface)
+
+    def _count_neighbours(self, device: str) -> int:
+        result = self._run(["ip", "-j", "neigh", "show", "dev", device], check=False)
         if result.returncode != 0:
             return 0
         try:
@@ -807,18 +826,31 @@ class NetworkManager:
             return ""
         return result.stdout.strip()
 
-    def enable_lan_only_mode(self) -> None:
+    def enable_lan_only_mode(self) -> str:
+        """Switch to Ethernet Mode. Returns "client" or "host".
+
+        "client": a DHCP server (router, switch, laptop sharing its network)
+        answered and gave the robot an address. "host": nobody answered within
+        ETHERNET_DHCP_TIMEOUT seconds (a laptop plugged in directly), so the
+        robot hosts the network itself: same address and DHCP range as the
+        hotspot.
+        """
         if not self.is_ethernet_cable_connected():
             raise RuntimeError(
                 "No ethernet cable detected. Please connect an ethernet cable before enabling Ethernet Mode."
             )
-        # Ethernet first: if it cannot get its address, Wi-Fi stays as it is
+        # Already there (the UI enables twice: the LAN call and the mode call).
+        if self.get_network_mode() == "lan_only" and self._ethernet_has_address(1):
+            role = self._ethernet_role()
+            if role:
+                return role
+        # Ethernet first: if it cannot get an address, Wi-Fi stays as it is
         # and the robot does not become unreachable.
-        self._activate_first_ethernet_connection()
-        if not self._ethernet_has_lan_address():
+        role = self._activate_first_ethernet_connection()
+        if role is None:
             self._disable_ethernet_ip()
             raise RuntimeError(
-                f"Could not bring up the LAN connection ({LAN_ADDRESS}). Wi-Fi was left unchanged."
+                "Could not bring up the ethernet connection. Wi-Fi was left unchanged."
             )
         # End the hotspot (hostapd, dnsmasq, or the NetworkManager profile)
         # before the radio goes off, so nothing keeps claiming to be hosted.
@@ -826,6 +858,7 @@ class NetworkManager:
             self.stop_access_point()
         self._run(["nmcli", "radio", "wifi", "off"])
         self._persist_network_mode("lan_only")
+        return role
 
     def disable_lan_only_mode(self) -> None:
         self.set_network_mode("client")
@@ -928,39 +961,80 @@ class NetworkManager:
                 names.append(parts[0])
         return names
 
-    def _activate_first_ethernet_connection(self) -> None:
-        """Bring up wired networking with the robot's fixed LAN address.
+    def _activate_first_ethernet_connection(self) -> str | None:
+        """Bring up the wired connection. Returns "client", "host" or None.
 
-        The default profile uses DHCP; on a direct laptop-to-robot cable there
-        is no DHCP server, so `connection up` would wait for a lease until it
-        times out and the robot never gets an address.
+        First DHCP, with a short timeout. Only if nobody answers does the robot
+        become the DHCP server itself (NetworkManager "shared", same address and
+        range as the hotspot).
         """
+        name = self._ensure_ethernet_profile()
+        self._run(
+            [
+                "nmcli", "connection", "modify", name,
+                "ipv4.method", "auto",
+                "ipv4.addresses", "",
+                "ipv4.gateway", "",
+                "ipv4.dhcp-timeout", str(ETHERNET_DHCP_TIMEOUT),
+                "ipv4.may-fail", "no",
+                "ipv6.method", "ignore",
+            ],
+            check=False,
+        )
+        # -w: wait a little longer than the DHCP timeout for the result.
+        up = self._run(
+            ["nmcli", "-w", str(ETHERNET_DHCP_TIMEOUT + 5), "connection", "up", name],
+            check=False,
+        )
+        if up.returncode == 0 and self._ethernet_has_address():
+            return "client"
+
+        # No DHCP server on this cable: host the network.
+        self._run(
+            [
+                "nmcli", "connection", "modify", name,
+                "ipv4.method", "shared",
+                "ipv4.addresses", f"{AP_ADDRESS}/{AP_PREFIX}",
+                "ipv4.gateway", "",
+                "ipv4.may-fail", "no",
+            ],
+            check=False,
+        )
+        self._run(["nmcli", "connection", "up", name], check=False)
+        return "host" if self._ethernet_has_address() else None
+
+    def _ensure_ethernet_profile(self) -> str:
         profiles = self._ethernet_profile_names()
         if profiles:
-            name = profiles[0]
-            self._run(
-                [
-                    "nmcli", "connection", "modify", name,
-                    "ipv4.method", "manual",
-                    "ipv4.addresses", LAN_ADDRESS,
-                    "ipv4.gateway", "",
-                ],
+            return profiles[0]
+        name = "Wired connection 1"
+        interfaces = self._get_ethernet_interfaces()
+        self._run(
+            [
+                "nmcli", "connection", "add", "type", "ethernet",
+                "con-name", name,
+                *(["ifname", interfaces[0]] if interfaces else []),
+            ],
+            check=False,
+        )
+        return name
+
+    def _ethernet_role(self) -> str | None:
+        """"host" if the robot serves DHCP on the wired port, "client" if it
+        got its address from the network, None if neither (or no profile)."""
+        name = self._ethernet_connection_name()
+        names = [name] if name else self._ethernet_profile_names()
+        for profile in names:
+            result = self._run(
+                ["nmcli", "-g", "ipv4.method", "connection", "show", profile],
                 check=False,
             )
-        else:
-            name = "Wired connection 1"
-            interfaces = self._get_ethernet_interfaces()
-            self._run(
-                [
-                    "nmcli", "connection", "add", "type", "ethernet",
-                    "con-name", name,
-                    *(["ifname", interfaces[0]] if interfaces else []),
-                    "ipv4.method", "manual",
-                    "ipv4.addresses", LAN_ADDRESS,
-                ],
-                check=False,
-            )
-        self._run(["nmcli", "connection", "up", name], check=False)
+            method = result.stdout.strip()
+            if method == "shared":
+                return "host"
+            if method == "auto":
+                return "client"
+        return None
 
     def _disable_ethernet_ip(self) -> None:
         """Keep the wired port without an address outside LAN-only mode.
@@ -986,13 +1060,12 @@ class NetworkManager:
         for device in self._get_ethernet_interfaces():
             self._run(["ip", "link", "set", device, "up"], check=False)
 
-    def _ethernet_has_lan_address(self, attempts: int = 5) -> bool:
-        """True once a wired port carries the fixed LAN address."""
-        wanted = LAN_ADDRESS.split("/")[0]
+    def _ethernet_has_address(self, attempts: int = 5) -> bool:
+        """True once a wired port has an IPv4 address."""
         for attempt in range(attempts):
             interfaces = self._network_interfaces()
             if any(
-                interfaces.get(device, {}).get("ipv4") == wanted
+                interfaces.get(device, {}).get("ipv4")
                 for device in self._get_ethernet_interfaces()
             ):
                 return True

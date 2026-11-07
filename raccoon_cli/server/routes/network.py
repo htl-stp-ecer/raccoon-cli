@@ -243,9 +243,11 @@ async def remove_saved_network(ssid: str) -> dict[str, str]:
 @router.post("/lan/enable")
 async def enable_lan_only_mode() -> dict[str, str]:
     try:
-        _network_manager.enable_lan_only_mode()
+        role = _network_manager.enable_lan_only_mode()
         network_events.refresh()
-        return {"status": "ok"}
+        # "client": got an address from the network; "host": none answered,
+        # the robot hosts the network itself.
+        return {"status": "ok", "role": role}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
