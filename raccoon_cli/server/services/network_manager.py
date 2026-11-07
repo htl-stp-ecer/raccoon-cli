@@ -7,8 +7,10 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -204,6 +206,7 @@ class NetworkManager:
             "ethernetCableConnected": ethernet_connected,
             "ethernetIpAddress": ethernet_details.get("ipv4"),
             "ethernetMacAddress": ethernet_details.get("mac"),
+            "ethernetConnectionName": self._ethernet_connection_name(),
             "wifiIpAddress": wifi_details.get("ipv4"),
             "wifiMacAddress": wifi_details.get("mac"),
             "connectedNetwork": self._connected_wifi_network(),
@@ -214,6 +217,7 @@ class NetworkManager:
 
     def set_network_mode(self, mode: str) -> None:
         if mode == "access_point":
+            self._disable_ethernet_ip()
             if not self.is_access_point_active():
                 self.start_access_point(self._default_access_point_config())
             else:
@@ -224,15 +228,17 @@ class NetworkManager:
             self.enable_lan_only_mode()
             return
 
+        self._disable_ethernet_ip()
         if self.is_access_point_active():
             self.stop_access_point()
-        else:
-            self._ensure_wifi_enabled()
+        # Also after a hotspot stop: LAN-only mode switched the radio off.
+        self._ensure_wifi_enabled()
         self._persist_network_mode("client")
 
     def restore_persisted_network_mode(self) -> None:
         mode = self.get_network_mode()
         if mode == "access_point":
+            self._disable_ethernet_ip()
             if not self.is_access_point_active():
                 self.start_access_point(self._default_access_point_config())
             else:
@@ -243,6 +249,7 @@ class NetworkManager:
             self.enable_lan_only_mode()
             return
 
+        self._disable_ethernet_ip()
         self._persist_network_mode("client")
 
     def start_access_point(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -402,6 +409,7 @@ class NetworkManager:
             ["ip", "addr", "add", f"{AP_ADDRESS}/{AP_PREFIX}", "dev", wifi_interface]
         )
         self._run(["ip", "link", "set", wifi_interface, "up"])
+        hostname = socket.gethostname().split(".")[0]
         self._run(["hostapd", "-B", "-P", str(self._hostapd_pid_path), str(conf_path)])
         self._run(
             [
@@ -415,10 +423,31 @@ class NetworkManager:
                 f"--dhcp-option=6,{AP_ADDRESS}",
                 "--no-resolv",
                 "--no-hosts",
+                # Clients use this dnsmasq as their DNS server but it has no
+                # upstream. Answer the robot's own name directly and refuse to
+                # forward `.local`, so a lookup of <hostname>.local is instant
+                # instead of waiting for an upstream that does not exist.
+                f"--host-record={hostname}.local,{AP_ADDRESS}",
+                f"--host-record={hostname},{AP_ADDRESS}",
+                "--local=/local/",
                 "--conf-file=/dev/null",
                 f"--pid-file={self._dnsmasq_pid_path}",
             ]
         )
+
+    def refresh_hotspot_hostname(self) -> bool:
+        """Restart a running hostapd hotspot so it serves the current hostname.
+
+        dnsmasq gets the robot's name when it starts, so a hostname change
+        needs a restart. Returns True if a hotspot was restarted.
+        """
+        if not self._hostapd_running():
+            return False
+        config = self.get_access_point_config()
+        if not config:
+            return False
+        self.start_access_point(config)
+        return True
 
     def _stop_hostapd_ap(self) -> None:
         """Stop the hostapd hotspot, if one was started. No-op otherwise."""
@@ -781,14 +810,24 @@ class NetworkManager:
     def enable_lan_only_mode(self) -> None:
         if not self.is_ethernet_cable_connected():
             raise RuntimeError(
-                "No ethernet cable detected. Please connect a LAN cable before enabling LAN only mode."
+                "No ethernet cable detected. Please connect an ethernet cable before enabling Ethernet Mode."
             )
-        self._run(["nmcli", "radio", "wifi", "off"])
+        # Ethernet first: if it cannot get its address, Wi-Fi stays as it is
+        # and the robot does not become unreachable.
         self._activate_first_ethernet_connection()
+        if not self._ethernet_has_lan_address():
+            self._disable_ethernet_ip()
+            raise RuntimeError(
+                f"Could not bring up the LAN connection ({LAN_ADDRESS}). Wi-Fi was left unchanged."
+            )
+        # End the hotspot (hostapd, dnsmasq, or the NetworkManager profile)
+        # before the radio goes off, so nothing keeps claiming to be hosted.
+        if self.is_access_point_active():
+            self.stop_access_point()
+        self._run(["nmcli", "radio", "wifi", "off"])
         self._persist_network_mode("lan_only")
 
     def disable_lan_only_mode(self) -> None:
-        self._restore_ethernet_dhcp()
         self.set_network_mode("client")
 
     def is_lan_only_mode_active(self) -> bool:
@@ -912,24 +951,50 @@ class NetworkManager:
             )
         self._run(["nmcli", "connection", "up", name], check=False)
 
-    def _restore_ethernet_dhcp(self) -> None:
-        """Undo the fixed LAN address so wired networks hand out DHCP again."""
+    def _disable_ethernet_ip(self) -> None:
+        """Keep the wired port without an address outside LAN-only mode.
+
+        The link stays up (the cable is still detected), but nothing is routed
+        over it: no DHCP, no fixed address. LAN traffic is for LAN-only mode.
+        """
         for name in self._ethernet_profile_names():
-            result = self._run(
-                ["nmcli", "-g", "ipv4.method,ipv4.addresses", "connection", "show", name],
-                check=False,
-            )
-            # Only touch profiles that still carry our fixed address.
-            if result.stdout.split() != ["manual", LAN_ADDRESS]:
-                continue
             self._run(
                 [
                     "nmcli", "connection", "modify", name,
-                    "ipv4.method", "auto",
+                    "ipv4.method", "disabled",
                     "ipv4.addresses", "",
+                    "ipv4.gateway", "",
+                    "ipv6.method", "ignore",
                 ],
                 check=False,
             )
+            # Applies the change to a running connection; no-op otherwise.
+            self._run(["nmcli", "connection", "up", name], check=False)
+
+    def _ethernet_has_lan_address(self, attempts: int = 5) -> bool:
+        """True once a wired port carries the fixed LAN address."""
+        wanted = LAN_ADDRESS.split("/")[0]
+        for attempt in range(attempts):
+            interfaces = self._network_interfaces()
+            if any(
+                interfaces.get(device, {}).get("ipv4") == wanted
+                for device in self._get_ethernet_interfaces()
+            ):
+                return True
+            if attempt < attempts - 1:
+                time.sleep(1)
+        return False
+
+    def _ethernet_connection_name(self) -> str | None:
+        result = self._run(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"],
+            check=False,
+        )
+        for line in result.stdout.splitlines():
+            parts = line.split(":", 3)
+            if len(parts) == 4 and parts[1] == "ethernet" and parts[2] == "connected":
+                return parts[3].strip() or None
+        return None
 
     def _connected_wifi_network(self) -> dict[str, Any] | None:
         result = self._run(

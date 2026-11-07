@@ -1,3 +1,4 @@
+import socket
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -781,7 +782,10 @@ def test_start_access_point_uses_hostapd_with_plain_wpa_psk(
     assert "ignore_broadcast_ssid=1" in text
     assert "wpa_passphrase=secret123" in text
     assert oct(conf.stat().st_mode & 0o777) == "0o600"
-    assert any(c[0] == "dnsmasq" for c in commands)
+    dnsmasq = next(c for c in commands if c[0] == "dnsmasq")
+    hostname = socket.gethostname().split(".")[0]
+    assert f"--host-record={hostname}.local,10.42.0.1" in dnsmasq
+    assert "--local=/local/" in dnsmasq
     assert applied["encryptionType"] == "wpa2Personal"
 
 
@@ -873,74 +877,120 @@ def test_lan_only_creates_ethernet_profile_when_missing(tmp_path: Path, monkeypa
     assert add[add.index("ipv4.addresses") + 1] == "192.168.124.1/24"
 
 
-def test_disabling_lan_only_restores_dhcp_only_for_our_address(
-    tmp_path: Path, monkeypatch
-):
+def _lan_manager(tmp_path: Path, monkeypatch, *, lan_address_ok=True, hotspot_active=False):
+    """A manager whose commands are recorded, with a cable plugged in."""
     manager = NetworkManager(state_path=tmp_path / "network_state.json")
-    manager._persist_network_mode("lan_only")
-    commands: list = []
+    events: list = []
 
     def fake_run(command, check=True):
-        commands.append(command)
-        if command[:2] == ["nmcli", "-t"] and "NAME,TYPE" in command:
+        events.append(command)
+        out = ""
+        if command[:3] == ["nmcli", "-t", "-f"] and "NAME,TYPE" in command:
             out = "Ethernet:802-3-ethernet\nOther:802-3-ethernet\n"
-        elif command[:2] == ["nmcli", "-g"]:
-            out = (
-                "manual\n192.168.124.1/24\n"
-                if command[-1] == "Ethernet"
-                else "manual\n10.0.0.5/24\n"
-            )
-        else:
-            out = ""
         return CompletedProcess(command, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(manager, "_run", fake_run)
-    monkeypatch.setattr(manager, "is_access_point_active", lambda: False)
-    monkeypatch.setattr(manager, "_ensure_wifi_enabled", lambda: None)
+    monkeypatch.setattr(manager, "is_ethernet_cable_connected", lambda: True)
+    monkeypatch.setattr(manager, "_ethernet_has_lan_address", lambda *a, **k: lan_address_ok)
+    monkeypatch.setattr(manager, "is_access_point_active", lambda: hotspot_active)
+    monkeypatch.setattr(manager, "_ensure_wifi_enabled", lambda: events.append("wifi-on"))
+    monkeypatch.setattr(manager, "stop_access_point", lambda: events.append("stop-ap"))
+    return manager, events
+
+
+def _ethernet_disabled(events):
+    return [
+        c[3] for c in events
+        if isinstance(c, list) and c[:3] == ["nmcli", "connection", "modify"]
+        and "disabled" in c
+    ]
+
+
+def test_enable_lan_only_stops_hotspot_before_the_radio_goes_off(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch, hotspot_active=True)
+
+    manager.enable_lan_only_mode()
+
+    assert events.index("stop-ap") < events.index(["nmcli", "radio", "wifi", "off"])
+    assert manager.get_network_mode() == "lan_only"
+
+
+def test_enable_lan_only_brings_up_ethernet_before_wifi_goes_off(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch)
+
+    manager.enable_lan_only_mode()
+
+    up = events.index(["nmcli", "connection", "up", "Ethernet"])
+    assert up < events.index(["nmcli", "radio", "wifi", "off"])
+
+
+def test_enable_lan_only_keeps_wifi_when_ethernet_gets_no_address(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(
+        tmp_path, monkeypatch, lan_address_ok=False, hotspot_active=True
+    )
+
+    with pytest.raises(RuntimeError, match="Wi-Fi was left unchanged"):
+        manager.enable_lan_only_mode()
+
+    assert ["nmcli", "radio", "wifi", "off"] not in events
+    assert "stop-ap" not in events
+    assert manager.get_network_mode() == "client"
+
+
+@pytest.mark.parametrize("mode", ["client", "access_point"])
+def test_modes_without_lan_leave_ethernet_without_an_address(
+    tmp_path: Path, monkeypatch, mode
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(manager, "start_access_point", lambda config: None)
+    monkeypatch.setattr(manager, "_default_access_point_config", lambda: {})
+
+    manager.set_network_mode(mode)
+
+    assert _ethernet_disabled(events) == ["Ethernet", "Other"]
+
+
+def test_leaving_lan_only_ends_the_lan_address_and_turns_wifi_back_on(
+    tmp_path: Path, monkeypatch
+):
+    manager, events = _lan_manager(tmp_path, monkeypatch)
+    manager._persist_network_mode("lan_only")
 
     manager.disable_lan_only_mode()
 
-    modified = [c[3] for c in commands if c[:3] == ["nmcli", "connection", "modify"]]
-    assert modified == ["Ethernet"]
+    assert _ethernet_disabled(events) == ["Ethernet", "Other"]
+    assert "wifi-on" in events
+    assert manager.get_network_mode() == "client"
 
 
-def test_saved_password_route_returns_password(server_client, monkeypatch):
-    from raccoon_cli.server.routes import network as network_route
+def test_hotspot_to_client_stops_the_hotspot(tmp_path: Path, monkeypatch):
+    manager, events = _lan_manager(tmp_path, monkeypatch, hotspot_active=True)
+    manager._persist_network_mode("access_point")
 
-    monkeypatch.setattr(
-        network_route._network_manager,
-        "get_saved_password",
-        lambda ssid: "hunter22" if ssid == "Home Net" else None,
-    )
+    manager.set_network_mode("client")
 
-    ok = server_client.get("/api/v1/network/saved-password/Home Net", headers=_auth())
-    missing = server_client.get("/api/v1/network/saved-password/Other", headers=_auth())
-
-    assert ok.status_code == 200
-    assert ok.json() == {"password": "hunter22"}
-    assert missing.status_code == 404
+    assert "stop-ap" in events
+    assert manager.get_network_mode() == "client"
 
 
-def test_get_saved_password_reads_psk_of_profile(tmp_path: Path, monkeypatch):
+def test_refresh_hotspot_hostname_restarts_only_a_running_hostapd_hotspot(
+    tmp_path: Path, monkeypatch
+):
     manager = NetworkManager(state_path=tmp_path / "network_state.json")
-    commands: list = []
-    monkeypatch.setattr(
-        manager,
-        "_find_wifi_profile",
-        lambda ssid: {"uuid": "u1", "name": "Home", "ssid": "Home"} if ssid == "Home" else None,
-    )
+    manager.save_access_point_config(_hotspot_config())
+    started: list = []
+    monkeypatch.setattr(manager, "start_access_point", lambda c: started.append(c))
 
-    def fake_run(command, check=True):
-        commands.append(command)
-        return CompletedProcess(command, 0, stdout="hunter22\n", stderr="")
+    monkeypatch.setattr(manager, "_hostapd_running", lambda: False)
+    assert manager.refresh_hotspot_hostname() is False
+    assert started == []
 
-    monkeypatch.setattr(manager, "_run", fake_run)
-
-    assert manager.get_saved_password("Home") == "hunter22"
-    assert manager.get_saved_password("Nope") is None
-    assert commands == [
-        [
-            "nmcli", "-s", "-g", "802-11-wireless-security.psk",
-            "connection", "show", "uuid", "u1",
-        ]
-    ]
+    monkeypatch.setattr(manager, "_hostapd_running", lambda: True)
+    assert manager.refresh_hotspot_hostname() is True
+    assert started == [_hotspot_config()]
