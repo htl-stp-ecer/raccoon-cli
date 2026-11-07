@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import threading
@@ -613,15 +614,21 @@ class NetworkManager:
         saved_config = self.get_access_point_config()
         if saved_config is not None:
             return saved_config
-        return {
-            "ssid": "RaccoonOS",
-            "password": "raccoonos",
+        config = {
+            # "Raccoon-Robot-" + 3 random digits, so several robots in one room
+            # can be told apart.
+            "ssid": f"Raccoon-Robot-{secrets.randbelow(1000):03d}",
+            # "raccoon" + 3 random digits. Saved right away so the robot keeps
+            # the same password instead of drawing a new one on every start.
+            "password": f"raccoon{secrets.randbelow(1000):03d}",
             "band": self.find_best_wifi_band(),
             "channel": 0,
             "encryptionType": "wpa2Personal",
             "hidden": False,
             "maxClients": 8,
         }
+        self.save_access_point_config(config)
+        return config
 
     def _access_point_connection_names(self) -> list[str]:
         names: list[str] = []

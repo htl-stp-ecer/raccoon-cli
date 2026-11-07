@@ -250,10 +250,15 @@ def test_network_manager_access_point_mode_starts_hotspot(tmp_path: Path, monkey
 
     manager.set_network_mode("access_point")
 
+    import re
+
+    assert len(started_configs) == 1
+    password = started_configs[0].pop("password")
+    ssid = started_configs[0].pop("ssid")
+    assert re.fullmatch(r"raccoon\d{3}", password)
+    assert re.fullmatch(r"Raccoon-Robot-\d{3}", ssid)
     assert started_configs == [
         {
-            "ssid": "RaccoonOS",
-            "password": "raccoonos",
             "band": "band5GHz",
             "channel": 0,
             "encryptionType": "wpa2Personal",
@@ -261,6 +266,11 @@ def test_network_manager_access_point_mode_starts_hotspot(tmp_path: Path, monkey
             "maxClients": 8,
         }
     ]
+    # Kept: the next start uses the same password.
+    saved = manager.get_access_point_config()
+    assert (saved["ssid"], saved["password"]) == (ssid, password)
+    again = manager._default_access_point_config()
+    assert (again["ssid"], again["password"]) == (ssid, password)
 
 
 def test_network_manager_restore_restarts_saved_hotspot_config(
