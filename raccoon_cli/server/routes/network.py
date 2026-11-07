@@ -164,6 +164,7 @@ async def start_access_point(
 ) -> AccessPointConfigPayload:
     try:
         applied = _network_manager.start_access_point(config.model_dump())
+        network_events.refresh()
         return AccessPointConfigPayload(**applied)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

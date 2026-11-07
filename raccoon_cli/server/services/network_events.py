@@ -2,8 +2,9 @@
 
 The UI asks `GET /network/lan/events?since=<version>` and the server answers
 as soon as something changed (or after a timeout). A watcher thread reads the
-kernel's link events (`ip monitor link`), so a plugged or pulled cable shows up
-within a fraction of a second and costs nothing while nothing happens.
+kernel's link and address events (`ip monitor link address`), so a plugged or
+pulled cable, a new address or a Wi-Fi connection shows up within a fraction of
+a second and costs nothing while nothing happens.
 """
 
 from __future__ import annotations
@@ -107,7 +108,7 @@ class NetworkEvents:
     ) -> subprocess.Popen | None:
         try:
             process = subprocess.Popen(
-                ["ip", "-o", "monitor", "link"],
+                ["ip", "-o", "monitor", "link", "address"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,

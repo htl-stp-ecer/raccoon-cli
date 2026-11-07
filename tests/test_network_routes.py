@@ -1223,3 +1223,37 @@ def test_device_info_reports_the_ethernet_host_details(tmp_path: Path, monkeypat
         "ethernetRole": None,
         "ethernetConnectedDevices": None,
     }
+
+
+def test_network_snapshot_collects_what_the_ui_shows(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    manager._persist_network_mode("access_point")
+    monkeypatch.setattr(
+        manager,
+        "_network_interfaces",
+        lambda: {
+            "lo": {"ipv4": "127.0.0.1", "carrier": None},
+            "eth0": {"ipv4": None, "carrier": "0"},
+            "wlan0": {"ipv4": "10.42.0.1", "carrier": "1"},
+        },
+    )
+    monkeypatch.setattr(manager, "_get_ethernet_interfaces", lambda: ["eth0"])
+    monkeypatch.setattr(manager, "_get_wifi_interface", lambda: "wlan0")
+    monkeypatch.setattr(manager, "is_lan_only_mode_active", lambda: False)
+    monkeypatch.setattr(manager, "is_access_point_active", lambda: True)
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda command, check=True: CompletedProcess(
+            command, 0, stdout="STP-Velox-AP\n", stderr=""
+        ),
+    )
+
+    assert manager.network_snapshot() == {
+        "mode": "access_point",
+        "isCableConnected": False,
+        "isActive": False,
+        "addresses": {"wlan0": "10.42.0.1"},
+        "wifiConnection": "STP-Velox-AP",
+        "hotspot": True,
+    }

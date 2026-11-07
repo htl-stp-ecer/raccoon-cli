@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 AP_CONNECTION_NAME = "STP-Velox-AP"
@@ -893,6 +893,7 @@ class NetworkManager:
         retry_restore: bool = False,
         interval: float = 10.0,
         max_restore_attempts: int = 6,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         """Background loop: retry a failed boot restore, then guard LAN-only."""
         attempts = 0
@@ -903,6 +904,8 @@ class NetworkManager:
                     try:
                         self.restore_persisted_network_mode()
                         retry_restore = False
+                        if on_change:
+                            on_change()
                     except Exception as exc:
                         print(f"Retrying network restore ({attempts}): {exc}")
                         if attempts >= max_restore_attempts:
@@ -910,7 +913,8 @@ class NetworkManager:
                             if self.get_network_mode() == "lan_only":
                                 self.disable_lan_only_mode()
                     continue
-                self.lan_only_failsafe_tick()
+                if self.lan_only_failsafe_tick() and on_change:
+                    on_change()
             except Exception as exc:
                 print(f"Network watchdog error: {exc}")
 
@@ -934,6 +938,35 @@ class NetworkManager:
                 # check sees the link.
                 self._run(["ip", "link", "set", device, "up"], check=False)
         return False
+
+    def network_snapshot(self) -> dict[str, Any]:
+        """Everything the UI shows about the network, small enough to compare.
+
+        When any part changes (a cable, an address, the Wi-Fi connection, the
+        hotspot, the mode) the event hub announces it, so screens do not have
+        to poll.
+        """
+        interfaces = self._network_interfaces()
+        wifi_interface = self._get_wifi_interface()
+        wifi_connection = ""
+        if wifi_interface:
+            result = self._run(
+                ["nmcli", "-g", "GENERAL.CONNECTION", "device", "show", wifi_interface],
+                check=False,
+            )
+            wifi_connection = result.stdout.strip() if result.returncode == 0 else ""
+        return {
+            "mode": self.get_network_mode(),
+            "isCableConnected": self.is_ethernet_cable_connected(interfaces),
+            "isActive": self.is_lan_only_mode_active(),
+            "addresses": {
+                device: details["ipv4"]
+                for device, details in sorted(interfaces.items())
+                if details.get("ipv4") and device != "lo"
+            },
+            "wifiConnection": wifi_connection,
+            "hotspot": self.is_access_point_active(),
+        }
 
     def lan_status(self) -> dict[str, Any]:
         """Light status for polling (the UI asks every couple of seconds)."""
