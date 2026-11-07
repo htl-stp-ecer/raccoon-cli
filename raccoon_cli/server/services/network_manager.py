@@ -744,6 +744,33 @@ class NetworkManager:
                 return network
         return None
 
+    def get_saved_password(self, ssid: str) -> str | None:
+        """The stored Wi-Fi password (PSK) of a saved network.
+
+        Read on demand only: the saved-network list never carries passwords.
+        None if there is no such network; "" if NetworkManager does not hold
+        the secret (enterprise or open networks, or secrets kept by the user).
+        """
+        profile = self._find_wifi_profile(ssid)
+        if profile is None:
+            return None
+        result = self._run(
+            [
+                "nmcli",
+                "-s",
+                "-g",
+                "802-11-wireless-security.psk",
+                "connection",
+                "show",
+                "uuid",
+                profile["uuid"],
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+
     def enable_lan_only_mode(self) -> None:
         if not self.is_ethernet_cable_connected():
             raise RuntimeError(

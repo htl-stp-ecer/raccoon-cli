@@ -217,6 +217,15 @@ async def get_saved_network(ssid: str) -> dict[str, Any] | None:
     return _network_manager.get_saved_network(ssid)
 
 
+@router.get("/saved-password/{ssid:path}")
+async def get_saved_password(ssid: str) -> dict[str, str]:
+    """Password of one saved network, fetched when the user asks to see it."""
+    password = _network_manager.get_saved_password(ssid)
+    if password is None:
+        raise HTTPException(status_code=404, detail="Network not saved")
+    return {"password": password}
+
+
 @router.put("/saved")
 async def save_network(network: SavedNetworkPayload) -> dict[str, str]:
     _network_manager.save_network(network.model_dump())

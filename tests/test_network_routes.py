@@ -892,3 +892,45 @@ def test_disabling_lan_only_restores_dhcp_only_for_our_address(
 
     modified = [c[3] for c in commands if c[:3] == ["nmcli", "connection", "modify"]]
     assert modified == ["Ethernet"]
+
+
+def test_saved_password_route_returns_password(server_client, monkeypatch):
+    from raccoon_cli.server.routes import network as network_route
+
+    monkeypatch.setattr(
+        network_route._network_manager,
+        "get_saved_password",
+        lambda ssid: "hunter22" if ssid == "Home Net" else None,
+    )
+
+    ok = server_client.get("/api/v1/network/saved-password/Home Net", headers=_auth())
+    missing = server_client.get("/api/v1/network/saved-password/Other", headers=_auth())
+
+    assert ok.status_code == 200
+    assert ok.json() == {"password": "hunter22"}
+    assert missing.status_code == 404
+
+
+def test_get_saved_password_reads_psk_of_profile(tmp_path: Path, monkeypatch):
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+    commands: list = []
+    monkeypatch.setattr(
+        manager,
+        "_find_wifi_profile",
+        lambda ssid: {"uuid": "u1", "name": "Home", "ssid": "Home"} if ssid == "Home" else None,
+    )
+
+    def fake_run(command, check=True):
+        commands.append(command)
+        return CompletedProcess(command, 0, stdout="hunter22\n", stderr="")
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+
+    assert manager.get_saved_password("Home") == "hunter22"
+    assert manager.get_saved_password("Nope") is None
+    assert commands == [
+        [
+            "nmcli", "-s", "-g", "802-11-wireless-security.psk",
+            "connection", "show", "uuid", "u1",
+        ]
+    ]
