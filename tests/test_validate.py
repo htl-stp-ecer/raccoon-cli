@@ -8,9 +8,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import logging
+
 import pytest
 import yaml
 
+from raccoon_cli import validation
 from raccoon_cli.validation import (
     Severity,
     ValidationResult,
@@ -65,6 +68,16 @@ def _make_project(
     (tmp_path / "src" / "main.py").write_text("".join(lines), encoding="utf-8")
 
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _stub_generation_check(request, monkeypatch):
+    """Most tests use partial configs that real codegen would reject (and run
+    without the ``raccoon`` package installed), so skip the in-memory generation
+    stage for them. Classes that set ``real_generation = True`` opt out."""
+    if getattr(request.cls, "real_generation", False):
+        return
+    monkeypatch.setattr(validation, "_check_generation", lambda result, config: None)
 
 
 def _codes(result: ValidationResult) -> set[str]:
@@ -551,6 +564,259 @@ class TestDefsAttributeAccess:
         result = validate_project(tmp_path)
         assert "defs_unknown_attribute" not in _codes(result)
 
+
+# ---------------------------------------------------------------------------
+# Defs access — every way a mission can reach Defs
+# ---------------------------------------------------------------------------
+
+def _write_raw_mission(project: Path, filename: str, source: str) -> None:
+    missions = project / "src" / "missions"
+    missions.mkdir(parents=True, exist_ok=True)
+    (missions / filename).write_text(source, encoding="utf-8")
+
+
+class TestDefsAccessForms:
+    def _project(self, tmp_path):
+        _write_config(tmp_path, {"motor_left": {"type": "Motor", "port": 0}})
+
+    def test_aliased_class_import_is_checked(self, tmp_path):
+        self._project(tmp_path)
+        _write_raw_mission(
+            tmp_path, "m010_go_mission.py",
+            "from src.hardware.defs import Defs as D\nx = D.ghost\n",
+        )
+        assert "defs_unknown_attribute" in _codes(validate_project(tmp_path))
+
+    def test_aliased_class_import_valid_name_passes(self, tmp_path):
+        self._project(tmp_path)
+        _write_raw_mission(
+            tmp_path, "m010_go_mission.py",
+            "from src.hardware.defs import Defs as D\nx = D.motor_left\n",
+        )
+        assert "defs_unknown_attribute" not in _codes(validate_project(tmp_path))
+
+    def test_module_import_is_checked(self, tmp_path):
+        self._project(tmp_path)
+        _write_raw_mission(
+            tmp_path, "m010_go_mission.py",
+            "from src.hardware import defs\nx = defs.Defs.ghost\n",
+        )
+        assert "defs_unknown_attribute" in _codes(validate_project(tmp_path))
+
+    def test_module_import_as_alias_is_checked(self, tmp_path):
+        self._project(tmp_path)
+        _write_raw_mission(
+            tmp_path, "m010_go_mission.py",
+            "import src.hardware.defs as d\nx = d.Defs.ghost\n",
+        )
+        assert "defs_unknown_attribute" in _codes(validate_project(tmp_path))
+
+    def test_relative_module_import_is_checked(self, tmp_path):
+        self._project(tmp_path)
+        _write_raw_mission(
+            tmp_path, "m010_go_mission.py",
+            "from ..hardware import defs as h\nx = h.defs.ghost\n",
+        )
+        assert "defs_unknown_attribute" in _codes(validate_project(tmp_path))
+
+    @pytest.mark.parametrize("base", ["robot", "self.robot"])
+    def test_robot_defs_is_checked(self, tmp_path, base):
+        self._project(tmp_path)
+        _write_raw_mission(
+            tmp_path, "m010_go_mission.py",
+            f"def f(self, robot):\n    return {base}.defs.ghost\n",
+        )
+        result = validate_project(tmp_path)
+        err = next(i for i in result.errors if i.code == "defs_unknown_attribute")
+        assert f"{base}.defs.ghost" in err.message
+
+    def test_robot_defs_valid_name_passes(self, tmp_path):
+        self._project(tmp_path)
+        _write_raw_mission(
+            tmp_path, "m010_go_mission.py",
+            "def f(robot):\n    return robot.defs.motor_left\n",
+        )
+        assert "defs_unknown_attribute" not in _codes(validate_project(tmp_path))
+
+    def test_defs_attribute_on_unrelated_object_is_ignored(self, tmp_path):
+        self._project(tmp_path)
+        _write_raw_mission(
+            tmp_path, "m010_go_mission.py",
+            "def f(other):\n    return other.defs.ghost\n",
+        )
+        assert "defs_unknown_attribute" not in _codes(validate_project(tmp_path))
+
+    def test_stale_defs_py_does_not_hide_a_removed_entry(self, tmp_path):
+        """motor1 was removed from the YAML but the old defs.py still has it."""
+        self._project(tmp_path)
+        _write_defs_py(tmp_path, ["motor_left", "motor1"])
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.motor1"])
+        assert "defs_unknown_attribute" in _codes(validate_project(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# Generation check — run the real generators in memory
+# ---------------------------------------------------------------------------
+
+def _full_config() -> dict:
+    """A config the real generators accept."""
+    return {
+        "name": "TestProject",
+        "uuid": "test-uuid",
+        "format_version": 2,
+        "definitions": {
+            "button": {"type": "DigitalSensor", "port": 0},
+            "motor_left": {"type": "Motor", "port": 0, "inverted": False},
+        },
+        "robot": {"motion_pid": {}, "shutdown_in": 120},
+    }
+
+
+def _write_full_config(project: Path, config: dict) -> None:
+    (project / "raccoon.project.yml").write_text(yaml.dump(config), encoding="utf-8")
+
+
+class TestGenerationCheck:
+    real_generation = True
+
+    @pytest.fixture(autouse=True)
+    def _need_raccoon(self):
+        pytest.importorskip("raccoon")
+
+    def _failures(self, result):
+        return [i for i in result.errors if i.code == "codegen_failed"]
+
+    def test_valid_config_has_no_generation_errors(self, tmp_path):
+        _write_full_config(tmp_path, _full_config())
+        result = validate_project(tmp_path)
+        assert not self._failures(result)
+        assert "codegen_check_unavailable" not in _codes(result)
+
+    def test_missing_button_is_reported_once(self, tmp_path):
+        cfg = _full_config()
+        del cfg["definitions"]["button"]
+        _write_full_config(tmp_path, cfg)
+        failures = self._failures(validate_project(tmp_path))
+        assert len(failures) == 1  # defs.py and defs.pyi fail identically
+        assert "definitions.button" in failures[0].message
+
+    def test_missing_motion_pid_is_reported(self, tmp_path):
+        cfg = _full_config()
+        del cfg["robot"]["motion_pid"]
+        _write_full_config(tmp_path, cfg)
+        failures = self._failures(validate_project(tmp_path))
+        assert any("motion_pid" in i.message for i in failures)
+
+    def test_missing_shutdown_in_is_reported(self, tmp_path):
+        cfg = _full_config()
+        del cfg["robot"]["shutdown_in"]
+        _write_full_config(tmp_path, cfg)
+        failures = self._failures(validate_project(tmp_path))
+        assert any("shutdown_in" in i.message for i in failures)
+
+    def test_unknown_hardware_type_is_reported(self, tmp_path):
+        cfg = _full_config()
+        cfg["definitions"]["gizmo"] = {"type": "NopeType"}
+        _write_full_config(tmp_path, cfg)
+        failures = self._failures(validate_project(tmp_path))
+        assert any("NopeType" in i.message for i in failures)
+
+    def test_invalid_identifier_is_reported(self, tmp_path):
+        cfg = _full_config()
+        cfg["definitions"]["my-motor"] = {"type": "Motor", "port": 1}
+        _write_full_config(tmp_path, cfg)
+        failures = self._failures(validate_project(tmp_path))
+        assert any("my-motor" in i.message for i in failures)
+
+    def test_defs_names_come_from_generated_source(self, tmp_path):
+        _write_full_config(tmp_path, _full_config())
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.motor_left"])
+        assert "defs_unknown_attribute" not in _codes(validate_project(tmp_path))
+
+    def test_unknown_defs_attribute_is_still_flagged(self, tmp_path):
+        _write_full_config(tmp_path, _full_config())
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.motor1"])
+        assert "defs_unknown_attribute" in _codes(validate_project(tmp_path))
+
+    def test_stale_defs_py_does_not_hide_a_removed_entry(self, tmp_path):
+        _write_full_config(tmp_path, _full_config())
+        _write_defs_py(tmp_path, ["motor_left", "motor1"])
+        _write_mission(tmp_path, "m010_go_mission.py", ["return Defs.motor1"])
+        assert "defs_unknown_attribute" in _codes(validate_project(tmp_path))
+
+    def test_validation_writes_no_files(self, tmp_path):
+        _write_full_config(tmp_path, _full_config())
+        validate_project(tmp_path)
+        assert not (tmp_path / "src" / "hardware").exists()
+
+    def test_logger_level_is_restored(self, tmp_path):
+        _write_full_config(tmp_path, _full_config())
+        logger = logging.getLogger("raccoon")
+        before = logger.level
+        validate_project(tmp_path)
+        assert logger.level == before
+
+    def test_check_can_be_disabled(self, tmp_path):
+        cfg = _full_config()
+        del cfg["definitions"]["button"]
+        _write_full_config(tmp_path, cfg)
+        result = validate_project(tmp_path, codegen_check=False)
+        assert not self._failures(result)
+
+
+class TestGenerationUnavailable:
+    real_generation = True
+
+    def test_missing_raccoon_package_is_a_hard_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(validation, "_raccoon_importable", lambda: False)
+        _write_full_config(tmp_path, _full_config())
+        result = validate_project(tmp_path)
+        err = next(i for i in result.errors if i.code == "codegen_check_unavailable")
+        assert "raccoon-library" in err.hint
+
+    def test_disabling_the_check_avoids_the_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(validation, "_raccoon_importable", lambda: False)
+        _write_full_config(tmp_path, _full_config())
+        result = validate_project(tmp_path, codegen_check=False)
+        assert "codegen_check_unavailable" not in _codes(result)
+
+
+# ---------------------------------------------------------------------------
+# Auto-validate scope — only `run` is validated automatically
+# ---------------------------------------------------------------------------
+
+class TestAutoValidateScope:
+    @pytest.mark.parametrize(
+        "command, expected",
+        [
+            ("run", True),
+            ("codegen", False),  # validates itself, see commands/codegen.py
+            ("validate", False),  # is the validator
+            ("missions", False),
+            ("shell", False),
+            ("sync", False),
+            ("calibrate", False),
+            ("connect", False),
+        ],
+    )
+    def test_only_run_is_auto_validated(
+        self, tmp_path, monkeypatch, command, expected
+    ):
+        from types import SimpleNamespace
+
+        from raccoon_cli import cli, project
+
+        calls = []
+        monkeypatch.setattr(project, "find_project_root", lambda: tmp_path)
+        monkeypatch.setattr(
+            validation, "run_validation_or_exit",
+            lambda console, root, **kw: calls.append(root),
+        )
+        ctx = SimpleNamespace(
+            obj={"console": None, "no_validate": False}, invoked_subcommand=command
+        )
+        cli._run_auto_validate(ctx)
+        assert bool(calls) is expected
 
 # ---------------------------------------------------------------------------
 # CLI — raccoon validate exit codes

@@ -196,7 +196,12 @@ def upload_command(
 
     # ---- 1/5 validate --------------------------------------------------- #
     console.rule("[bold]1/5[/bold] Validate")
-    run_validation_or_exit(console, project_root, python_compile=not no_python_compile)
+    run_validation_or_exit(
+        console,
+        project_root,
+        python_compile=not no_python_compile,
+        codegen_check=False,
+    )
     console.print("[green]✓ Validierung ok[/green]")
 
     # ---- 2/5 codegen ---------------------------------------------------- #

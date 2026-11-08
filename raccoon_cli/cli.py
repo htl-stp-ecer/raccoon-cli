@@ -33,7 +33,10 @@ CONTEXT_SETTINGS = {
 }
 
 # Commands that don't operate on a project — skip auto-validation.
-_SKIP_VALIDATE_COMMANDS = {"validate", "connect", "disconnect", "update", "doctor", "migrate", "web", "upload"}
+# Only `run` is validated automatically. `validate` is the validator itself and
+# `codegen` validates on its own (see commands/codegen.py); every other command
+# (missions, shell, sync, calibrate, ...) does not need a consistent project.
+_AUTO_VALIDATE_COMMANDS = {"run"}
 
 
 def _normalize_exit_code(code) -> int:
@@ -119,10 +122,10 @@ def _print_summary(ctx: click.Context) -> None:
 
 
 def _run_auto_validate(ctx: click.Context) -> None:
-    """Run project validation before the subcommand if we're inside a project."""
+    """Validate the project before `raccoon run` if we're inside a project."""
     if ctx.obj.get("no_validate"):
         return
-    if ctx.invoked_subcommand in _SKIP_VALIDATE_COMMANDS:
+    if ctx.invoked_subcommand not in _AUTO_VALIDATE_COMMANDS:
         return
 
     from raccoon_cli.project import ProjectError, find_project_root

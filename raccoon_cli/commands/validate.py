@@ -20,9 +20,17 @@ from raccoon_cli.validation import Severity, validate_project
     is_flag=True,
     help="Skip checking Defs.<attr> accesses against the defined hardware.",
 )
+@click.option(
+    "--no-codegen-check",
+    is_flag=True,
+    help="Skip the in-memory code generation check.",
+)
 @click.pass_context
 def validate_command(
-    ctx: click.Context, no_python_compile: bool, no_defs_check: bool
+    ctx: click.Context,
+    no_python_compile: bool,
+    no_defs_check: bool,
+    no_codegen_check: bool,
 ) -> None:
     """Check that config, mission files, and imports are consistent."""
     console: Console = ctx.obj["console"]
@@ -37,6 +45,7 @@ def validate_command(
         project_root,
         python_compile=not no_python_compile,
         defs_check=not no_defs_check,
+        codegen_check=not no_codegen_check,
     )
 
     if not result.issues:
