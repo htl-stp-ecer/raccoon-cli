@@ -5,14 +5,15 @@ gated command:
 
     1. validate   — config / mission / import consistency
     2. codegen    — regenerate hardware code from raccoon.project.yml
-    3. sim smoke  — run the whole project once under the libstp simulator
-                    (hard gate: must exit 0 with no sim_error)
+    3. sim smoke  — only with --sim: run the whole project once under the
+                    libstp simulator (hard gate: must exit 0 with no sim_error);
+                    skipped otherwise
     4. sync       — push the project to the connected Pi
     5. start-check — start the program on the Pi and confirm it comes up
                      without crashing, then stop it again
 
-Every step is a hard gate: the first failure aborts before anything reaches
-the robot. Steps 1–4 are thin wrappers around the same shared services the
+Every step that runs is a hard gate: the first failure aborts before anything
+reaches the robot. Steps 1–4 are thin wrappers around the same shared services the
 other commands use; step 3 is the shared :func:`raccoon_cli.simulation.run_sim_smoke`.
 """
 
@@ -144,9 +145,9 @@ async def _remote_start_check(
 
 @click.command(name="upload")
 @click.option(
-    "--skip-sim",
+    "--sim",
     is_flag=True,
-    help="Runtime-Simulation überspringen (umgeht das Gate — nur für Notfälle).",
+    help="Runtime-Simulation vor dem Sync ausführen (Gate). Ohne --sim wird sie übersprungen.",
 )
 @click.option(
     "--no-start-check",
@@ -175,16 +176,16 @@ async def _remote_start_check(
 @click.pass_context
 def upload_command(
     ctx: click.Context,
-    skip_sim: bool,
+    sim: bool,
     no_start_check: bool,
     sim_timeout: float,
     start_timeout: float,
     no_python_compile: bool,
 ) -> None:
-    """Preflight (validate → codegen → simulieren) und dann zum Roboter hochladen.
+    """Preflight (validate → codegen → optional simulieren) und dann zum Roboter hochladen.
 
-    Jeder Schritt ist ein hartes Gate: der erste Fehler bricht ab, bevor
-    irgendetwas den Roboter erreicht.
+    Jeder Schritt, der läuft, ist ein hartes Gate: der erste Fehler bricht ab,
+    bevor irgendetwas den Roboter erreicht. Die Simulation läuft nur mit --sim.
     """
     console: Console = ctx.obj["console"]
 
@@ -222,10 +223,8 @@ def upload_command(
 
     # ---- 3/5 runtime simulation (hard gate) ----------------------------- #
     console.rule("[bold]3/5[/bold] Runtime-Simulation")
-    if skip_sim:
-        console.print(
-            "[yellow]⚠ Simulation übersprungen (--skip-sim) — kein Runtime-Gate![/yellow]"
-        )
+    if not sim:
+        console.print("[dim]Simulation übersprungen (mit --sim aktivieren).[/dim]")
     else:
         console.print("[dim]Simuliere das gesamte Programm gegen den libstp-Simulator...[/dim]")
         smoke = sim_shared.run_sim_smoke(
