@@ -46,23 +46,43 @@ def _include_merge_constructor(loader, node):
         raise ValueError(
             f"!include-merge requires a mapping, got {type(data).__name__} from {rel}"
         )
-    return (_MERGE_SENTINEL, data)
+    return (_MERGE_SENTINEL, data, rel)
 
 
 def _post_process_merges(data):
-    """Merge any ``!include-merge`` results into their parent mappings."""
+    """Merge any ``!include-merge`` results into their parent mappings.
+
+    Raises ``ValueError`` if a merged key is already defined in the parent
+    mapping or by another ``!include-merge`` in the same mapping. Silently
+    letting one definition win would hide stale duplicates.
+    """
     if not isinstance(data, dict):
         return data
 
     merges = []
     for key, value in list(data.items()):
-        if isinstance(value, tuple) and len(value) == 2 and value[0] is _MERGE_SENTINEL:
-            merges.append((key, value[1]))
+        if (
+            isinstance(value, tuple)
+            and len(value) == 3
+            and value[0] is _MERGE_SENTINEL
+        ):
+            merges.append((key, value[1], value[2]))
         else:
             _post_process_merges(value)
 
-    for key, merge_dict in merges:
+    merge_keys = {key for key, _, _ in merges}
+    # key -> where it was defined ("inline" or the !include-merge path)
+    origin = {k: "inline" for k in data if k not in merge_keys}
+
+    for key, merge_dict, rel in merges:
         del data[key]
+        for k in merge_dict:
+            if k in origin:
+                raise ValueError(
+                    f"Duplicate key '{k}': defined in {origin[k]} and again in "
+                    f"!include-merge '{rel}'. Remove one of the definitions."
+                )
+            origin[k] = f"!include-merge '{rel}'"
         data.update(merge_dict)
 
     return data
