@@ -1,6 +1,7 @@
 """Shell command - open an SSH session to the connected Pi."""
 
-import os
+import signal
+import subprocess
 
 import click
 from rich.console import Console
@@ -54,4 +55,32 @@ def shell_command(ctx: click.Context) -> None:
         raise SystemExit(1)
 
     user, address = target
-    os.execvp("ssh", ["ssh", f"{user}@{address}"])
+
+    # Do not use os.execvp: on Windows it spawns ssh and exits the parent
+    # immediately, so the parent shell redraws its prompt and both fight over
+    # stdin. Run ssh as a child, wait for it, and forward its exit code.
+    try:
+        proc = subprocess.Popen(["ssh", f"{user}@{address}"])
+    except FileNotFoundError:
+        console.print("[red]ssh not found on PATH.[/red]")
+        raise SystemExit(1)
+
+    def _forward(signum, frame):
+        proc.terminate()
+
+    signal.signal(signal.SIGTERM, _forward)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _forward)
+
+    try:
+        rc = proc.wait()
+    except KeyboardInterrupt:
+        # SIGTERM (not SIGKILL) lets ssh restore the terminal before exiting.
+        proc.terminate()
+        try:
+            rc = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            rc = proc.wait()
+
+    raise SystemExit(rc if rc >= 0 else 128 - rc)

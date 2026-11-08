@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import difflib
+import importlib.util
 import logging
 import py_compile
 import re
@@ -237,8 +239,16 @@ def _parse_defs_class_attributes(path: Path) -> Optional[Set[str]]:
     separately by the compile check).
     """
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (SyntaxError, OSError, ValueError):
+        return _defs_class_attributes_from_source(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+
+
+def _defs_class_attributes_from_source(source: str) -> Optional[Set[str]]:
+    """Return the attribute names declared on ``class Defs`` in *source*."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
         return None
 
     attrs: Set[str] = set()
@@ -299,43 +309,157 @@ def _defs_names_from_config(definitions: dict) -> Set[str]:
 def _collect_valid_defs_attributes(
     config: dict,
     project_root: Path,
+    generated: Optional[Set[str]] = None,
 ) -> Optional[Set[str]]:
-    """Union of valid Defs attributes from config and generated hardware files.
+    """Return the valid Defs attributes, or None if they cannot be determined.
 
-    Returns None when neither source is available, in which case the
-    attribute-access check is skipped rather than guessed.
+    Sources, in order of preference:
+
+    1. ``generated`` — the names in the ``Defs`` class that the generators
+       produce from the *current* config (exact; see ``_check_generation``).
+    2. ``definitions:`` in the config, mapped by ``_defs_names_from_config``.
+    3. The ``defs.py`` / ``defs.pyi`` already on disk, only when the config has
+       no ``definitions:`` at all.
+
+    Files on disk are deliberately NOT merged with the config: a stale
+    ``defs.py`` still declaring a removed entry would otherwise hide a real
+    error until the next codegen.
+
+    Returning None skips the attribute-access check rather than guessing.
     """
-    names: Set[str] = set()
-    found_source = False
-
-    hardware_dir = project_root / "src" / "hardware"
-    for fname in ("defs.py", "defs.pyi"):
-        parsed = _parse_defs_class_attributes(hardware_dir / fname)
-        if parsed is not None and (hardware_dir / fname).exists():
-            names |= parsed
-            found_source = True
+    if generated is not None:
+        return set(generated) | _ALWAYS_DEFS_ATTRS
 
     definitions = config.get("definitions")
     if isinstance(definitions, dict):
-        names |= _defs_names_from_config(definitions)
-        found_source = True
+        return _defs_names_from_config(definitions) | _ALWAYS_DEFS_ATTRS
+
+    names: Set[str] = set()
+    found_source = False
+    hardware_dir = project_root / "src" / "hardware"
+    for fname in ("defs.py", "defs.pyi"):
+        parsed = _parse_defs_class_attributes(hardware_dir / fname)
+        if parsed is not None:
+            names |= parsed
+            found_source = True
 
     if not found_source:
         return None
-
-    names |= _ALWAYS_DEFS_ATTRS
-    return names
+    return names | _ALWAYS_DEFS_ATTRS
 
 
-def _file_imports_defs(tree: ast.AST) -> bool:
-    """True if the module imports ``Defs`` or ``defs`` from a ``*.defs`` module."""
+# ---------------------------------------------------------------------------
+# Generation check
+#
+# Run the real generators in memory (no files written, no black) so validate
+# reports exactly what ``raccoon codegen`` would fail on, and so the valid
+# ``Defs`` names come from the generated source instead of a hand-written
+# approximation.
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def _quiet_codegen_logging():
+    """Silence the generators' INFO/WARNING logging while validating."""
+    previous = logger.level
+    logger.setLevel(logging.CRITICAL + 1)
+    try:
+        yield
+    finally:
+        logger.setLevel(previous)
+
+
+def _raccoon_importable() -> bool:
+    try:
+        return importlib.util.find_spec("raccoon") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _check_generation(result: ValidationResult, config: dict) -> Optional[Set[str]]:
+    """Run the generators in memory; ERROR for anything codegen would reject.
+
+    Returns the attribute names of the generated ``Defs`` class, or None when
+    they could not be produced.
+    """
+    if not _raccoon_importable():
+        result.add(ValidationIssue(
+            severity=Severity.ERROR,
+            code="codegen_check_unavailable",
+            message="Cannot check the project: the 'raccoon' package is not importable",
+            hint=(
+                "Install raccoon-library (it provides the hardware types codegen "
+                "needs), or pass --no-validate to skip this check."
+            ),
+        ))
+        return None
+
+    from raccoon_cli.codegen.generators.defs_generator import DefsGenerator
+    from raccoon_cli.codegen.generators.defs_stub_generator import DefsStubGenerator
+    from raccoon_cli.codegen.generators.robot_generator import RobotGenerator
+
+    # Fresh instances every time: generators keep state between calls.
+    factories = (
+        ("defs.py", lambda: DefsGenerator(class_name="Defs")),
+        ("defs.pyi", lambda: DefsStubGenerator(class_name="Defs")),
+        ("robot.py", lambda: RobotGenerator(class_name="Robot")),
+    )
+
+    sources: dict[str, str] = {}
+    reported: set[str] = set()
+    with _quiet_codegen_logging():
+        for label, factory in factories:
+            try:
+                sources[label] = factory().generate(config)
+            except Exception as exc:  # noqa: BLE001 - any failure here fails codegen too
+                message = str(exc)
+                if message in reported:
+                    continue  # defs.py and defs.pyi usually fail identically
+                reported.add(message)
+                result.add(ValidationIssue(
+                    severity=Severity.ERROR,
+                    code="codegen_failed",
+                    message=f"Code generation for {label} would fail: {message}",
+                    hint="Fix raccoon.project.yml, then run 'raccoon codegen'.",
+                ))
+
+    if "defs.py" not in sources:
+        return None
+    return _defs_class_attributes_from_source(sources["defs.py"])
+
+
+def _defs_bindings(tree: ast.AST) -> tuple[Set[str], Set[str]]:
+    """Return the local names a file binds to the Defs class/singleton and to
+    the ``defs`` module."""
+    class_names: Set[str] = set()
+    module_names: Set[str] = set()
+
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            if module.split(".")[-1] == "defs":
-                if any(alias.name in _DEFS_ACCESS_NAMES for alias in node.names):
-                    return True
-    return False
+            last = (node.module or "").split(".")[-1]
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if last == "defs" and alias.name in _DEFS_ACCESS_NAMES:
+                    class_names.add(local)  # from x.defs import Defs [as D]
+                elif last != "defs" and alias.name == "defs":
+                    module_names.add(local)  # from x import defs [as m]
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname and alias.name.split(".")[-1] == "defs":
+                    module_names.add(alias.asname)  # import x.defs as m
+
+    return class_names, module_names
+
+
+def _is_robot_expr(node: ast.AST) -> bool:
+    """``robot`` or ``self.robot`` — the only bases treated as a Robot."""
+    if isinstance(node, ast.Name):
+        return node.id == "robot"
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "robot"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+    )
 
 
 def _check_defs_attribute_access(
@@ -344,7 +468,14 @@ def _check_defs_attribute_access(
     valid_names: Set[str],
 ) -> None:
     """ERROR for any ``Defs.<attr>`` access where ``<attr>`` is not a real
-    hardware object — this would raise ``AttributeError`` at runtime."""
+    hardware object — this would raise ``AttributeError`` at runtime.
+
+    Recognised access forms::
+
+        Defs.x   /   D.x   (from ... import Defs [as D])
+        m.Defs.x /  m.defs.x   (from ... import defs [as m], import ... as m)
+        robot.defs.x  /  self.robot.defs.x
+    """
     src_root = project_root / "src"
     if not src_root.exists():
         return
@@ -362,15 +493,33 @@ def _check_defs_attribute_access(
         except (SyntaxError, OSError, ValueError):
             continue  # syntax errors are surfaced by the compile check
 
-        if not _file_imports_defs(tree):
-            continue
+        class_names, module_names = _defs_bindings(tree)
+        if class_names:
+            # Importing either Defs or defs from a *.defs module means bare
+            # ``Defs.x`` / ``defs.x`` in this file refer to it.
+            class_names = class_names | _DEFS_ACCESS_NAMES
 
         for node in ast.walk(tree):
-            if not (
-                isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id in _DEFS_ACCESS_NAMES
+            if not isinstance(node, ast.Attribute):
+                continue
+
+            owner = node.value
+            if isinstance(owner, ast.Name) and owner.id in class_names:
+                pass  # Defs.x
+            elif (
+                isinstance(owner, ast.Attribute)
+                and owner.attr in _DEFS_ACCESS_NAMES
+                and isinstance(owner.value, ast.Name)
+                and owner.value.id in module_names
             ):
+                pass  # m.Defs.x
+            elif (
+                isinstance(owner, ast.Attribute)
+                and owner.attr == "defs"
+                and _is_robot_expr(owner.value)
+            ):
+                pass  # robot.defs.x
+            else:
                 continue
 
             attr = node.attr
@@ -379,7 +528,7 @@ def _check_defs_attribute_access(
             if attr in valid_names:
                 continue
 
-            base = node.value.id
+            base = ast.unparse(owner)
             rel = py_file.relative_to(project_root)
             suggestion = difflib.get_close_matches(attr, valid_names, n=1)
             if suggestion:
@@ -409,6 +558,7 @@ def validate_project(
     *,
     python_compile: bool = True,
     defs_check: bool = True,
+    codegen_check: bool = True,
 ) -> ValidationResult:
     """Run all project consistency checks and return a structured result.
 
@@ -418,8 +568,12 @@ def validate_project(
     - Mission files on disk → config entries
     - main.py imports → files + config
     - Python compile check for src/**/*.py (optional)
+    - Code generation, run in memory — reports everything ``raccoon codegen``
+      would reject (optional). Requires the ``raccoon`` package to be
+      importable; if it is not, that is itself an error.
     - Defs attribute access — flags ``Defs.<attr>`` references that would
-      raise ``AttributeError`` at runtime (optional)
+      raise ``AttributeError`` at runtime, checked against the names the
+      generators produce from the current config (optional)
     """
     result = ValidationResult()
 
@@ -452,8 +606,12 @@ def validate_project(
     if python_compile:
         _check_python_compile(result, project_root)
 
+    generated: Optional[Set[str]] = None
+    if codegen_check:
+        generated = _check_generation(result, config)
+
     if defs_check:
-        valid_defs = _collect_valid_defs_attributes(config, project_root)
+        valid_defs = _collect_valid_defs_attributes(config, project_root, generated)
         if valid_defs is not None:
             _check_defs_attribute_access(result, project_root, valid_defs)
 
@@ -466,14 +624,18 @@ def run_validation_or_exit(
     *,
     python_compile: bool = True,
     defs_check: bool = True,
-    # Accepted for API compatibility but intentionally ignored:
-    # codegen_probe belongs in `raccoon codegen --dry-run`, not here.
+    codegen_check: bool = True,
+    # Accepted for API compatibility but ignored: validation now always runs
+    # the generators in memory (see ``codegen_check``).
     config=None,
     codegen_probe: bool = False,
 ) -> None:
     """Run validation and abort with SystemExit(1) if any errors are found."""
     result = validate_project(
-        project_root, python_compile=python_compile, defs_check=defs_check
+        project_root,
+        python_compile=python_compile,
+        defs_check=defs_check,
+        codegen_check=codegen_check,
     )
 
     for issue in result.warnings:

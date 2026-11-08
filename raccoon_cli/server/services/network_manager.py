@@ -1441,6 +1441,13 @@ class NetworkManager:
             return subprocess.CompletedProcess(
                 full_command, 124, stdout="", stderr="timed out"
             )
+        except FileNotFoundError as exc:
+            missing = exc.filename or full_command[0]
+            if check:
+                raise RuntimeError(f"{' '.join(command)} failed: {missing} not found") from None
+            return subprocess.CompletedProcess(
+                full_command, 127, stdout="", stderr=f"{missing}: command not found"
+            )
         if check and result.returncode != 0:
             stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
             raise RuntimeError(f"{' '.join(command)} failed: {stderr}")

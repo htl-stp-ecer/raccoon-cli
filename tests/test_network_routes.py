@@ -243,6 +243,7 @@ def test_network_manager_access_point_mode_starts_hotspot(tmp_path: Path, monkey
 
     monkeypatch.setattr(manager, "find_best_wifi_band", lambda: "band5GHz")
     monkeypatch.setattr(manager, "is_access_point_active", lambda: False)
+    monkeypatch.setattr(manager, "_disable_ethernet_ip", lambda: None)
     monkeypatch.setattr(
         manager,
         "start_access_point",
@@ -297,6 +298,7 @@ def test_network_manager_restore_restarts_saved_hotspot_config(
     started_configs = []
 
     monkeypatch.setattr(manager, "is_access_point_active", lambda: False)
+    monkeypatch.setattr(manager, "_disable_ethernet_ip", lambda: None)
     monkeypatch.setattr(
         manager,
         "start_access_point",
@@ -316,6 +318,24 @@ def test_network_manager_restore_restarts_saved_hotspot_config(
             "maxClients": 8,
         }
     ]
+
+
+def test_run_treats_a_missing_binary_as_a_failed_command(tmp_path: Path, monkeypatch):
+    """No sudo/nmcli on the host (CI container, dev laptop) must not crash."""
+    import raccoon_cli.server.services.network_manager as nm
+
+    def no_such_binary(command, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", command[0])
+
+    monkeypatch.setattr(nm.subprocess, "run", no_such_binary)
+    manager = NetworkManager(state_path=tmp_path / "network_state.json")
+
+    result = manager._run(["nmcli", "connection", "show"], check=False)
+    assert result.returncode == 127
+    assert "sudo" in result.stderr and "not found" in result.stderr
+
+    with pytest.raises(RuntimeError, match="not found"):
+        manager._run(["nmcli", "connection", "show"])
 
 
 def test_network_manager_channel_scan_summarizes_channels(tmp_path: Path, monkeypatch):
