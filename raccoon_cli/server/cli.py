@@ -1,5 +1,6 @@
 """CLI for raccoon-server management commands."""
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -203,6 +204,21 @@ def _ensure_hotspot_packages() -> None:
     subprocess.run(["systemctl", "mask", "hostapd"], check=False, capture_output=True)
 
 
+def _run_raccoon_cam_post_install() -> None:
+    """Let raccoon-cam set up its unit and system packages, if it is installed.
+
+    A failure only warns: the camera is not needed for the rest of the setup.
+    """
+    if importlib.util.find_spec("raccoon_cam") is None:
+        return
+    result = subprocess.run([sys.executable, "-m", "raccoon_cam.post_install"], check=False)
+    if result.returncode != 0:
+        console.print(
+            "[yellow]raccoon-cam post-install reported problems (see above); "
+            "the camera may not work yet.[/yellow]"
+        )
+
+
 @main.command(name="post-install")
 @click.option("--user", default="pi", help="User the service runs as")
 def post_install(user: str):
@@ -215,6 +231,7 @@ def post_install(user: str):
     _do_install(user)
     _ensure_hotspot_packages()
     _install_shared_dnsmasq_config()
+    _run_raccoon_cam_post_install()
     subprocess.run(["systemctl", "restart", "raccoon.service"], check=False)
     console.print("[green]Post-install complete.[/green]")
 
