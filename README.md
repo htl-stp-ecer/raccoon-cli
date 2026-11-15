@@ -18,7 +18,7 @@
 
 ---
 
-`raccoon` is the command-line companion to [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib). It handles everything outside the robot code itself: creating projects, generating hardware boilerplate from a YAML config, syncing files to the Pi, and running your missions remotely.
+`raccoon` is the command-line companion to [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib). It handles everything outside the robot code itself: generating hardware boilerplate from a YAML config, syncing files to the Pi, and running your missions remotely.
 
 ---
 
@@ -49,7 +49,7 @@ After that, the server starts automatically on boot and `raccoon connect` can re
 
 ### Missions
 
-Projects are git repos created in the web IDE (`raccoon web`); run `raccoon` from inside the project.
+Projects are git repos created with the setup script of [raccoon-example](https://github.com/htl-stp-ecer/raccoon-example) (see [Getting Started](https://raccoon-docs.pages.dev/00-getting-started/03-create-your-project/)); run `raccoon` from inside the project.
 
 | Command | Description |
 |:--------|:------------|
