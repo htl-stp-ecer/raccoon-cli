@@ -49,7 +49,7 @@ After that, the server starts automatically on boot and `raccoon connect` can re
 
 ### Missions
 
-Projects are git repos created with the setup script of [raccoon-example](https://github.com/htl-stp-ecer/raccoon-example) (see [Getting Started](https://raccoon-docs.pages.dev/00-getting-started/03-create-your-project/)); run `raccoon` from inside the project.
+Projects are git repos created with the setup script of [raccoon-template](https://github.com/htl-stp-ecer/raccoon-template) (see [Getting Started](https://raccoon-docs.pages.dev/00-getting-started/03-create-your-project/)); run `raccoon` from inside the project.
 
 | Command | Description |
 |:--------|:------------|

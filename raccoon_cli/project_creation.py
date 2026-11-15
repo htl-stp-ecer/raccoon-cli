@@ -24,7 +24,7 @@ from raccoon_cli.project import ProjectError, load_project_config
 
 logger = logging.getLogger("raccoon")
 
-EXAMPLE_REPO_URL = "https://github.com/htl-stp-ecer/raccoon-example"
+EXAMPLE_REPO_URL = "https://github.com/htl-stp-ecer/raccoon-template"
 
 _MISSION_NUMBER_RE = re.compile(r"^[Mm](\d{3})")
 _MAX_AUTO_MISSION_NUMBER = 990
