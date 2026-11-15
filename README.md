@@ -6,11 +6,11 @@
 
 **The dev toolchain for RaccoonOS — scaffold, configure, sync, and run Botball robots.**
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 ![Python](https://img.shields.io/badge/Python-3.13+-3776AB?logo=python&logoColor=ffdd54)
 [![Build & Release](https://github.com/htl-stp-ecer/raccoon-cli/actions/workflows/build-release.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-cli/actions/workflows/build-release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/htl-stp-ecer/raccoon-cli)](https://github.com/htl-stp-ecer/raccoon-cli/releases/latest)
 ![PyPI](https://img.shields.io/pypi/v/raccoon-cli?logo=pypi&logoColor=white)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 
 > 📖 **Full documentation at [raccoon-docs.pages.dev](https://raccoon-docs.pages.dev/)**
 
