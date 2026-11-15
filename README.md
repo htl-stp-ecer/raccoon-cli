@@ -19,7 +19,7 @@
 
 ---
 
-`raccoon` is the command-line companion to [RaccoonLib](https://github.com/htl-stp-ecer/raccoon-lib). It handles everything outside the robot code itself: creating projects, generating hardware boilerplate from a YAML config, syncing files to the Pi, and running your missions remotely.
+`raccoon` is the command-line companion to [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib). It handles everything outside the robot code itself: creating projects, generating hardware boilerplate from a YAML config, syncing files to the Pi, and running your missions remotely.
 
 ---
 
@@ -212,17 +212,6 @@ known_pis:
     address: 192.168.4.1
 default_pi_user: pi
 ```
-
----
-
-## Part of RaccoonOS
-
-| Repository | What it is |
-|:-----------|:-----------|
-| [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib) | Core robotics library |
-| [raccoon-example](https://github.com/htl-stp-ecer/raccoon-example) | Reference robot -- start here if you're new |
-| [raccoon-transport](https://github.com/htl-stp-ecer/raccoon-transport) | LCM messaging layer |
-| [documentation](https://raccoon-docs.pages.dev/) | Full platform docs |
 
 ---
 
