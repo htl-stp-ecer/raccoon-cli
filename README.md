@@ -6,12 +6,11 @@
 
 **The dev toolchain for RaccoonOS — scaffold, configure, sync, and run Botball robots.**
 
+![Python](https://img.shields.io/badge/Python-3.13+-3776AB?logo=python&logoColor=ffdd54)
 [![Build & Release](https://github.com/htl-stp-ecer/raccoon-cli/actions/workflows/build-release.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-cli/actions/workflows/build-release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/htl-stp-ecer/raccoon-cli)](https://github.com/htl-stp-ecer/raccoon-cli/releases/latest)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
-![Python](https://img.shields.io/badge/Python-3.13+-3776AB?logo=python&logoColor=ffdd54)
 ![PyPI](https://img.shields.io/pypi/v/raccoon-cli?logo=pypi&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-KIPR%20Wombat-orange)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 
 > 📖 **Full documentation at [raccoon-docs.pages.dev](https://raccoon-docs.pages.dev/)**
 
@@ -28,23 +27,6 @@
 ```bash
 pip install raccoon-cli
 ```
-
----
-
-## Quick Start
-
-```bash
-# 1. Create a project in the web IDE (raccoon web), then open it
-cd MyRobot
-
-# 2. Connect to your Pi
-raccoon connect 192.168.4.1
-
-# 3. Sync + run
-raccoon run
-```
-
-That's it. `raccoon run` regenerates any stale code, syncs changed files to the Pi, and streams output back to your terminal.
 
 ---
 
