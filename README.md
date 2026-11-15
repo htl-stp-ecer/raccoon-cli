@@ -34,7 +34,7 @@ pip install raccoon-cli
 ## Quick Start
 
 ```bash
-# 1. Create a project with the project helper script, then open it
+# 1. Create a project in the web IDE (raccoon web), then open it
 cd MyRobot
 
 # 2. Connect to your Pi
@@ -67,7 +67,7 @@ After that, the server starts automatically on boot and `raccoon connect` can re
 
 ### Missions
 
-Projects are git repos created with the project helper script; run `raccoon` from inside the project.
+Projects are git repos created in the web IDE (`raccoon web`); run `raccoon` from inside the project.
 
 | Command | Description |
 |:--------|:------------|
@@ -85,6 +85,9 @@ Projects are git repos created with the project helper script; run `raccoon` fro
 | `raccoon calibrate ticks` | Measure encoder ticks per revolution |
 | `raccoon calibrate autotune` | Run motor autotune |
 | `raccoon calibrate servos` | Interactively calibrate servo offsets |
+| `raccoon calibrate step-response` | Record a motor step response |
+| `raccoon validate` | Check config, files and imports for consistency |
+| `raccoon migrate` | Apply numbered project migrations |
 
 ### Remote development
 
@@ -96,22 +99,28 @@ Projects are git repos created with the project helper script; run `raccoon` fro
 | `raccoon sync` | Sync changed files to the Pi (uses content hashing) |
 | `raccoon sync --force` | Re-upload all files |
 | `raccoon run` | Regenerate code, sync, and run on the Pi |
+| `raccoon upload` | Full preflight, then push to the robot and confirm it starts |
+| `raccoon shell` | Open an SSH session on the connected Pi |
+| `raccoon doctor` | Health check of tools, connection and versions |
 
 ### Debugging
 
 | Command | Description |
 |:--------|:------------|
-| `raccoon lcm spy` | Live-inspect LCM messages on the bus |
-| `raccoon lcm record <file>` | Record LCM traffic to a file |
-| `raccoon checkpoint list` | List saved checkpoints |
+| `raccoon logs show` / `tail` / `download` / `clear` | Read, follow, download or clear the robot's logs (`raccoon logs sources` lists them) |
+| `raccoon lcm spy` | Live-inspect messages on the bus |
+| `raccoon lcm record <file>` | Record bus traffic to a file |
+| `raccoon lcm list` / `playback` / `delete` / `status` | Manage and replay recordings |
+| `raccoon checkpoint list` / `show` | List saved checkpoints or show one |
 | `raccoon checkpoint restore <id>` | Restore project to a checkpoint |
+| `raccoon checkpoint delete` / `clean` | Delete one checkpoint or clean up old ones |
 
 ### Tooling
 
 | Command | Description |
 |:--------|:------------|
 | `raccoon update` | Update raccoon-cli to the latest version |
-| `raccoon completion` | Install shell tab-completion |
+| `raccoon completion install` / `show` | Install or show shell tab-completion |
 | `raccoon web` | Launch the web IDE |
 
 ---
