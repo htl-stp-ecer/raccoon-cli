@@ -5,7 +5,6 @@ from .codegen import codegen_command
 from .run import run_command
 from .connect import connect_command, disconnect_command
 from .sync_cmd import sync_command
-from .lcm import lcm_group
 from .web import web_command
 from .update import update_command
 from .checkpoint import checkpoint_group
@@ -23,7 +22,6 @@ __all__ = [
     "connect_command",
     "disconnect_command",
     "sync_cmd",
-    "lcm_group",
     "web_command",
     "update_command",
     "checkpoint_group",

@@ -23,10 +23,8 @@ from raccoon_cli.server.routes import (
     steps_router,
     version_router,
 )
-from raccoon_cli.server.routes.lcm import router as lcm_router
 from raccoon_cli.server.services.network_manager import NetworkManager
 from raccoon_cli.server.websocket import setup_websocket_routes
-from raccoon_cli.server.websocket.lcm_stream import setup_lcm_websocket
 
 # Global config instance
 _config: Optional[ServerConfig] = None
@@ -132,7 +130,6 @@ def create_app(config: Optional[ServerConfig] = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(projects_router)
     app.include_router(commands_router)
-    app.include_router(lcm_router)
     app.include_router(hardware_router)
     app.include_router(device_router)
     app.include_router(network_router)
@@ -146,7 +143,6 @@ def create_app(config: Optional[ServerConfig] = None) -> FastAPI:
 
     # Setup WebSocket routes
     setup_websocket_routes(app)
-    setup_lcm_websocket(app)
 
     return app
 

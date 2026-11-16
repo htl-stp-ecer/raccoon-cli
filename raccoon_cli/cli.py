@@ -14,7 +14,6 @@ from raccoon_cli.commands import (
     connect_command,
     disconnect_command,
     sync_command,
-    lcm_group,
     web_command,
     update_command,
     checkpoint_group,
@@ -155,7 +154,6 @@ main.add_command(run_command)
 main.add_command(connect_command)
 main.add_command(disconnect_command)
 main.add_command(sync_command)
-main.add_command(lcm_group)
 main.add_command(web_command)
 main.add_command(update_command)
 main.add_command(checkpoint_group)

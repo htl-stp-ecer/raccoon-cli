@@ -90,9 +90,6 @@ Projects are git repos created with the setup script of [raccoon-template](https
 | Command | Description |
 |:--------|:------------|
 | `raccoon logs show` / `tail` / `download` / `clear` | Read, follow, download or clear the robot's logs (`raccoon logs sources` lists them) |
-| `raccoon lcm spy` | Live-inspect messages on the bus |
-| `raccoon lcm record <file>` | Record bus traffic to a file |
-| `raccoon lcm list` / `playback` / `delete` / `status` | Manage and replay recordings |
 | `raccoon checkpoint list` / `show` | List saved checkpoints or show one |
 | `raccoon checkpoint restore <id>` | Restore project to a checkpoint |
 | `raccoon checkpoint delete` / `clean` | Delete one checkpoint or clean up old ones |
