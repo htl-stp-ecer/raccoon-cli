@@ -34,19 +34,6 @@ def _install_network_services() -> list[str]:
     return installed
 
 
-def _ensure_completion_state(user: str) -> None:
-    """Ensure cli_state.yml exists with completion_offered set (migration)."""
-    state_file = Path(f"/home/{user}/.raccoon/cli_state.yml")
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    if not state_file.exists():
-        state_file.write_text("completion_offered: true\n")
-    else:
-        content = state_file.read_text()
-        if "completion_offered:" not in content:
-            with state_file.open("a") as f:
-                f.write("completion_offered: true\n")
-
-
 def _do_install(user: str) -> None:
     """Install/update the systemd unit, projects dir, network services, and run migrations."""
     package_dir = Path(__file__).parent.parent
@@ -95,8 +82,6 @@ WantedBy=multi-user.target
     installed = _install_network_services()
     if installed:
         subprocess.run(["systemctl", "daemon-reload"], check=True)
-
-    _ensure_completion_state(user)
 
 
 @click.group()

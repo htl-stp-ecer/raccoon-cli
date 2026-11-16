@@ -99,7 +99,6 @@ Projects are git repos created with the setup script of [raccoon-template](https
 | Command | Description |
 |:--------|:------------|
 | `raccoon update` | Update raccoon-cli to the latest version |
-| `raccoon completion install` / `show` | Install or show shell tab-completion |
 | `raccoon web` | Launch the web IDE |
 
 ---
