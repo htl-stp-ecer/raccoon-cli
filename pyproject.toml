@@ -40,7 +40,7 @@ dependencies = [
     # IDE backend dependencies
     "libcst>=1.0.0",
     "pydantic>=2.0",
-    "raccoon-transport>=73",
+    "raccoon-transport>=74",
     # Type-checks the generated hardware/defs.py against raccoon-library's stubs
     # during `raccoon validate` / `raccoon run` (raccoon_cli/validation.py).
     "pyright>=1.1.414",
