@@ -10,6 +10,8 @@ from pathlib import Path
 
 import logging
 
+import json
+
 import pytest
 import yaml
 
@@ -779,6 +781,68 @@ class TestGenerationUnavailable:
         _write_full_config(tmp_path, _full_config())
         result = validate_project(tmp_path, codegen_check=False)
         assert "codegen_check_unavailable" not in _codes(result)
+
+
+class TestGeneratedTypeCheck:
+    """pyright over the generated defs.py (the pyright call itself is faked)."""
+
+    SOURCE = "x = 1\n"
+
+    def _fake_run(self, monkeypatch, diagnostics, *, found=True):
+        import subprocess
+
+        monkeypatch.setattr(
+            validation.shutil, "which", lambda name, **kw: "/bin/pyright" if found else None
+        )
+        out = json.dumps({"generalDiagnostics": diagnostics})
+        monkeypatch.setattr(
+            validation.subprocess,
+            "run",
+            lambda *a, **k: subprocess.CompletedProcess(a, 1, stdout=out, stderr=""),
+        )
+
+    def test_type_error_becomes_an_error_with_line(self, monkeypatch):
+        self._fake_run(monkeypatch, [{
+            "severity": "error",
+            "message": 'Argument of type "Literal[\'1ß\']" cannot be assigned\n  detail',
+            "range": {"start": {"line": 27, "character": 8}},
+        }])
+        result = ValidationResult()
+        validation._check_generated_types(result, self.SOURCE)
+        issue = next(i for i in result.errors if i.code == "defs_type_error")
+        assert "line 28" in issue.message
+        assert "detail" not in issue.message
+
+    def test_warnings_are_ignored(self, monkeypatch):
+        self._fake_run(monkeypatch, [{
+            "severity": "warning",
+            "message": "Import could not be resolved from source",
+            "range": {"start": {"line": 2, "character": 0}},
+        }])
+        result = ValidationResult()
+        validation._check_generated_types(result, self.SOURCE)
+        assert not result.issues
+
+    def test_without_pyright_warns_and_skips(self, monkeypatch):
+        self._fake_run(monkeypatch, [], found=False)
+        result = ValidationResult()
+        validation._check_generated_types(result, self.SOURCE)
+        assert not result.errors
+        warning = next(i for i in result.warnings if i.code == "type_check_skipped")
+        assert "uv add pyright" in warning.hint
+
+    def test_unparseable_output_is_not_an_error(self, monkeypatch):
+        import subprocess
+
+        monkeypatch.setattr(validation.shutil, "which", lambda name, **kw: "/bin/pyright")
+        monkeypatch.setattr(
+            validation.subprocess,
+            "run",
+            lambda *a, **k: subprocess.CompletedProcess(a, 1, stdout="not json", stderr=""),
+        )
+        result = ValidationResult()
+        validation._check_generated_types(result, self.SOURCE)
+        assert not result.issues
 
 
 # ---------------------------------------------------------------------------

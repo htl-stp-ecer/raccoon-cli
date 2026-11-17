@@ -41,6 +41,9 @@ dependencies = [
     "libcst>=1.0.0",
     "pydantic>=2.0",
     "raccoon-transport>=73",
+    # Type-checks the generated hardware/defs.py against raccoon-library's stubs
+    # during `raccoon validate` / `raccoon run` (raccoon_cli/validation.py).
+    "pyright>=1.1.414",
     # Run-scoped sensor recorder (Pi-side): MCAP container + zstd chunk codec
     "mcap>=1.1",
     "zstandard>=0.21",
