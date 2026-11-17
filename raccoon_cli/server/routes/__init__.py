@@ -13,6 +13,7 @@ from raccoon_cli.server.routes.contract import router as contract_router
 from raccoon_cli.server.routes.arm import router as arm_router
 from raccoon_cli.server.routes.servo import router as servo_router
 from raccoon_cli.server.routes.calibrate_servos import router as calibrate_servos_router
+from raccoon_cli.server.routes.camera import router as camera_router
 
 __all__ = [
     "health_router",
@@ -28,4 +29,5 @@ __all__ = [
     "arm_router",
     "servo_router",
     "calibrate_servos_router",
+    "camera_router",
 ]
