@@ -5,7 +5,8 @@ Shared logic for the Pi server (and anything else that wants it, per the service
 * Projects are scanned with ``ast``, without importing a line of project code: a class that inherits
   ``CamBackend`` or ``CamProcessor`` (directly, by a dotted name, or through another class of the project)
   is one. That gives the list a UI shows.
-* What a class can be configured with needs the class imported. That runs ``python -m raccoon_cam.describe``
+* The built-in backends are read in the server's own process (see ``builtin_backends``).
+* What a project's class can be configured with needs the class imported. That runs ``python -m raccoon_cam.describe``
   in a process of its own, so projects that use the same package name (``src``) never mix, and a project that
   crashes on import cannot take the server down.
 * The backend that was chosen is kept by raccoon-cam in ``backend.json`` (``raccoon_cam.state``); the camera
@@ -188,8 +189,16 @@ def _run_describe(arguments: list[str], project_dir: Path | None, timeout: float
 
 
 def builtin_backends(timeout: float = DESCRIBE_TIMEOUT) -> list[dict[str, Any]]:
-    """The backends that ship with raccoon-cam, with their options."""
-    return _run_describe(["--builtin"], None, timeout)
+    """The backends that ship with raccoon-cam, with their options.
+
+    Read in this process: they are raccoon-cam's own code, so there is nothing to keep apart from the server
+    (unlike a project's classes), and a process of its own costs over a second on a Pi 3 for the imports.
+    The first call imports raccoon_cam, later ones are free. ``timeout`` is kept for callers; it does not apply.
+    """
+    _require_raccoon_cam()
+    from raccoon_cam import discovery
+
+    return discovery.list_backends()
 
 
 def describe_class(path: str, project_dir: Path | None = None, kind: str = "backend", timeout: float = DESCRIBE_TIMEOUT) -> dict[str, Any]:
