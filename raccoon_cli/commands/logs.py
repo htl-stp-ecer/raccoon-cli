@@ -142,8 +142,9 @@ def _append_location(line: Text, location: str, func: str) -> None:
         line.append(f"{location:<30.30} ", style="dim cyan")
     else:
         line.append(f"{'':30} ", style="dim")
-    if func:
-        line.append(f"{func:<24.24} ", style="dim italic")
+    # Always a column, even without a func: the message starts at the same place
+    # in every row, so a multi-line message can be lined up under it.
+    line.append(f"{func:<24.24} ", style="dim italic" if func else "dim")
 
 
 def _message_text(message: str) -> Text:
@@ -151,7 +152,19 @@ def _message_text(message: str) -> Text:
     return Text.from_ansi(message) if "\x1b" in message else Text(message)
 
 
-def _render_entry_from_dict(entry: dict) -> Text:
+def _with_message(prefix: Text, message: str):
+    """*prefix* and the message side by side; every further line (or wrapped part)
+    of the message stays under its first line instead of going back to column 0."""
+    from rich.table import Table
+
+    grid = Table.grid(padding=0, expand=True)
+    grid.add_column(no_wrap=True)
+    grid.add_column(ratio=1, overflow="fold")
+    grid.add_row(prefix, _message_text(message))
+    return grid
+
+
+def _render_entry_from_dict(entry: dict):
     """Render a log entry dict (from API response) as Rich Text."""
     level = entry.get("level", "")
     style = _level_style(level)
@@ -162,19 +175,17 @@ def _render_entry_from_dict(entry: dict) -> Text:
     line_no = entry.get("line", 0) or 0
     location = f"{source}:{line_no}" if source and line_no else source
     _append_location(line, location, entry.get("func", "") or "")
-    line.append(_message_text(entry.get("message", "")))
-    return line
+    return _with_message(line, entry.get("message", ""))
 
 
-def _render_entry(entry: LogEntry) -> Text:
+def _render_entry(entry: LogEntry):
     """Render a single log entry as a Rich Text object."""
     style = _level_style(entry.level)
     line = Text()
     line.append(f"{entry.elapsed:>9.3f}s ", style="dim")
     line.append(f"{entry.level_upper:<8} ", style=style)
     _append_location(line, entry.location, entry.func)
-    line.append(_message_text(entry.message))
-    return line
+    return _with_message(line, entry.message)
 
 
 def _render_level_text(counts: dict) -> Text:
