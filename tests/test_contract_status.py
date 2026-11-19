@@ -14,7 +14,10 @@ pytestmark = pytest.mark.skipif(
     not contract_status.available(), reason="installed raccoon-transport has no contract check"
 )
 
-HASH = "93ac36836810c9fe"
+# The hash of the transport installed here: the server's own startup check uses it, so a fixed value
+# would only match one transport release.
+HASH = contract_status._check.CONTRACT_HASH if contract_status.available() else ""
+TRANSPORT_TAG = f"v{contract_status._check.own_transport_version()}" if contract_status.available() else ""
 
 
 def _dev_check():
@@ -34,12 +37,14 @@ def device(tmp_path, monkeypatch):
     monkeypatch.setenv("RACCOON_DEVICE_MARKER", str(tmp_path / "image"))
     monkeypatch.setenv("RACCOON_BUNDLE_FILE", str(tmp_path / "bundle.json"))
     monkeypatch.setenv("RACCOON_STATUS_DIR", str(tmp_path / "run"))
+    # Do not read the versions installed on the machine running the tests (tests that need them set it).
+    monkeypatch.setattr(contract_status, "_LIVE_COMPONENTS", ())
 
     class Device:
         bundle = tmp_path / "bundle.json"
 
         def write_bundle(self, contract_hash=HASH, **versions):
-            components = {"raccoon-transport": "v69", "stm32-data-reader": "v1", "a": "v1", "b": "v1",
+            components = {"raccoon-transport": TRANSPORT_TAG, "stm32-data-reader": "v1", "a": "v1", "b": "v1",
                           "raccoon-cli": "173", **versions}
             self.bundle.write_text(
                 json.dumps({"bundle": "2026.11.02", "contract_hash": contract_hash, "components": components})
@@ -48,7 +53,7 @@ def device(tmp_path, monkeypatch):
         def report(self, component, own_hash, persistent=True, component_check=None):
             from raccoon_transport import contract_check as cc
 
-            result = cc.check(component, "v1", own_hash=own_hash, own_version="v69", component_check=component_check)
+            result = cc.check(component, "v1", own_hash=own_hash, own_version=TRANSPORT_TAG.lstrip("v"), component_check=component_check)
             cc.write_status(result, persistent=persistent)
 
     return Device()
@@ -116,7 +121,7 @@ def test_server_version_is_compared_with_the_raccoon_cli_entry(device):
 
 
 def test_dev_components_are_announced_for_doctor_connect_and_run(device):
-    device.write_bundle()
+    device.write_bundle(**{"stm32-data-reader": "dev"})
     device.report("stm32-data-reader", HASH, component_check=DEV_CHECK)
     summary = contract_status.local_summary()
     assert summary["dev_components"] == ["stm32-data-reader"]
@@ -135,7 +140,7 @@ def test_no_warning_lines_when_nothing_is_dev(device):
 
 
 def test_component_with_dev_entry_is_not_compared(device):
-    device.write_bundle()
+    device.write_bundle(**{"stm32-data-reader": "dev"})
     device.report("stm32-data-reader", HASH, component_check=DEV_CHECK)
     summary = contract_status.local_summary()
     assert summary["ok"]
