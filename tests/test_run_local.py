@@ -1,5 +1,6 @@
 """Tests for local run command — Ctrl+C handling via Popen."""
 
+import json
 import subprocess
 import signal
 from contextlib import nullcontext
@@ -9,7 +10,10 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from raccoon_cli.commands.run import (
+    STDERR_BEGIN,
+    STDERR_END,
     _ensure_single_active_program,
+    _framed_stderr,
     _run_local,
     _run_local_streaming_jsonl,
 )
@@ -275,9 +279,12 @@ def test_streaming_stderr_full_to_stdout_and_stderr_log(fake_project, capsys):
         rc = _run_local_streaming_jsonl(["x"], fake_project, {}, MagicMock(), log_path=log_path)
 
     assert rc == 1
-    assert tb in capsys.readouterr().out
+    assert _framed_stderr(tb) in capsys.readouterr().out
     assert (log_path.parent / "stderr.log").read_text().strip() == tb
-    assert log_path.read_text() == ""  # JSONL stays untouched
+    # The JSONL gets the bars and the text as records of their own, so the viewers show a crash.
+    records = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert [r["msg"] for r in records] == [STDERR_BEGIN, tb, STDERR_END]
+    assert {r["level"] for r in records} == {"error"}
 
 
 def test_streaming_no_stderr_no_file(fake_project, capsys):
@@ -289,11 +296,13 @@ def test_streaming_no_stderr_no_file(fake_project, capsys):
     assert not (log_path.parent / "stderr.log").exists()
 
 
-def test_streaming_stderr_on_success_saved_but_not_printed(fake_project, capsys):
+def test_streaming_stderr_on_success_is_printed_saved_and_logged_as_a_warning(fake_project, capsys):
     log_path = _make_log(fake_project)
     fake = _StderrPopen(0, b"DeprecationWarning: x")
     with patch("raccoon_cli.commands.run.subprocess.Popen", return_value=fake):
         _run_local_streaming_jsonl(["x"], fake_project, {}, MagicMock(), log_path=log_path)
 
-    assert "DeprecationWarning" not in capsys.readouterr().out
+    assert _framed_stderr("DeprecationWarning: x") in capsys.readouterr().out
     assert (log_path.parent / "stderr.log").exists()
+    records = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert {r["level"] for r in records} == {"warn"}
