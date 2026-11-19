@@ -957,7 +957,7 @@ class _DummySummary:
 
 class TestCreateMissionDoesNotTouchMainPy:
     def test_main_py_unchanged_after_create(self, tmp_path):
-        """raccoon missions create must not insert imports into main.py."""
+        """raccoon mission create must not insert imports into main.py."""
         import inspect
         from raccoon_cli.commands import missions as missions_module
         src = inspect.getsource(missions_module.create_command.callback)

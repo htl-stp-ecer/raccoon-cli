@@ -34,7 +34,7 @@ CONTEXT_SETTINGS = {
 # Commands that don't operate on a project — skip auto-validation.
 # Only `run` is validated automatically. `validate` is the validator itself and
 # `codegen` validates on its own (see commands/codegen.py); every other command
-# (missions, shell, sync, calibrate, ...) does not need a consistent project.
+# (mission, shell, sync, calibrate, ...) does not need a consistent project.
 _AUTO_VALIDATE_COMMANDS = {"run"}
 
 

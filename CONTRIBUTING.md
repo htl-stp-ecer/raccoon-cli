@@ -54,7 +54,7 @@ raccoon/
 │   ├── routes/
 │   └── services/
 └── templates/              # Jinja2 scaffolding templates
-    └── mission/            # raccoon missions create
+    └── mission/            # raccoon mission create
 ```
 
 ---

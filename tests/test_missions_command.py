@@ -153,11 +153,11 @@ def test_reorder_by_names_and_errors(project):
 
 
 def _run(*args):
-    return CliRunner().invoke(main, ["--no-validate", "missions", *args], catch_exceptions=False)
+    return CliRunner().invoke(main, ["--no-validate", "mission", *args], catch_exceptions=False)
 
 
 def test_cli_group_and_old_commands(project):
-    result = CliRunner().invoke(main, ["missions", "--help"])
+    result = CliRunner().invoke(main, ["mission", "--help"])
     for sub in ("create", "remove", "list", "reorder", "rename"):
         assert sub in result.output
     for old in ("create", "remove", "list", "reorder"):
@@ -180,7 +180,7 @@ def test_cli_create_list_rename_remove_roundtrip(project):
 
 
 def test_cli_reports_errors_without_traceback(project):
-    result = CliRunner().invoke(main, ["--no-validate", "missions", "remove", "Nope"])
+    result = CliRunner().invoke(main, ["--no-validate", "mission", "remove", "Nope"])
     assert result.exit_code == 1
     assert "Traceback" not in result.output
 
@@ -209,7 +209,7 @@ def test_remove_and_rename_by_number(project):
 
 @pytest.mark.parametrize("name", ["M030", "M030_", "M5Quick", "m50_quick", "M0030Quick"])
 def test_cli_create_rejects_bad_prefix_or_missing_name(project, name):
-    result = CliRunner().invoke(main, ["--no-validate", "missions", "create", name])
+    result = CliRunner().invoke(main, ["--no-validate", "mission", "create", name])
     assert result.exit_code == 1
     assert "three digits" in result.output or "needs a name" in result.output
     assert _names(project) == [mission_ops.mission_entry_name(e) for e in MISSIONS]
@@ -230,7 +230,7 @@ def test_auto_number_stops_after_m990():
 
 @pytest.mark.parametrize("name, message", [("M010Other", "already used"), ("M999Late", "reserved"), ("M000Early", "reserved")])
 def test_cli_create_rejects_used_or_reserved_numbers(project, name, message):
-    result = CliRunner().invoke(main, ["--no-validate", "missions", "create", name])
+    result = CliRunner().invoke(main, ["--no-validate", "mission", "create", name])
     assert result.exit_code == 1 and message in result.output
     assert not any("Other" in n or "Late" in n or "Early" in n for n in _names(project))
 
@@ -292,7 +292,7 @@ def test_cli_create_multiple_auto_and_explicit(project):
 
 def test_cli_create_multiple_validates_all_before_creating(project):
     before = _names(project)
-    result = CliRunner().invoke(main, ["--no-validate", "missions", "create", "Wave", "M5Bad"])
+    result = CliRunner().invoke(main, ["--no-validate", "mission", "create", "Wave", "M5Bad"])
     assert result.exit_code == 1
     assert _names(project) == before
 
