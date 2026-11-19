@@ -264,6 +264,7 @@ def state_file() -> Path:
 
 
 def get_choice() -> dict[str, Any] | None:
+    _require_raccoon_cam()
     from raccoon_cam import state
 
     choice = state.load(state_file())
@@ -272,6 +273,7 @@ def get_choice() -> dict[str, Any] | None:
 
 def save_choice(path: str, cfg: dict[str, Any], project_dir: Path | None = None) -> dict[str, Any]:
     """Validate and keep the choice. The camera service applies it on its own. Returns what was saved."""
+    _require_raccoon_cam()
     from raccoon_cam import state
 
     coerced = validate_config(path, cfg, project_dir)
@@ -286,6 +288,7 @@ def save_choice(path: str, cfg: dict[str, Any], project_dir: Path | None = None)
 
 
 def clear_choice() -> None:
+    _require_raccoon_cam()
     from raccoon_cam import state
 
     state.clear(state_file())
