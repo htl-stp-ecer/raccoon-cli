@@ -214,6 +214,7 @@ def test_a_choice_that_does_not_fit_is_not_saved(tmp_path, monkeypatch):
     assert cd.get_choice() is None
 
 
+@needs_raccoon_cam
 def test_the_state_directory_defaults_to_the_one_the_unit_creates(monkeypatch):
     monkeypatch.delenv("RACCOON_CAM_STATE_DIR", raising=False)
     monkeypatch.delenv("STATE_DIRECTORY", raising=False)
