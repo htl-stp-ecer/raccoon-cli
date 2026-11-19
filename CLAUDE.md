@@ -26,7 +26,7 @@ Only `build.py` and `deploy.py` build and install; CI runs `build.py` too. `depl
 
 ### CLI Usage (after installation)
 ```bash
-raccoon missions list               # List / create / rename / remove / reorder missions
+raccoon mission list               # List / create / rename / remove / reorder missions
 raccoon codegen                     # Generate hardware code from YAML
 raccoon calibrate ticks             # Measure encoder ticks per revolution
 raccoon calibrate autotune          # Run motor autotune

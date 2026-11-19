@@ -28,31 +28,32 @@ dependencies = [
     "black",
     "rich>=10.0",
     "questionary>=2.0",
-    "setuptools>=61.0",
-    "wheel>=0.45.1",
     "jinja2>=3.0",
     "jinja2-time>=0.2",
     # Server dependencies (Pi-side)
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",
-    "websockets>=10.0",
     # Client dependencies (Laptop-side)
     "paramiko>=4.0",
     "httpx>=0.24",
     "websocket-client>=1.0",
-    "pyftpsync>=4.0",
     # IDE backend dependencies
     "libcst>=1.0.0",
     "pydantic>=2.0",
-    "lcm",
-    "raccoon-transport>=70",
-    "pytest-asyncio>=0.23",
+    "raccoon-transport>=74",
+    # Type-checks the generated hardware/defs.py against raccoon-library's stubs
+    # during `raccoon validate` / `raccoon run` (raccoon_cli/validation.py).
+    "pyright>=1.1.414",
     # Run-scoped sensor recorder (Pi-side): MCAP container + zstd chunk codec
     "mcap>=1.1",
     "zstandard>=0.21",
 ]
 
 [project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-asyncio>=0.23",
+]
 arm = [
     "ikpy>=3.3",
     "numpy>=1.24",

@@ -8,7 +8,12 @@ import difflib
 import importlib.util
 import logging
 import py_compile
+import json
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -424,7 +429,55 @@ def _check_generation(result: ValidationResult, config: dict) -> Optional[Set[st
 
     if "defs.py" not in sources:
         return None
+    _check_generated_types(result, sources["defs.py"])
     return _defs_class_attributes_from_source(sources["defs.py"])
+
+
+def _check_generated_types(result: ValidationResult, source: str) -> None:
+    """Type-check the generated ``defs.py`` against raccoon-library's stubs.
+
+    Codegen copies config values into constructor calls verbatim, so a typo such
+    as ``static_friction_pct: 1ß`` (a string) only crashes on the robot at
+    import time. The stubs are installed next to raccoon-cli, so pyright can
+    catch it here. Without pyright a warning is reported and the check is skipped.
+    """
+    # Next to the interpreter first: the project venv need not be on PATH.
+    pyright = shutil.which("pyright", path=str(Path(sys.executable).parent)) or shutil.which("pyright")
+    if pyright is None:
+        result.add(ValidationIssue(
+            severity=Severity.WARNING,
+            code="type_check_skipped",
+            message="Type check of the hardware config skipped: pyright is not installed",
+            hint="Run 'uv add pyright' in the project to catch wrong value types before the run.",
+        ))
+        return
+    with tempfile.TemporaryDirectory(prefix="raccoon-typecheck-") as tmp:
+        path = Path(tmp) / "defs.py"
+        path.write_text(source, encoding="utf-8")
+        try:
+            proc = subprocess.run(
+                [pyright, "--outputjson", "--pythonpath", sys.executable, str(path)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=tmp,
+            )
+            diagnostics = json.loads(proc.stdout)["generalDiagnostics"]
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+            logger.debug("type check of defs.py failed to run: %s", exc)
+            return
+    for diag in diagnostics:
+        # reportMissingModuleSource is a warning: only the stubs exist off the robot.
+        if diag.get("severity") != "error":
+            continue
+        line = diag.get("range", {}).get("start", {}).get("line", 0) + 1
+        message = str(diag.get("message", "")).splitlines()[0]
+        result.add(ValidationIssue(
+            severity=Severity.ERROR,
+            code="defs_type_error",
+            message=f"Generated defs.py line {line}: {message}",
+            hint="Fix the value in the hardware config (e.g. config/motors.yml), then run 'raccoon codegen'.",
+        ))
 
 
 def _defs_bindings(tree: ast.AST) -> tuple[Set[str], Set[str]]:

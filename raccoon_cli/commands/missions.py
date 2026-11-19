@@ -1,4 +1,4 @@
-"""``raccoon missions`` - create, remove, list, rename and reorder missions.
+"""``raccoon mission`` - create, remove, list, rename and reorder missions.
 
 Thin CLI wrappers: argument parsing and output only. The logic lives in
 :mod:`raccoon_cli.mission_ops` and :mod:`raccoon_cli.project_creation`, which
@@ -178,7 +178,7 @@ def _interactive_reorder(missions: list) -> list | None:
 # ---------------------------------------------------------------------------
 
 
-@click.group(name="missions")
+@click.group(name="mission")
 def missions_group() -> None:
     """Create, remove, list, rename and reorder missions."""
 
@@ -195,7 +195,7 @@ def create_command(ctx: click.Context, names: tuple) -> None:
     M000 and M999 are reserved for setup/shutdown. M5 or M50 style prefixes
     are rejected.
 
-    Example: raccoon missions create Drive Collect M500Wave
+    Example: raccoon mission create Drive Collect M500Wave
     """
     console: Console = ctx.obj["console"]
     project_root = _project_root()
@@ -240,7 +240,7 @@ def remove_command(ctx: click.Context, names: tuple, keep_file: bool) -> None:
     """Remove one or more missions from the current project.
 
     Each NAME is the mission name or just its number, e.g.
-    raccoon missions remove M020 Drive M030Wave
+    raccoon mission remove M020 Drive M030Wave
     """
     console: Console = ctx.obj["console"]
     project_root = _project_root()
@@ -279,7 +279,7 @@ def list_command(ctx: click.Context) -> None:
 
     if not missions:
         console.print("[yellow]No missions configured in this project.[/yellow]")
-        console.print("[dim]Use 'raccoon missions create <name>' to add one.[/dim]")
+        console.print("[dim]Use 'raccoon mission create <name>' to add one.[/dim]")
         return
 
     table = Table(title="Missions", show_header=True, header_style="bold magenta")
@@ -328,9 +328,9 @@ def reorder_command(ctx: click.Context, order: tuple[str, ...]) -> None:
 
     \b
     By index (1-based):
-        raccoon missions reorder 1 3 2
+        raccoon mission reorder 1 3 2
     By name (M-prefix / Mission suffix optional, unique prefixes allowed):
-        raccoon missions reorder Setup Drive Collect Shutdown
+        raccoon mission reorder Setup Drive Collect Shutdown
 
     All missions are renumbered M010, M020, M030 ... afterwards.
     """

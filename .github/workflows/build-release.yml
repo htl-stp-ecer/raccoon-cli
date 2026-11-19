@@ -144,7 +144,7 @@ jobs:
           files: builds/raccoon_cli-*.whl
 
       # raccoon-image keeps its dev manifest (bundles/dev.json) up to date from this.
-      # The pins in raccoon-example no longer follow single releases: only Create
+      # The pins in raccoon-template no longer follow single releases: only Create
       # Bundle in raccoon-image moves them.
       - name: Create an app token for raccoon-image
         id: image-token

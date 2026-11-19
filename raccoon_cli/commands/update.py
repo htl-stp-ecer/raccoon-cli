@@ -863,6 +863,9 @@ _REMOTE_TMP_BUNDLE = "/tmp/raccoon-bundle.json"
 # Restarted so every service re-runs its startup contract check against the new file.
 # raccoon-server goes last and without waiting, because it is the one we talk to.
 _PI_SERVICES = ["stm32_data_reader.service", "flutter-ui.service"]
+# The camera service is optional (raccoon-cam may not be installed), so a missing unit
+# must not count as a failed restart of the others.
+_CAM_SERVICE = "raccoon-cam.service"
 
 
 def _install_bundle_file(console: Console, ssh_client, manifest: dict) -> bool:
@@ -937,7 +940,14 @@ def _mark_components_dev(console: Console, ssh_client, names: list[str], fallbac
 def _restart_pi_services(console: Console, ssh_client) -> None:
     """Restart the services so they check their transport against the new bundle file."""
     console.print("[bold]Restarting services on Pi...[/bold]")
-    commands = [f"sudo systemctl restart {' '.join(_PI_SERVICES)}", "sudo systemctl --no-block restart raccoon.service"]
+    commands = [
+        f"sudo systemctl restart {' '.join(_PI_SERVICES)}",
+        # Its post-install already started it once, before the bundle file existed. Start it
+        # again now, so its startup check runs against the new file (and a start that was
+        # refused against the old one, exit code 78, is not left stopped).
+        f"if systemctl cat {_CAM_SERVICE} >/dev/null 2>&1; then sudo systemctl restart {_CAM_SERVICE}; fi",
+        "sudo systemctl --no-block restart raccoon.service",
+    ]
     for command in commands:
         try:
             _, stdout, stderr = ssh_client.exec_command(command, timeout=60)

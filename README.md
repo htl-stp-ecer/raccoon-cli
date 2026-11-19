@@ -6,12 +6,11 @@
 
 **The dev toolchain for RaccoonOS — scaffold, configure, sync, and run Botball robots.**
 
-[![Build & Release](https://github.com/htl-stp-ecer/raccoon-cli/actions/workflows/build-release.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-cli/actions/workflows/build-release.yml)
-[![Latest Release](https://img.shields.io/github/v/release/htl-stp-ecer/raccoon-cli)](https://github.com/htl-stp-ecer/raccoon-cli/releases/latest)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 ![Python](https://img.shields.io/badge/Python-3.13+-3776AB?logo=python&logoColor=ffdd54)
+[![Build & Release](https://github.com/htl-stp-ecer/raccoon-cli/actions/workflows/build-release.yml/badge.svg)](https://github.com/htl-stp-ecer/raccoon-cli/actions/workflows/build-release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/htl-stp-ecer/raccoon-cli)](https://github.com/htl-stp-ecer/raccoon-cli/releases/latest)
 ![PyPI](https://img.shields.io/pypi/v/raccoon-cli?logo=pypi&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-KIPR%20Wombat-orange)
 
 > 📖 **Full documentation at [raccoon-docs.pages.dev](https://raccoon-docs.pages.dev/)**
 
@@ -19,7 +18,7 @@
 
 ---
 
-`raccoon` is the command-line companion to [RaccoonLib](https://github.com/htl-stp-ecer/raccoon-lib). It handles everything outside the robot code itself: creating projects, generating hardware boilerplate from a YAML config, syncing files to the Pi, and running your missions remotely.
+`raccoon` is the command-line companion to [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib). It handles everything outside the robot code itself: generating hardware boilerplate from a YAML config, syncing files to the Pi, and running your missions remotely.
 
 ---
 
@@ -28,23 +27,6 @@
 ```bash
 pip install raccoon-cli
 ```
-
----
-
-## Quick Start
-
-```bash
-# 1. Create a project with the project helper script, then open it
-cd MyRobot
-
-# 2. Connect to your Pi
-raccoon connect 192.168.4.1
-
-# 3. Sync + run
-raccoon run
-```
-
-That's it. `raccoon run` regenerates any stale code, syncs changed files to the Pi, and streams output back to your terminal.
 
 ---
 
@@ -67,15 +49,15 @@ After that, the server starts automatically on boot and `raccoon connect` can re
 
 ### Missions
 
-Projects are git repos created with the project helper script; run `raccoon` from inside the project.
+Projects are git repos created with the setup script of [raccoon-template](https://github.com/htl-stp-ecer/raccoon-template) (see [Getting Started](https://raccoon-docs.pages.dev/00-getting-started/03-create-your-project/)); run `raccoon` from inside the project.
 
 | Command | Description |
 |:--------|:------------|
-| `raccoon missions create <[Mxxx]name>...` | Add one or more missions; the number is optional (auto: M010, M020, ... M990), e.g. `Drive M500Wave` (`M000`/`M999` are reserved) |
-| `raccoon missions list` | List the project's missions |
-| `raccoon missions rename <name\|Mxxx> <new-name>` | Rename a mission (file, class and references; the M-number is kept) |
-| `raccoon missions remove <name\|Mxxx>... [--keep-file]` | Remove one or more missions |
-| `raccoon missions reorder [order...]` | Reorder missions (interactive without arguments) and renumber them |
+| `raccoon mission create <[Mxxx]name>...` | Add one or more missions; the number is optional (auto: M010, M020, ... M990), e.g. `Drive M500Wave` (`M000`/`M999` are reserved) |
+| `raccoon mission list` | List the project's missions |
+| `raccoon mission rename <name\|Mxxx> <new-name>` | Rename a mission (file, class and references; the M-number is kept) |
+| `raccoon mission remove <name\|Mxxx>... [--keep-file]` | Remove one or more missions |
+| `raccoon mission reorder [order...]` | Reorder missions (interactive without arguments) and renumber them |
 
 ### Hardware & code generation
 
@@ -85,6 +67,9 @@ Projects are git repos created with the project helper script; run `raccoon` fro
 | `raccoon calibrate ticks` | Measure encoder ticks per revolution |
 | `raccoon calibrate autotune` | Run motor autotune |
 | `raccoon calibrate servos` | Interactively calibrate servo offsets |
+| `raccoon calibrate step-response` | Record a motor step response |
+| `raccoon validate` | Check config, files and imports for consistency |
+| `raccoon migrate` | Apply numbered project migrations |
 
 ### Remote development
 
@@ -96,22 +81,24 @@ Projects are git repos created with the project helper script; run `raccoon` fro
 | `raccoon sync` | Sync changed files to the Pi (uses content hashing) |
 | `raccoon sync --force` | Re-upload all files |
 | `raccoon run` | Regenerate code, sync, and run on the Pi |
+| `raccoon upload` | Full preflight, then push to the robot and confirm it starts |
+| `raccoon shell` | Open an SSH session on the connected Pi |
+| `raccoon doctor` | Health check of tools, connection and versions |
 
 ### Debugging
 
 | Command | Description |
 |:--------|:------------|
-| `raccoon lcm spy` | Live-inspect LCM messages on the bus |
-| `raccoon lcm record <file>` | Record LCM traffic to a file |
-| `raccoon checkpoint list` | List saved checkpoints |
+| `raccoon logs show` / `tail` / `download` / `clear` | Read, follow, download or clear the robot's logs (`raccoon logs sources` lists them) |
+| `raccoon checkpoint list` / `show` | List saved checkpoints or show one |
 | `raccoon checkpoint restore <id>` | Restore project to a checkpoint |
+| `raccoon checkpoint delete` / `clean` | Delete one checkpoint or clean up old ones |
 
 ### Tooling
 
 | Command | Description |
 |:--------|:------------|
 | `raccoon update` | Update raccoon-cli to the latest version |
-| `raccoon completion` | Install shell tab-completion |
 | `raccoon web` | Launch the web IDE |
 
 ---
@@ -212,17 +199,6 @@ known_pis:
     address: 192.168.4.1
 default_pi_user: pi
 ```
-
----
-
-## Part of RaccoonOS
-
-| Repository | What it is |
-|:-----------|:-----------|
-| [raccoon-lib](https://github.com/htl-stp-ecer/raccoon-lib) | Core robotics library |
-| [raccoon-example](https://github.com/htl-stp-ecer/raccoon-example) | Reference robot -- start here if you're new |
-| [raccoon-transport](https://github.com/htl-stp-ecer/raccoon-transport) | LCM messaging layer |
-| [documentation](https://raccoon-docs.pages.dev/) | Full platform docs |
 
 ---
 

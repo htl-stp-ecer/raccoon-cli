@@ -94,11 +94,11 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
     PackageInfo(
         name="raccoon-cam",
         repo="htl-stp-ecer/raccoon-cam",
-        pip_name=None,
+        pip_name="raccoon-cam",
         targets=["pi"],
-        version_cmd="/usr/local/bin/raccoon-cam --version 2>/dev/null",
-        pi_install="tarball",
-        pi_asset="*.tar.gz",
+        # A Python wheel like the CLI and the library. The server's post-install runs the
+        # package's own setup afterwards (systemd unit, OpenCV from apt).
+        pi_install="pypi",
     ),
 ]
 

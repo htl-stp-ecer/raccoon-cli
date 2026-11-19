@@ -161,9 +161,19 @@ def _live_stm32() -> Optional[str]:
     return _stm32_version()
 
 
+def _live_cam() -> Optional[str]:
+    from importlib import metadata
+
+    try:
+        return metadata.version("raccoon-cam")
+    except metadata.PackageNotFoundError:
+        return None
+
+
 _LIVE_COMPONENTS = (
     ("botui", "botui", _live_botui),
     ("stm32-data-reader", "stm32-data-reader", _live_stm32),
+    ("raccoon-cam", "raccoon-cam", _live_cam),
 )
 
 

@@ -376,12 +376,18 @@ def _run_via_pty(
     project_root: Path,
     env: dict,
     console: Console,
+    log_path: Path | None = None,
 ) -> int:
     """Run cmd_parts with a PTY as stdout/stderr so isatty() returns True.
 
     Used when our own stdout is a pipe (Pi server executor).  The PTY makes
     colour libraries that check isatty() activate, and the output is relayed
     byte-for-byte to sys.stdout so the executor can forward it upstream.
+
+    stdout and stderr share the PTY, so they can't be told apart. The last
+    ``_PTY_TAIL_BYTES`` of output are kept; on a non-zero exit they are saved
+    as ``stderr.log`` and appended to *log_path* (the run's JSONL) so a crash
+    traceback is also visible in the log viewers, not only in the live output.
     """
     import pty
     import select
@@ -416,6 +422,15 @@ def _run_via_pty(
     original_sigint, original_sigterm = _install_termination_handlers()
 
     returncode: int | None = None
+    tail = bytearray()
+
+    def _relay(data: bytes) -> None:
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+        tail.extend(data)
+        if len(tail) > _PTY_TAIL_BYTES:
+            del tail[: len(tail) - _PTY_TAIL_BYTES]
+
     try:
         while True:
             try:
@@ -427,8 +442,7 @@ def _run_via_pty(
                     data = os.read(master_fd, 4096)
                     if not data:
                         break
-                    sys.stdout.buffer.write(data)
-                    sys.stdout.buffer.flush()
+                    _relay(data)
                 except OSError:
                     # EIO: child closed the slave (normal exit path)
                     break
@@ -442,8 +456,7 @@ def _run_via_pty(
                         data = os.read(master_fd, 4096)
                         if not data:
                             break
-                        sys.stdout.buffer.write(data)
-                        sys.stdout.buffer.flush()
+                        _relay(data)
                 except OSError:
                     pass
                 break
@@ -458,9 +471,16 @@ def _run_via_pty(
         except OSError:
             pass
 
-    if returncode is not None:
-        return returncode
-    return proc.wait()
+    if returncode is None:
+        returncode = proc.wait()
+    if returncode != 0 and tail:
+        err = bytes(tail).decode("utf-8", errors="replace").replace("\r\n", "\n").strip()
+        _write_stderr_log(log_path, err)
+        _append_stderr_record(log_path, err, returncode)
+    return returncode
+
+
+_PTY_TAIL_BYTES = 256 * 1024
 
 
 def _run_local_with_tui(
@@ -533,19 +553,46 @@ def _run_local_with_tui(
         )
 
     # stderr (a Python traceback, import errors, ...) never enters the JSONL log.
-    # It was buffered in RAM during the run; persist it once as stderr.log and,
-    # on a failed run, print it in full.
+    # It was buffered in RAM during the run; persist it once as stderr.log and
+    # print it in full whatever the exit code was: a program can crash and still
+    # exit 0 (an atexit hook that calls os._exit(0)), and a few extra lines on a
+    # clean run cost less than a swallowed traceback.
     err = stderr_capture.collect()
     _write_stderr_log(log_path, err)
-    if err and returncode not in (0, None):
-        console.print(
-            Panel(Text(err, style="red"), title="stderr", border_style="red")
-        )
+    _append_stderr_record(log_path, err, returncode)
+    if err:
+        failed = returncode not in (0, None)
+        _print_program_stderr(console, _framed_stderr(err), "red" if failed else "yellow")
 
     return returncode if returncode is not None else 0
 
 
 STDERR_LOG_NAME = "stderr.log"
+
+# The program's stderr is wrapped in two bars of the same length, so it stands out
+# in the pager, in `raccoon logs` and after the live view of a run.
+STDERR_BAR_WIDTH = 72
+
+
+def _stderr_bar(label: str) -> str:
+    return f" {label} ".center(STDERR_BAR_WIDTH, "=")
+
+
+STDERR_BEGIN = _stderr_bar("BEGIN PROGRAM STDERR")
+STDERR_END = _stderr_bar("END PROGRAM STDERR")
+
+
+def _print_program_stderr(console: Console, text: str, style: str = "") -> None:
+    """Print *text* as it is, ANSI colours kept, after the live view has ended."""
+    rendered = Text.from_ansi(text.rstrip("\n"))
+    if style:
+        rendered.stylize(style)
+    console.print(rendered)
+
+
+def _framed_stderr(err: str) -> str:
+    """*err* between the BEGIN and END bars, ready to print."""
+    return f"{STDERR_BEGIN}\n{err}\n{STDERR_END}"
 
 
 class _StderrCapture:
@@ -586,6 +633,68 @@ class _StderrCapture:
             if self._stream is not None:
                 self._stream.close()
         return b"".join(self._chunks).decode("utf-8", errors="replace").strip()
+
+
+def _append_stderr_record(log_path: Path | None, err: str, returncode: int | None) -> None:
+    """Append *err* to the run's JSONL as one record, ANSI colours preserved.
+
+    A crash traceback otherwise lives only on stderr, so the JSONL viewers
+    (``raccoon logs``, the live TUI, the web IDE) never see it. The raw text
+    (including ``\\x1b[..m`` colour codes) goes into ``msg``; the viewers render
+    it with ``Text.from_ansi``. The child has exited, so appending is safe, and
+    the run-cache sidecar invalidates itself via the changed size/mtime.
+    """
+    if not err or log_path is None:
+        return
+    import json
+    from datetime import datetime
+
+    try:
+        path = Path(log_path)
+        elapsed, seq = 0.0, 0
+        needs_newline = False
+        if path.exists():
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - 8192))
+                tail = f.read()
+            needs_newline = bool(tail) and not tail.endswith(b"\n")
+            for raw in reversed(tail.splitlines()):
+                try:
+                    last = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(last, dict):
+                    elapsed = float(last.get("elapsed", 0.0) or 0.0)
+                    seq = int(last.get("seq", 0) or 0)
+                    break
+        level = "error" if returncode not in (0, None) else "warn"
+        # The bars are records of their own, same level as the text between them,
+        # so a level filter keeps all three together.
+        records = [
+            {
+                "t": datetime.now().isoformat(timespec="milliseconds"),
+                "elapsed": elapsed,
+                "seq": seq + number,
+                "level": level,
+                "logger": "stderr",
+                "thread": 0,
+                "pid": 0,
+                "file": "stderr",
+                "line": 0,
+                "func": "",
+                "msg": message,
+            }
+            for number, message in enumerate((STDERR_BEGIN, err, STDERR_END), start=1)
+        ]
+        with open(path, "a", encoding="utf-8") as f:
+            if needs_newline:
+                f.write("\n")
+            for record in records:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except (OSError, ValueError):
+        pass  # never mask the original crash
 
 
 def _write_stderr_log(log_path: Path | None, err: str) -> None:
@@ -675,12 +784,14 @@ def _run_local_streaming_jsonl(
             _clear_active_program_state(proc.pid)
 
     # stderr never enters the JSONL stream. Persist it once as stderr.log on the
-    # Pi and, on a failed run, send it in full as plain text: the server relays
-    # stdout over the WebSocket and the laptop prints non-JSON lines as-is.
+    # Pi and send it in full as plain text whatever the exit code was (a crash
+    # can still exit 0): the server relays stdout over the WebSocket and the
+    # laptop prints non-JSON lines as-is.
     err = stderr_capture.collect()
     _write_stderr_log(log_path, err)
-    if err and returncode not in (0, None):
-        out.write(err + "\n")
+    _append_stderr_record(log_path, err, returncode)
+    if err:
+        out.write(_framed_stderr(err) + "\n")
         out.flush()
 
     return returncode if returncode is not None else 0
@@ -975,7 +1086,9 @@ def _run_local(
                 with _active_program_lock():
                     _clear_active_program_state(proc.pid)
         else:
-            returncode = _run_via_pty(cmd_parts, project_root, env, console)
+            returncode = _run_via_pty(
+                cmd_parts, project_root, env, console, log_path=run_log_path
+            )
     finally:
         _stop_sensor_recorder(sensor_recorder, console)
         # The ONE SD write for the whole run: copy the RAM run dir to the
@@ -1204,6 +1317,7 @@ async def _run_remote(
 
         view = LiveLogView(console, title=project_name)
         collected: list[str] = []
+        plain_lines: list[str] = []
         live_holder: dict[str, Live] = {}
 
         def _on_line(line: str) -> None:
@@ -1214,16 +1328,13 @@ async def _run_remote(
                 if live is not None:
                     live.update(view.render())
                 return
-            if not line.strip():
+            if not line.strip() and not plain_lines:
                 return
             if _is_warn_or_error(line):
                 collected.append(line)
-            # Strip ANSI and print as literal text (no Rich markup parsing) so a
-            # stray line's escape codes never show up as garbled `[1m[36m…`.
-            clean = _ANSI_RE.sub("", line)
-            live = live_holder.get("live")
-            target = live.console if live is not None else console
-            target.print(Text(clean))
+            # Not printed here: between the live view's redraws it comes out
+            # mangled. It is shown in one piece when the run is over.
+            plain_lines.append(line)
 
         try:
             with Live(
@@ -1239,6 +1350,13 @@ async def _run_remote(
                 live.update(view.render())
         finally:
             signal.signal(signal.SIGINT, original_handler)
+
+        # What the program wrote outside the log (its stderr, between the BEGIN
+        # and END bars the Pi adds), after the live view has ended. ANSI colours
+        # of a traceback are kept; nothing is parsed as Rich markup.
+        if plain_lines:
+            console.print()
+            _print_program_stderr(console, "\n".join(plain_lines))
 
         # Errors that arrived as structured records feed the exit heuristic too.
         streamed_error_count = view.counts.get("ERROR", 0) + view.counts.get(

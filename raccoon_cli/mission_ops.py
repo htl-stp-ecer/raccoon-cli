@@ -1,6 +1,6 @@
 """Shared mission operations: list, remove, rename and reorder.
 
-The ``raccoon missions`` CLI group and the IDE backend are meant to call these
+The ``raccoon mission`` CLI group and the IDE backend are meant to call these
 functions directly (see CLAUDE.md: one code path, thin wrappers). Creation lives
 in :func:`raccoon_cli.project_creation.create_mission`.
 
@@ -41,7 +41,7 @@ class MissionError(Exception):
 
 @dataclass(frozen=True)
 class MissionInfo:
-    """One configured mission, as shown by ``raccoon missions list``."""
+    """One configured mission, as shown by ``raccoon mission list``."""
 
     index: int  # 1-based position in the config
     class_name: str

@@ -274,6 +274,22 @@ def test_a_real_mismatch_still_denies_a_run(device, monkeypatch):
     assert "stm32-data-reader" in contract_status.current_refusal()
 
 
+def test_installed_cam_version_is_read_again_after_an_update(device, monkeypatch):
+    from raccoon_transport.contract_check import ComponentCheck
+
+    device.write_bundle(**{"raccoon-cam": "v2"})
+    stale = ComponentCheck(name="version", result="version-mismatch", expected="v2",
+                           message="component version mismatch: raccoon-cam is v1 but bundle b expects v2")
+    device.report("raccoon-cam", HASH, component_check=stale)
+    monkeypatch.setattr(contract_status, "installed_version", lambda: "173")
+    monkeypatch.setattr(contract_status, "_live_cam", lambda: "v2")
+    monkeypatch.setattr(contract_status, "_LIVE_COMPONENTS",
+                        (("raccoon-cam", "raccoon-cam", contract_status._live_cam),))
+    assert contract_status.current_refusal() is None
+    entry = next(c for c in contract_status.fresh_summary()["components"] if c["component"] == "raccoon-cam")
+    assert entry["component_version"] == "v2" and entry["result"] == "ok"
+
+
 def test_fresh_summary_keeps_a_transport_failure(device, monkeypatch):
     device.write_bundle(**{"stm32-data-reader": "v2"})
     device.report("stm32-data-reader", "ffffffffffffffff")  # built against another transport
