@@ -146,6 +146,11 @@ def _append_location(line: Text, location: str, func: str) -> None:
         line.append(f"{func:<24.24} ", style="dim italic")
 
 
+def _message_text(message: str) -> Text:
+    """Keep ANSI colours of messages that carry them (stderr tracebacks)."""
+    return Text.from_ansi(message) if "\x1b" in message else Text(message)
+
+
 def _render_entry_from_dict(entry: dict) -> Text:
     """Render a log entry dict (from API response) as Rich Text."""
     level = entry.get("level", "")
@@ -157,7 +162,7 @@ def _render_entry_from_dict(entry: dict) -> Text:
     line_no = entry.get("line", 0) or 0
     location = f"{source}:{line_no}" if source and line_no else source
     _append_location(line, location, entry.get("func", "") or "")
-    line.append(entry.get("message", ""))
+    line.append(_message_text(entry.get("message", "")))
     return line
 
 
@@ -168,7 +173,7 @@ def _render_entry(entry: LogEntry) -> Text:
     line.append(f"{entry.elapsed:>9.3f}s ", style="dim")
     line.append(f"{entry.level_upper:<8} ", style=style)
     _append_location(line, entry.location, entry.func)
-    line.append(entry.message)
+    line.append(_message_text(entry.message))
     return line
 
 
@@ -1290,7 +1295,7 @@ def _render_journal_entry(entry: dict) -> Text:
     ts = (entry.get("timestamp") or "").replace("T", " ")[:19]
     line.append(f"{ts} ", style="dim")
     line.append(f"{level:<6} ", style=style)
-    line.append(entry.get("message", ""))
+    line.append(_message_text(entry.get("message", "")))
     return line
 
 

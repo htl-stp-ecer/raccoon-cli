@@ -70,6 +70,13 @@ DEFAULT_MIN_LEVEL = "INFO"
 DEFAULT_STREAM_LEVEL = "DEBUG"
 
 
+def _message_text(message: str, style: str = "") -> Text:
+    """Message as Rich Text; keeps ANSI colours (e.g. a stderr traceback record)."""
+    if "\x1b" in message:
+        return Text.from_ansi(message)
+    return Text(message, style=style)
+
+
 def _level_style(level: str) -> str:
     return _LEVEL_STYLES.get(level.upper(), "")
 
@@ -381,7 +388,7 @@ class LiveLogView:
             table.add_row(
                 f"{rec.elapsed:7.3f}s",
                 Text(rec.level[:5], style=lvl_style),
-                Text(rec.message, style=msg_style),
+                _message_text(rec.message, msg_style),
             )
         return table
 
