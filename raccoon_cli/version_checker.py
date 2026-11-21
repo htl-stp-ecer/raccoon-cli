@@ -97,7 +97,7 @@ PACKAGE_REGISTRY: list[PackageInfo] = [
         pip_name="raccoon-cam",
         targets=["pi"],
         # A Python wheel like the CLI and the library. The server's post-install runs the
-        # package's own setup afterwards (systemd unit, OpenCV from apt).
+        # package's own setup afterwards (systemd unit, headless OpenCV from pip).
         pi_install="pypi",
     ),
 ]
