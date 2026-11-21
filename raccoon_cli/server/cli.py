@@ -109,6 +109,9 @@ def start():
         port=config.port,
         reload=False,
         log_level="info",
+        # Upper bound for stopping: long-polling clients (network events) keep
+        # requests open for up to 20 s and would otherwise delay the shutdown.
+        timeout_graceful_shutdown=3,
     )
 
 
