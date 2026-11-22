@@ -9,8 +9,8 @@ Shared logic for the Pi server (and anything else that wants it, per the service
 * What a project's class can be configured with needs the class imported. That runs ``python -m raccoon_cam.describe``
   in a process of its own, so projects that use the same package name (``src``) never mix, and a project that
   crashes on import cannot take the server down.
-* The backend that was chosen is kept by raccoon-cam in ``backend.json`` (``raccoon_cam.state``); the camera
-  service watches that file and applies a change itself.
+* The backend that was chosen is kept by raccoon-cam in ``backend.json`` and the processor that runs for the UI in
+  ``processor.json`` (``raccoon_cam.state``); the camera service watches both files and applies a change itself.
 """
 
 from __future__ import annotations
@@ -223,11 +223,9 @@ def origin(project: dict[str, Any] | None) -> dict[str, Any]:
     return {"kind": "project", "project": project["name"]}
 
 
-def list_backends(projects: list[dict[str, Any]], timeout: float = DESCRIBE_TIMEOUT) -> list[dict[str, Any]]:
-    """Built-in backends, then those found in each project (``projects``: ``ProjectManager.list_projects()``)."""
+def _project_items(projects: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
+    """The classes of one ``kind`` (``backend`` or ``processor``) found in each project."""
     items = []
-    for description in builtin_backends(timeout):
-        items.append({**description, "origin": origin(None), "project_id": None, "project_dir": None})
     for project in projects:
         project_dir = Path(project["path"])
         try:
@@ -236,7 +234,7 @@ def list_backends(projects: list[dict[str, Any]], timeout: float = DESCRIBE_TIME
             logger.warning("camera scan: cannot read project %s", project_dir)
             continue
         for item in found:
-            if item.kind != "backend":
+            if item.kind != kind:
                 continue
             items.append(
                 {
@@ -250,6 +248,32 @@ def list_backends(projects: list[dict[str, Any]], timeout: float = DESCRIBE_TIME
                 }
             )
     return items
+
+
+def list_backends(projects: list[dict[str, Any]], timeout: float = DESCRIBE_TIMEOUT) -> list[dict[str, Any]]:
+    """Built-in backends, then those found in each project (``projects``: ``ProjectManager.list_projects()``)."""
+    items = [
+        {**description, "origin": origin(None), "project_id": None, "project_dir": None}
+        for description in builtin_backends(timeout)
+    ]
+    return items + _project_items(projects, "backend")
+
+
+def builtin_processors(timeout: float = DESCRIBE_TIMEOUT) -> list[dict[str, Any]]:
+    """The processors that ship with raccoon-cam, with their options (read in this process, like the backends)."""
+    _require_raccoon_cam()
+    from raccoon_cam import discovery
+
+    return discovery.list_processors()
+
+
+def list_processors(projects: list[dict[str, Any]], timeout: float = DESCRIBE_TIMEOUT) -> list[dict[str, Any]]:
+    """Built-in processors, then those found in each project."""
+    items = [
+        {**description, "origin": origin(None), "project_id": None, "project_dir": None}
+        for description in builtin_processors(timeout)
+    ]
+    return items + _project_items(projects, "processor")
 
 
 # -- the chosen backend ----------------------------------------------------------------------------
@@ -292,3 +316,49 @@ def clear_choice() -> None:
     from raccoon_cam import state
 
     state.clear(state_file())
+
+
+# -- the chosen processor --------------------------------------------------------------------------
+
+
+def processor_state_file() -> Path:
+    """Where raccoon-cam keeps the processor chosen for the UI: ``processor.json`` next to ``backend.json``."""
+    _require_raccoon_cam()
+    from raccoon_cam import state
+
+    return state.processor_file() or state.processor_file(DEFAULT_STATE_DIRECTORY)
+
+
+def get_processor_choice() -> dict[str, Any] | None:
+    _require_raccoon_cam()
+    from raccoon_cam import state
+
+    choice = state.load_processor(processor_state_file())
+    return choice.to_dict() if choice else None
+
+
+def save_processor_choice(
+    path: str, cfg: dict[str, Any], project_dir: Path | None = None, name: str | None = None
+) -> dict[str, Any]:
+    """Validate and keep the processor. The camera service applies it on its own. Returns what was saved."""
+    _require_raccoon_cam()
+    from raccoon_cam import state
+
+    coerced = validate_config(path, cfg, project_dir, kind="processor")
+    choice = state.ProcessorChoice(
+        path=path, cfg=coerced, project_dir=str(project_dir) if project_dir else None, name=name or None
+    )
+    try:
+        state.save_processor(processor_state_file(), choice)
+    except OSError as exc:
+        raise CameraDiscoveryError(
+            f"cannot save the camera processor ({exc}). Is raccoon-cam up to date (it creates the state directory)?"
+        ) from exc
+    return choice.to_dict()
+
+
+def clear_processor_choice() -> None:
+    _require_raccoon_cam()
+    from raccoon_cam import state
+
+    state.clear(processor_state_file())

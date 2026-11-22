@@ -219,3 +219,54 @@ def test_the_state_directory_defaults_to_the_one_the_unit_creates(monkeypatch):
     monkeypatch.delenv("RACCOON_CAM_STATE_DIR", raising=False)
     monkeypatch.delenv("STATE_DIRECTORY", raising=False)
     assert cd.state_file() == Path("/var/lib/raccoon-cam/backend.json")
+
+
+def test_the_list_of_processors_has_the_built_in_ones_first_then_those_of_each_project(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        cd, "builtin_processors",
+        lambda timeout=0: [{"path": "raccoon_cam.processors.color:ColorBlobs", "name": "ColorBlobs", "description": "Colours", "options": []}],
+    )
+    project = tmp_path / "bot"
+    (project / "src").mkdir(parents=True)
+    (project / "src" / "vision.py").write_text(
+        "from raccoon_cam import CamProcessor\n\nclass Spot(CamProcessor):\n    '''Finds a spot.'''\n"
+        "    def process(self, frame):\n        return []\n\nclass Mine:\n    pass\n"
+    )
+    items = cd.list_processors([{"id": "p1", "name": "Bot", "path": str(project)}])
+    assert [i["name"] for i in items] == ["ColorBlobs", "Spot"]
+    assert items[0]["origin"] == {"kind": "builtin", "project": None}
+    assert items[1]["origin"] == {"kind": "project", "project": "Bot"}
+    assert (items[1]["path"], items[1]["project_id"], items[1]["description"]) == ("src.vision:Spot", "p1", "Finds a spot.")
+    # The backends of the same project are not in the list of processors, and the other way round.
+    assert cd.list_backends([{"id": "p1", "name": "Bot", "path": str(project)}]) == [
+        item for item in cd.list_backends([{"id": "p1", "name": "Bot", "path": str(project)}]) if item["origin"]["kind"] == "builtin"
+    ]
+
+
+@needs_raccoon_cam
+def test_the_built_in_processors_come_from_raccoon_cam():
+    pytest.importorskip("raccoon_cam.processors.color")
+    items = cd.builtin_processors()
+    assert "raccoon_cam.processors.color:ColorBlobs" in [i["path"] for i in items]
+
+
+@needs_raccoon_cam
+def test_a_processor_is_checked_saved_read_and_cleared(tmp_path, monkeypatch):
+    pytest.importorskip("raccoon_cam.processors.color")
+    monkeypatch.setenv("RACCOON_CAM_STATE_DIR", str(tmp_path / "state"))
+    assert cd.get_processor_choice() is None
+    saved = cd.save_processor_choice("raccoon_cam.processors.color:ColorBlobs", {"min_area": "200", "colors": ["red"]})
+    assert saved["cfg"] == {"min_area": 200.0, "colors": ["red"]} and saved["project_dir"] is None
+    assert cd.get_processor_choice() == saved
+    assert (tmp_path / "state" / "processor.json").is_file() and not (tmp_path / "state" / "backend.json").exists()
+    cd.clear_processor_choice()
+    assert cd.get_processor_choice() is None
+
+
+@needs_raccoon_cam
+def test_a_processor_that_does_not_fit_is_not_saved(tmp_path, monkeypatch):
+    pytest.importorskip("raccoon_cam.processors.color")
+    monkeypatch.setenv("RACCOON_CAM_STATE_DIR", str(tmp_path / "state"))
+    with pytest.raises(cd.CameraDiscoveryError, match="scale"):
+        cd.save_processor_choice("raccoon_cam.processors.color:ColorBlobs", {"scale": 5})
+    assert cd.get_processor_choice() is None

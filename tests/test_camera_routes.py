@@ -158,3 +158,63 @@ def test_a_project_backend_is_listed_described_and_chosen_end_to_end(server, pro
     body = {"path": "src.mine:Mine", "cfg": {"gain": "2"}, "project_id": "uuid-1"}
     saved = client.put("/api/v1/camera/config", json=body, headers=auth()).json()["backend"]
     assert saved["cfg"] == {"gain": 2.0} and Path(saved["project_dir"]) == project
+
+
+PROCESSOR = '''
+from raccoon_cam import CamProcessor
+
+class Spot(CamProcessor):
+    """A spot."""
+    def process(self, frame):
+        return []
+'''
+
+
+def test_the_list_of_processors_has_the_built_in_and_the_project_processors(server, project, monkeypatch):
+    client, _ = server
+    (project / "src" / "vision.py").write_text(PROCESSOR)
+    monkeypatch.setattr(
+        camera_discovery, "builtin_processors",
+        lambda timeout=0: [{"path": "raccoon_cam.processors.color:ColorBlobs", "name": "ColorBlobs", "description": "C", "options": []}],
+    )
+    body = client.get("/api/v1/camera/processors").json()
+    assert body["count"] == 2
+    built_in, spot = body["processors"]
+    assert built_in["origin"] == {"kind": "builtin", "project": None}
+    assert (spot["path"], spot["project_id"], spot["origin"]["project"]) == ("src.vision:Spot", "uuid-1", "My Robot")
+
+
+def test_a_processor_is_described_in_its_project(server, project, monkeypatch):
+    client, _ = server
+    seen = {}
+
+    def describe(path, project_dir=None, kind="backend", timeout=0):
+        seen.update(path=path, project_dir=project_dir, kind=kind)
+        return {"name": "Spot", "options": []}
+
+    monkeypatch.setattr(camera_discovery, "describe_class", describe)
+    response = client.get("/api/v1/camera/processors/describe", params={"path": "src.vision:Spot", "project_id": "uuid-1"})
+    assert response.status_code == 200 and response.json()["origin"]["project"] == "My Robot"
+    assert seen["kind"] == "processor" and Path(seen["project_dir"]) == project
+
+
+def test_changing_the_processor_needs_the_token(server):
+    client, _ = server
+    body = {"path": "raccoon_cam.processors.color:ColorBlobs", "cfg": {}}
+    assert client.put("/api/v1/camera/processors/config", json=body).status_code in (401, 422)
+    assert client.delete("/api/v1/camera/processors/config").status_code in (401, 422)
+
+
+@needs_raccoon_cam
+def test_the_processor_is_saved_read_and_cleared_through_the_routes(server):
+    pytest.importorskip("raccoon_cam.processors.color")
+    client, _ = server
+    assert client.get("/api/v1/camera/processors/config").json() == {"processor": None}
+    body = {"path": "raccoon_cam.processors.color:ColorBlobs", "cfg": {"colors": ["blue"], "min_area": "300"}}
+    response = client.put("/api/v1/camera/processors/config", json=body, headers=auth())
+    assert response.status_code == 200 and response.json()["processor"]["cfg"] == {"colors": ["blue"], "min_area": 300.0}
+    assert client.get("/api/v1/camera/processors/config").json()["processor"]["path"] == body["path"]
+    # The backend choice is a file of its own.
+    assert client.get("/api/v1/camera/config").json() == {"backend": None}
+    assert client.delete("/api/v1/camera/processors/config", headers=auth()).json() == {"cleared": True}
+    assert client.get("/api/v1/camera/processors/config").json() == {"processor": None}
