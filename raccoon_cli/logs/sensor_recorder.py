@@ -67,7 +67,7 @@ def _default_channels() -> list[tuple[str, str]]:
 
     These are the numeric sensor and state channels of the channel table that the
     stm32-data-reader publishes. Deliberately excluded: command channels (inbound),
-    ``messages/error`` and ``messages/warn`` (``string_t``, not one of the five numeric codecs),
+    ``messages/error`` and ``messages/warn`` (``message_t``, not one of the five numeric codecs),
     and camera and screen frames.
 
     Port counts are fixed by the reader: analog 0..5, digital 0..10, motors 0..3, servos 0..3.
