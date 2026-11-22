@@ -808,7 +808,7 @@ def _sensor_rings_present() -> bool:
     """True when the stm32-data-reader SHM rings exist (so we can record)."""
     import glob
 
-    return bool(glob.glob("/dev/shm/raccoon_ring_*"))
+    return bool(glob.glob("/dev/shm/raccoon-rings/*"))
 
 
 def _start_sensor_recorder(run_dir: Path, env: dict, console: Console):

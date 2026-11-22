@@ -1,56 +1,29 @@
-"""Run-scoped sensor recorder: tail raccoon_ring SHM channels to an MCAP file.
+"""Run-scoped sensor recorder: subscribe to the sensor channels and write an MCAP file.
 
-The stm32-data-reader publishes every sensor value over the ``raccoon_ring``
-shared-memory bus — one ``/dev/shm/raccoon_ring_<channel>`` file per channel,
-NOT LCM-on-the-wire — so neither ``lcm-logger`` nor an LCM subscriber can see
-this traffic. This recorder mmaps the ring files directly, does a seqlock read
-of each new frame, decodes the big-endian payload codec, and appends the frame
-to an MCAP file (zstd chunk compression) so a run's raw sensor stream (which
-analog/gyro/… value at which time) can be downloaded and inspected in Foxglove.
+The stm32-data-reader publishes every sensor value on the shared-memory transport of
+raccoon-transport, so neither ``lcm-logger`` nor an LCM subscriber can see this traffic. This
+recorder subscribes to the channels through ``raccoon_transport`` (the Python binding of the C++
+transport), decodes the big-endian payload codec and appends each frame to an MCAP file (zstd
+chunk compression), so a run's raw sensor stream (which analog/gyro/... value at which time) can
+be downloaded and inspected in Foxglove. A retained channel delivers its latest value when the
+recording starts.
 
-It is spawned per run by ``raccoon run`` (see ``commands/run.py``) for the
-duration of the mission and stopped with SIGTERM, at which point it finalises
-the MCAP index. Only sensor channels are recorded — camera/YOLO/screen frames
-(the only multi-MB messages) are deliberately excluded to keep files small.
-
-Ring format (from ``raccoon-transport/cpp/src/raccoon_ring.c``): a 256-byte
-native-little-endian header followed by ``slot_count`` slots. Payloads use the
-raccoon big-endian codec (``int64 timestamp`` first, then fields) with no LCM
-fingerprint prefix.
+It is spawned per run by ``raccoon run`` (see ``commands/run.py``) for the duration of the
+mission and stopped with SIGTERM, at which point it finalises the MCAP index. Only sensor
+channels are recorded: camera and screen frames (the only multi-MB messages) are excluded to
+keep files small.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import mmap
-import os
+import queue
 import signal
 import struct
 import sys
 import time
-from typing import Iterator, Optional
-
-# --- Ring binary layout (native little-endian header) -----------------------
-
-_HEADER_SIZE = 256
-_MAGIC = 0x52435242  # "RCRB"
-_OFF_MAGIC = 0
-_OFF_SLOT_COUNT = 8
-_OFF_SLOT_SIZE = 12
-_OFF_MAX_PAYLOAD = 16
-_OFF_PRODUCER_SEQ = 32
-_SLOT_SEQ = 0
-_SLOT_LEN = 8
-_SLOT_DATA = 16
-
-_SHM_PREFIX = "/dev/shm/raccoon_ring_"
-
-
-def _shm_path(channel: str) -> str:
-    """Map a channel name to its ring file path (``/`` -> ``_2F``)."""
-    return _SHM_PREFIX + channel.replace("/", "_2F")
-
+from typing import Optional
 
 # --- Payload decoders: (struct format, field names after timestamp) ---------
 # All big-endian; first field is always int64 timestamp (microseconds).
@@ -92,66 +65,55 @@ def _decode(typ: str, payload: bytes) -> Optional[dict]:
 def _default_channels() -> list[tuple[str, str]]:
     """Return the default (channel, type) whitelist, with port expansion.
 
-    This enumerates EVERY ``raccoon/`` channel the reader publishes as numeric
-    sensor/state data (``stm32-data-reader`` ``DataPublisher``/``SystemMonitor``),
-    so a run's ``sensors.mcap`` captures the full outbound bus. Deliberately
-    excluded: command channels (``*_cmd`` — inbound, the reader subscribes to
-    them, not publishes), ``raccoon/errors`` (a ``string_t``, not one of the five
-    numeric codecs), and camera/YOLO/screen frames (the only multi-MB messages).
+    These are the numeric sensor and state channels of the channel table that the
+    stm32-data-reader publishes. Deliberately excluded: command channels (inbound),
+    ``messages/error`` and ``messages/warn`` (``string_t``, not one of the five numeric codecs),
+    and camera and screen frames.
 
-    Port counts are fixed by the reader (never more, never fewer): see
-    ``wombat::DeviceTypes`` — ``MAX_ANALOG_PORTS=6`` (analog 0..5),
-    ``MAX_MOTOR_PORTS=4`` (bemf/motor 0..3), ``MAX_SERVO_PORTS=4`` (servo 0..3) —
-    and DataPublisher's hardcoded ``bit < 11`` digital loop (digital 0..10). So
-    the exact channel set is enumerated, not probed.
+    Port counts are fixed by the reader: analog 0..5, digital 0..10, motors 0..3, servos 0..3.
     """
-    channels: list[tuple[str, str]] = [
-        # 3-axis vectors
-        ("raccoon/gyro/value", "vector3f"),
-        ("raccoon/accel/value", "vector3f"),
-        ("raccoon/linear_accel/value", "vector3f"),
-        ("raccoon/accel_velocity/value", "vector3f"),
-        ("raccoon/mag/value", "vector3f"),
-        # orientation
-        ("raccoon/imu/quaternion", "quaternion"),
-        # float scalars
-        ("raccoon/imu/heading", "scalar_f"),
-        ("raccoon/imu/temp/value", "scalar_f"),
-        ("raccoon/battery/voltage", "scalar_f"),
-        ("raccoon/cpu/temp/value", "scalar_f"),
-        ("raccoon/odometry/pos_x", "scalar_f"),
-        ("raccoon/odometry/pos_y", "scalar_f"),
-        ("raccoon/odometry/heading", "scalar_f"),
-        ("raccoon/odometry/vx", "scalar_f"),
-        ("raccoon/odometry/vy", "scalar_f"),
-        ("raccoon/odometry/wz", "scalar_f"),
-        # heading-fusion debug (string-literal channels, not in Channels.h)
-        ("raccoon/debug/fused_heading", "scalar_f"),
-        ("raccoon/debug/yaw_rate", "scalar_f"),
-        ("raccoon/debug/yaw_bias", "scalar_f"),
-        # int32 state
-        ("raccoon/debug/resting", "scalar_i32"),
-        ("raccoon/system/shutdown_status", "scalar_i32"),
-        ("raccoon/feature/bemf_enabled", "scalar_i32"),
-        # int8 IMU accuracy (BNO08x calibration status 0..3)
-        ("raccoon/gyro/accuracy", "scalar_i8"),
-        ("raccoon/accel/accuracy", "scalar_i8"),
-        ("raccoon/mag/accuracy", "scalar_i8"),
-        ("raccoon/imu/quaternion_accuracy", "scalar_i8"),
+    from raccoon_transport import channels
+
+    imu = channels.hardware.imu.state
+    odometry = channels.hardware.odometry.state
+    result: list[tuple[str, str]] = [
+        (imu.GYRO, "vector3f"),
+        (imu.ACCEL, "vector3f"),
+        (imu.LINEAR_ACCEL, "vector3f"),
+        (imu.ACCEL_VELOCITY, "vector3f"),
+        (imu.MAG, "vector3f"),
+        (imu.QUATERNION, "quaternion"),
+        (imu.HEADING, "scalar_f"),
+        (imu.TEMPERATURE, "scalar_f"),
+        (channels.hardware.battery.state.VOLTAGE, "scalar_f"),
+        (channels.system.state.CPU_TEMPERATURE, "scalar_f"),
+        (odometry.POS_X, "scalar_f"),
+        (odometry.POS_Y, "scalar_f"),
+        (odometry.HEADING, "scalar_f"),
+        (odometry.VX, "scalar_f"),
+        (odometry.VY, "scalar_f"),
+        (odometry.WZ, "scalar_f"),
+        (channels.hardware.latch.state.FLAGS, "scalar_i32"),
+        (channels.hardware.feature.state.BEMF_ACTIVE, "scalar_i32"),
+        (imu.GYRO_ACCURACY, "scalar_i8"),
+        (imu.ACCEL_ACCURACY, "scalar_i8"),
+        (imu.MAG_ACCURACY, "scalar_i8"),
+        (imu.QUATERNION_ACCURACY, "scalar_i8"),
     ]
-    for port in range(6):  # MAX_ANALOG_PORTS
-        channels.append((f"raccoon/analog/{port}/value", "scalar_i32"))
-    for bit in range(11):  # DataPublisher digital loop: bit < 11
-        channels.append((f"raccoon/digital/{bit}/value", "scalar_i32"))
-    for port in range(4):  # MAX_MOTOR_PORTS
-        channels.append((f"raccoon/bemf/{port}/value", "scalar_i32"))
-        channels.append((f"raccoon/motor/{port}/position", "scalar_i32"))
-        channels.append((f"raccoon/motor/{port}/power", "scalar_i32"))
-        channels.append((f"raccoon/motor/{port}/done", "scalar_i32"))
-    for port in range(4):  # MAX_SERVO_PORTS
-        channels.append((f"raccoon/servo/{port}/position", "scalar_f"))
-        channels.append((f"raccoon/servo/{port}/mode", "scalar_i8"))
-    return channels
+    for port in range(6):
+        result.append((channels.hardware.analog.state.value(port), "scalar_i32"))
+    for bit in range(11):
+        result.append((channels.hardware.digital.state.value(bit), "scalar_i32"))
+    for port in range(4):
+        motor = channels.hardware.motor.state
+        result.append((motor.bemf(port), "scalar_i32"))
+        result.append((motor.position(port), "scalar_i32"))
+        result.append((motor.power(port), "scalar_i32"))
+    for port in range(4):
+        servo = channels.hardware.servo.state
+        result.append((servo.position(port), "scalar_f"))
+        result.append((servo.mode(port), "scalar_i8"))
+    return result
 
 
 def _parse_channels_arg(spec: str) -> list[tuple[str, str]]:
@@ -168,75 +130,6 @@ def _parse_channels_arg(spec: str) -> list[tuple[str, str]]:
     return out
 
 
-# --- Ring reader (seqlock) --------------------------------------------------
-
-class _RingReader:
-    """mmap a single ring file and yield new frames via a seqlock read."""
-
-    def __init__(self, path: str):
-        self.path = path
-        self._fd = os.open(path, os.O_RDONLY)
-        size = os.fstat(self._fd).st_size
-        self._mm = mmap.mmap(self._fd, size, prot=mmap.PROT_READ)
-        magic = struct.unpack_from("<I", self._mm, _OFF_MAGIC)[0]
-        if magic != _MAGIC:
-            self.close()
-            raise ValueError(f"bad ring magic {magic:#x} in {path}")
-        self.slot_count = struct.unpack_from("<I", self._mm, _OFF_SLOT_COUNT)[0]
-        self.slot_size = struct.unpack_from("<I", self._mm, _OFF_SLOT_SIZE)[0]
-        self.max_payload = struct.unpack_from("<I", self._mm, _OFF_MAX_PAYLOAD)[0]
-        self.last_seen = 0
-        self.dropped = 0
-
-    def _producer_seq(self) -> int:
-        return struct.unpack_from("<Q", self._mm, _OFF_PRODUCER_SEQ)[0]
-
-    def _read_slot(self, seq: int) -> Optional[bytes]:
-        idx = (seq - 1) % self.slot_count
-        base = _HEADER_SIZE + idx * self.slot_size
-        seq_before = struct.unpack_from("<Q", self._mm, base + _SLOT_SEQ)[0]
-        if seq_before != seq:
-            return None  # slot already overwritten or not yet written
-        length = struct.unpack_from("<I", self._mm, base + _SLOT_LEN)[0]
-        if length > self.max_payload:
-            length = self.max_payload
-        data = bytes(self._mm[base + _SLOT_DATA:base + _SLOT_DATA + length])
-        seq_after = struct.unpack_from("<Q", self._mm, base + _SLOT_SEQ)[0]
-        if seq_after != seq:
-            return None  # torn read — producer overwrote mid-copy
-        return data
-
-    def poll(self) -> Iterator[bytes]:
-        """Yield payloads for every new frame since the previous poll."""
-        producer = self._producer_seq()
-        if producer == self.last_seen:
-            return
-        if producer < self.last_seen:
-            self.last_seen = 0  # producer restarted (new epoch)
-        start = self.last_seen + 1
-        if producer - self.last_seen > self.slot_count - 1:
-            # Fell behind by more than the ring holds — skip to the oldest
-            # still-intact frame and count the gap.
-            new_start = producer - (self.slot_count - 1)
-            self.dropped += new_start - start
-            start = new_start
-        for seq in range(start, producer + 1):
-            payload = self._read_slot(seq)
-            if payload is not None:
-                yield payload
-        self.last_seen = producer
-
-    def close(self) -> None:
-        try:
-            self._mm.close()
-        except Exception:
-            pass
-        try:
-            os.close(self._fd)
-        except Exception:
-            pass
-
-
 # --- Recorder main loop -----------------------------------------------------
 
 _stop = False
@@ -250,10 +143,12 @@ def _handle_signal(signum, frame):  # noqa: ARG001
 def record(
     out_path: str,
     channels: list[tuple[str, str]],
-    poll_hz: float,
+    poll_hz: float,  # kept for the command line; frames arrive on the transport's thread
     max_bytes: int,
     duration: float,
 ) -> int:
+    import os
+
     try:
         from mcap.writer import CompressionType, Writer
     except ImportError:
@@ -261,6 +156,14 @@ def record(
             "[sensor_recorder] mcap package not installed — skipping recording "
             "(install 'mcap' and 'zstandard')\n"
         )
+        return 0
+    try:
+        import raccoon_transport
+    except ImportError:
+        sys.stderr.write("[sensor_recorder] raccoon_transport not installed — skipping recording\n")
+        return 0
+    if not raccoon_transport.NATIVE:
+        sys.stderr.write("[sensor_recorder] raccoon_transport has no native module — skipping recording\n")
         return 0
 
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -279,101 +182,72 @@ def record(
             data=json.dumps(schema).encode("utf-8"),
         )
 
-    chan_type = dict(channels)
-    readers: dict[str, _RingReader] = {}
+    # The transport calls the handlers on a thread of its own; they only queue the frame, and
+    # this thread writes the file.
+    frames: queue.SimpleQueue = queue.SimpleQueue()
     channel_ids: dict[str, int] = {}
     seq_counters: dict[str, int] = {}
-    warned: set[str] = set()
-
-    def open_missing() -> None:
-        for chan, typ in channels:
-            if chan in readers:
-                continue
-            path = _shm_path(chan)
-            try:
-                size = os.path.getsize(path)
-            except OSError:
-                continue  # ring not created yet — retry on next rescan
-            if size < _HEADER_SIZE:
-                # A 0-byte / partial placeholder: the ring isn't initialised
-                # (e.g. an unpopulated port beyond the robot's actual count).
-                # Skip silently and retry later in case it fills in.
-                continue
-            try:
-                readers[chan] = _RingReader(path)
-            except Exception as exc:
-                if chan not in warned:
-                    warned.add(chan)
-                    sys.stderr.write(f"[sensor_recorder] open {chan} failed: {exc}\n")
-                continue
-            channel_ids[chan] = writer.register_channel(
-                topic=chan,
-                message_encoding="json",
-                schema_id=schema_ids[typ],
+    chan_type = dict(channels)
+    transport = raccoon_transport.get_transport()
+    for chan, typ in channels:
+        channel_ids[chan] = writer.register_channel(
+            topic=chan, message_encoding="json", schema_id=schema_ids[typ]
+        )
+        seq_counters[chan] = 0
+        try:
+            transport.subscribe(
+                chan, lambda ch, data: frames.put((time.time_ns(), ch, data))
             )
-            seq_counters[chan] = 0
+        except RuntimeError as exc:
+            sys.stderr.write(f"[sensor_recorder] subscribe {chan} failed: {exc}\n")
 
-    interval = 1.0 / poll_hz if poll_hz > 0 else 0.004
     start_time = time.monotonic()
-    next_rescan = 0.0
     next_size_check = 0.0
     message_count = 0
 
     try:
         while not _stop:
-            loop_start = time.monotonic()
-            if loop_start >= next_rescan:
-                open_missing()
-                next_rescan = loop_start + 2.0
-            if duration > 0 and loop_start - start_time >= duration:
+            now_mono = time.monotonic()
+            if duration > 0 and now_mono - start_time >= duration:
                 break
-
-            now = time.time_ns()
-            for chan, reader in readers.items():
-                typ = chan_type[chan]
-                for payload in reader.poll():
-                    frame = _decode(typ, payload)
-                    if frame is None:
-                        continue
+            try:
+                received_ns, chan, payload = frames.get(timeout=0.2)
+            except queue.Empty:
+                received_ns = None
+            while received_ns is not None:
+                frame = _decode(chan_type[chan], payload)
+                if frame is not None:
                     writer.add_message(
                         channel_id=channel_ids[chan],
-                        log_time=now,
+                        log_time=received_ns,
                         data=json.dumps(frame).encode("utf-8"),
-                        publish_time=now,
+                        publish_time=received_ns,
                         sequence=seq_counters[chan],
                     )
                     seq_counters[chan] += 1
                     message_count += 1
+                try:
+                    received_ns, chan, payload = frames.get_nowait()
+                except queue.Empty:
+                    received_ns = None
 
-            if loop_start >= next_size_check:
-                next_size_check = loop_start + 2.0
+            if now_mono >= next_size_check:
+                next_size_check = now_mono + 2.0
                 try:
                     if max_bytes > 0 and fh.tell() >= max_bytes:
-                        sys.stderr.write(
-                            f"[sensor_recorder] max-bytes {max_bytes} reached, "
-                            "stopping\n"
-                        )
+                        sys.stderr.write(f"[sensor_recorder] max-bytes {max_bytes} reached, stopping\n")
                         break
                 except Exception:
                     pass
-
-            sleep_for = interval - (time.monotonic() - loop_start)
-            if sleep_for > 0:
-                time.sleep(sleep_for)
     finally:
-        for reader in readers.values():
-            reader.close()
+        raccoon_transport.shutdown_transport()
         try:
             writer.finish()
         finally:
             fh.close()
 
-    dropped = sum(r.dropped for r in readers.values())
     sys.stderr.write(
-        f"[sensor_recorder] wrote {message_count} messages from "
-        f"{len(readers)} channels to {out_path}"
-        + (f" ({dropped} frames dropped)" if dropped else "")
-        + "\n"
+        f"[sensor_recorder] wrote {message_count} messages from {len(channels)} channels to {out_path}\n"
     )
     return 0
 
@@ -389,7 +263,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--channels", default=None,
         help="explicit 'chan:type,chan:type' list (overrides --preset)",
     )
-    parser.add_argument("--poll-hz", type=float, default=250.0)
+    parser.add_argument("--poll-hz", type=float, default=250.0, help="ignored, kept for old command lines")
     parser.add_argument(
         "--max-bytes", type=int, default=200 * 1024 * 1024,
         help="stop after the file reaches this size (0 = unlimited)",
