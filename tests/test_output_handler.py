@@ -44,10 +44,14 @@ class FakeWebSocket:
         self.closed = True
 
 
-def _make_handler(messages, recv_timeout=0.01):
+def _make_handler(messages, recv_timeout=0.01, cancel_grace=5.0):
     """Create an OutputHandler with a fake WebSocket."""
     ws = FakeWebSocket(messages)
-    handler = OutputHandler("ws://fake:1234/ws/output/test-id", recv_timeout=recv_timeout)
+    handler = OutputHandler(
+        "ws://fake:1234/ws/output/test-id",
+        recv_timeout=recv_timeout,
+        cancel_grace=cancel_grace,
+    )
 
     with patch("raccoon_cli.client.output_handler.create_connection", return_value=ws):
         yield handler, ws
@@ -213,12 +217,72 @@ def test_cancel_flag_exits_loop(console):
     # Timeout gives the loop a chance to check _cancelled
     messages = [WebSocketTimeoutException()] * 10
 
-    gen = _make_handler(messages)
+    gen = _make_handler(messages, cancel_grace=0)
     handler, ws = next(gen)
     handler._cancelled = True
     result = handler.stream_to_console(console)
 
     assert result["status"] == "cancelled"
+
+
+def test_cancel_keeps_reading_the_programs_last_output(console):
+    """After a cancel the stderr block the program writes while it shuts down
+    (BEGIN bar, text, END bar) is still received, up to the final status."""
+    messages = [
+        "========== BEGIN PROGRAM STDERR ==========",
+        "KeyboardInterrupt",
+        "=========== END PROGRAM STDERR ===========",
+        _status(exit_code=None, status="cancelled"),
+    ]
+
+    lines: list[str] = []
+    gen = _make_handler(messages)
+    handler, ws = next(gen)
+    handler._cancelled = True
+    result = handler.stream_to_console(console, on_line=lines.append, echo=False)
+
+    assert lines == messages[:3]
+    assert result["status"] == "cancelled"
+    assert result["exit_code"] == -1
+
+
+def test_cancel_grace_ends_the_wait_when_the_pi_stays_silent(console):
+    """Without a final status the cancel returns once the grace period is over."""
+    import time as _time
+
+    from websocket import WebSocketTimeoutException
+
+    class SilentWebSocket(FakeWebSocket):
+        def recv(self):
+            _time.sleep(0.01)
+            raise WebSocketTimeoutException()
+
+    ws = SilentWebSocket()
+    handler = OutputHandler("ws://fake:1234", recv_timeout=0.01, cancel_grace=0.1)
+    handler._cancelled = True
+    with patch("raccoon_cli.client.output_handler.create_connection", return_value=ws):
+        started = _time.monotonic()
+        result = handler.stream_to_console(console)
+        elapsed = _time.monotonic() - started
+
+    assert result == {"status": "cancelled", "exit_code": -1}
+    assert 0.1 <= elapsed < 2.0
+
+
+def test_cancel_with_closed_connection_is_not_an_error(console, capsys):
+    """The Pi may close the stream after a cancel; that is not 'connection lost'."""
+    from websocket import WebSocketConnectionClosedException
+
+    messages = ["last line", WebSocketConnectionClosedException()]
+    lines: list[str] = []
+    gen = _make_handler(messages)
+    handler, ws = next(gen)
+    handler._cancelled = True
+    result = handler.stream_to_console(console, on_line=lines.append, echo=False)
+
+    assert lines == ["last line"]
+    assert result["status"] == "cancelled"
+    assert "Connection to Pi lost" not in capsys.readouterr().out
 
 
 def test_cancel_sends_json_to_ws():

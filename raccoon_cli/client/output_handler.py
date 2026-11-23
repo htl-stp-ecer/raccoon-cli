@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from typing import Callable, Optional
 
 from websocket import (
@@ -26,18 +27,29 @@ class OutputHandler:
     - Cancellation handling
     """
 
-    def __init__(self, websocket_url: str, recv_timeout: float = 0.5):
+    def __init__(
+        self,
+        websocket_url: str,
+        recv_timeout: float = 0.5,
+        cancel_grace: float = 5.0,
+    ):
         """
         Initialize the output handler.
 
         Args:
             websocket_url: WebSocket URL for the command output stream
             recv_timeout: Timeout in seconds for each recv() call
+            cancel_grace: After a cancel request, how long (seconds) to keep
+                reading what the Pi still sends. The program writes its stderr
+                (a traceback, a message from its cleanup) while it shuts down;
+                without the grace period that tail would be dropped.
         """
         self.url = websocket_url
         self.ws: Optional[WebSocket] = None
         self._cancelled = False
         self._recv_timeout = recv_timeout
+        self._cancel_grace = cancel_grace
+        self._cancel_deadline: Optional[float] = None
 
     def stream_to_console(
         self,
@@ -65,9 +77,14 @@ class OutputHandler:
             self.ws.settimeout(self._recv_timeout)
 
             while True:
-                # Check if cancellation was requested
+                # Cancellation was requested: keep draining until the Pi's final
+                # status arrives (the program's last output comes before it), the
+                # connection closes or the grace period is over.
                 if self._cancelled:
-                    return {"status": "cancelled", "exit_code": -1}
+                    if self._cancel_deadline is None:
+                        self._cancel_deadline = time.monotonic() + self._cancel_grace
+                    if time.monotonic() >= self._cancel_deadline:
+                        return {"status": "cancelled", "exit_code": -1}
 
                 try:
                     message = self.ws.recv()
@@ -75,6 +92,9 @@ class OutputHandler:
                     # Normal timeout — loop back to check cancel flag
                     continue
                 except (WebSocketConnectionClosedException, OSError, EOFError):
+                    if self._cancelled:
+                        # The Pi closed the stream after the cancel: nothing lost.
+                        return {"status": "cancelled", "exit_code": -1}
                     # Connection lost (robot died, network down, etc.)
                     console.print("[red]Connection to Pi lost.[/red]")
                     return {"status": "failed", "exit_code": -1, "error": "connection lost"}
@@ -93,6 +113,8 @@ class OutputHandler:
                             console.print(f"[red]Error: {data.get('error', '')}[/red]")
                             return {"status": "failed", "error": data.get("error", "")}
                         if kind == "status":
+                            if self._cancelled and data.get("exit_code") is None:
+                                data["exit_code"] = -1
                             return data
                         # Unknown control kinds (e.g. "cancelling") are ignored.
                         continue
