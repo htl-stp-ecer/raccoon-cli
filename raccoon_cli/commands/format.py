@@ -26,9 +26,8 @@ def format_command(ctx: click.Context, check: bool) -> None:
     """Format the Python files in src/ with Black.
 
     Formatting is on when the project has a raccoon.formatting.yml. Without
-    that file nothing is formatted and a warning is shown. Set "enabled: false"
-    in it to turn formatting off, or "auto_format: true" to format
-    automatically before "raccoon run".
+    that file nothing is formatted and a warning is shown. Set "auto_format: true"
+    in it to format automatically before "raccoon run".
     """
     console: Console = ctx.obj["console"]
 
@@ -37,8 +36,7 @@ def format_command(ctx: click.Context, check: bool) -> None:
         if not has_formatting_config(project_root):
             console.print(
                 f"[yellow]⚠ No {FORMATTING_CONFIG_FILE} in this project, so nothing was formatted.[/yellow]\n"
-                f"  [dim]Create {FORMATTING_CONFIG_FILE} (for example with the single line "
-                f"'enabled: true') to turn formatting on.[/dim]"
+                f"  [dim]Create {FORMATTING_CONFIG_FILE} (an empty file is enough) to turn formatting on.[/dim]"
             )
             return
         config = load_formatting_config(project_root)
@@ -48,10 +46,6 @@ def format_command(ctx: click.Context, check: bool) -> None:
     except FormattingConfigError as exc:
         console.print(f"[red]✗ {exc}[/red]")
         raise SystemExit(1) from exc
-
-    if not config.enabled:
-        console.print(f"[yellow]Formatting is disabled for this project ({FORMATTING_CONFIG_FILE}: enabled: false).[/yellow]")
-        return
 
     result = format_project(project_root, check=check, config=config)
 

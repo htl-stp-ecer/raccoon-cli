@@ -203,11 +203,11 @@ class TestConfig:
 
     def test_values_are_read(self, tmp_path):
         (tmp_path / "raccoon.formatting.yml").write_text(
-            yaml.dump({"enabled": False, "line_length": 100, "exclude": ["src/legacy/**"]}),
+            yaml.dump({"auto_format": True, "line_length": 100, "exclude": ["src/legacy/**"]}),
             encoding="utf-8",
         )
         config = load_formatting_config(tmp_path)
-        assert config.enabled is False
+        assert config.auto_format is True
         assert config.line_length == 100
         assert config.exclude == ("src/legacy/**",)
 
@@ -218,7 +218,7 @@ class TestConfig:
     @pytest.mark.parametrize(
         "raw",
         [
-            {"enabled": "yes"},
+            {"auto_format": "yes"},
             {"line_length": "88"},
             {"line_length": True},
             {"line_length": 5},
@@ -226,15 +226,19 @@ class TestConfig:
             {"exclude": [1]},
             {"explode_calls": "seq"},
             {"explode_calls": [1]},
-            ["enabled"],
+            ["auto_format"],
         ],
     )
     def test_bad_values_are_rejected(self, raw):
         with pytest.raises(FormattingConfigError):
             parse_formatting_config(raw)
 
+    def test_enabled_is_not_an_option(self):
+        with pytest.raises(FormattingConfigError, match="enabled"):
+            parse_formatting_config({"enabled": False})
+
     def test_invalid_yaml_is_rejected(self, tmp_path):
-        (tmp_path / "raccoon.formatting.yml").write_text("enabled: [", encoding="utf-8")
+        (tmp_path / "raccoon.formatting.yml").write_text("auto_format: [", encoding="utf-8")
         with pytest.raises(FormattingConfigError):
             load_formatting_config(tmp_path)
 
@@ -246,7 +250,7 @@ def _project(tmp_path: Path) -> Path:
         yaml.dump({"name": "T", "uuid": "u", "format_version": 2, "missions": []}),
         encoding="utf-8",
     )
-    (tmp_path / "raccoon.formatting.yml").write_text("enabled: true\n", encoding="utf-8")
+    (tmp_path / "raccoon.formatting.yml").write_text("", encoding="utf-8")
     (tmp_path / "src" / "missions" / "m010_a_mission.py").write_text(MISSION, encoding="utf-8")
     (tmp_path / "src" / "hardware" / "defs.py").write_text("x = 'generated'\n", encoding="utf-8")
     return tmp_path
@@ -269,14 +273,6 @@ class TestFormatProject:
         project = _project(tmp_path)
         result = format_project(project, check=True)
         assert len(result.changed) == 1
-        assert (project / "src" / "missions" / "m010_a_mission.py").read_text() == MISSION
-
-    def test_disabled_does_nothing(self, tmp_path):
-        project = _project(tmp_path)
-        (project / "raccoon.formatting.yml").write_text("enabled: false\n", encoding="utf-8")
-        result = format_project(project)
-        assert result.disabled
-        assert result.changed == []
         assert (project / "src" / "missions" / "m010_a_mission.py").read_text() == MISSION
 
     def test_custom_exclude_replaces_default(self, tmp_path):
@@ -331,9 +327,9 @@ class TestMissingConfigFile:
         assert result.exit_code == 0
         assert "nothing was formatted" in result.output
 
-    def test_file_with_only_enabled_uses_defaults_for_the_rest(self, tmp_path):
+    def test_empty_file_is_enough_and_uses_defaults(self, tmp_path):
         project = self._without_config(tmp_path)
-        (project / "raccoon.formatting.yml").write_text("enabled: true\n", encoding="utf-8")
+        (project / "raccoon.formatting.yml").write_text("", encoding="utf-8")
         result = format_project(project)
         assert not result.config_missing
         assert len(result.changed) == 1
@@ -362,14 +358,6 @@ class TestFormatCommand:
         project = _project(tmp_path)
         format_project(project)
         assert self._run(project, "--check", monkeypatch=monkeypatch).exit_code == 0
-
-    def test_disabled_project_prints_notice_and_exits_zero(self, tmp_path, monkeypatch):
-        project = _project(tmp_path)
-        (project / "raccoon.formatting.yml").write_text("enabled: false\n", encoding="utf-8")
-        result = self._run(project, monkeypatch=monkeypatch)
-        assert result.exit_code == 0
-        assert "disabled" in result.output
-        assert (project / "src" / "missions" / "m010_a_mission.py").read_text() == MISSION
 
     def test_bad_config_exits_one(self, tmp_path, monkeypatch):
         project = _project(tmp_path)
@@ -411,7 +399,7 @@ class TestAutoFormat:
         self._auto(project, monkeypatch)
         assert self._mission(project) == MISSION
 
-    def test_run_formats_when_enabled(self, tmp_path, monkeypatch):
+    def test_run_formats_when_auto_format_is_true(self, tmp_path, monkeypatch):
         project = _project(tmp_path)
         (project / "raccoon.formatting.yml").write_text("auto_format: true\n", encoding="utf-8")
         ctx = self._auto(project, monkeypatch)
@@ -422,12 +410,6 @@ class TestAutoFormat:
         project = _project(tmp_path)
         (project / "raccoon.formatting.yml").write_text("auto_format: true\n", encoding="utf-8")
         self._auto(project, monkeypatch, subcommand="sync")
-        assert self._mission(project) == MISSION
-
-    def test_enabled_false_wins_over_auto_format(self, tmp_path, monkeypatch):
-        project = _project(tmp_path)
-        (project / "raccoon.formatting.yml").write_text("enabled: false\nauto_format: true\n", encoding="utf-8")
-        self._auto(project, monkeypatch)
         assert self._mission(project) == MISSION
 
     def test_broken_file_is_skipped_with_warning_and_run_goes_on(self, tmp_path, monkeypatch):

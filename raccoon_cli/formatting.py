@@ -45,7 +45,6 @@ class FormattingConfigError(ValueError):
 
 @dataclass(frozen=True)
 class FormattingConfig:
-    enabled: bool = True
     auto_format: bool = False
     line_length: int = 88
     skip_string_normalization: bool = False
@@ -57,7 +56,6 @@ class FormattingConfig:
 
 
 _BOOL_KEYS = (
-    "enabled",
     "auto_format",
     "skip_string_normalization",
     "skip_magic_trailing_comma",
@@ -282,10 +280,6 @@ class FormatResult:
     errors: List[Tuple[Path, str]] = field(default_factory=list)
     config_missing: bool = False
 
-    @property
-    def disabled(self) -> bool:
-        return not self.config.enabled
-
 
 def _is_excluded(relative: str, patterns: Tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
@@ -320,11 +314,9 @@ def format_project(
     """
     if config is None:
         if not has_formatting_config(project_root):
-            return FormatResult(config=FormattingConfig(enabled=False), config_missing=True)
+            return FormatResult(config=FormattingConfig(), config_missing=True)
         config = load_formatting_config(project_root)
     result = FormatResult(config=config)
-    if not config.enabled:
-        return result
 
     for path in find_source_files(project_root, config):
         relative = path.relative_to(project_root)

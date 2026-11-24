@@ -140,7 +140,7 @@ def _run_auto_format(ctx: click.Context) -> None:
         console.print(f"[yellow]⚠ format: {exc} — skipping auto-format[/yellow]")
         return
 
-    if not (config.enabled and config.auto_format):
+    if not config.auto_format:
         return
 
     result = format_project(project_root, config=config)
