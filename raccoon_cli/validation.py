@@ -6,6 +6,7 @@ import ast
 import contextlib
 import difflib
 import importlib.util
+import io
 import logging
 import py_compile
 import json
@@ -14,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tokenize
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -603,6 +605,253 @@ def _check_defs_attribute_access(
 
 
 # ---------------------------------------------------------------------------
+# Mission length check
+#
+# A mission's ``sequence()`` returns ``seq([...])``.  The number of steps in that
+# root list is a rough measure of how much a single mission does.  Long missions
+# are hard to read and to debug, so validate warns once the root list exceeds
+# ``validation.max_mission_steps`` (raccoon.project.yml).  Setting the limit unreasonably
+# high would silence that warning, so a limit above
+# ``MAX_MISSION_STEPS_WARN_FACTOR`` times the default always warns as well.
+# ---------------------------------------------------------------------------
+
+DEFAULT_MAX_MISSION_STEPS = 25
+MAX_MISSION_STEPS_WARN_FACTOR = 3
+
+_SEQ_CALL_NAMES = frozenset({"seq", "Sequential"})
+
+
+def _call_name(func: ast.AST) -> Optional[str]:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _root_steps(source: str) -> Optional[List[ast.expr]]:
+    """Steps in the list literal of ``return seq([...])`` in ``sequence()``.
+
+    Returns None when the file does not parse or ``sequence()`` does not return
+    a ``seq([...])`` call with a list literal.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    for fn in ast.walk(tree):
+        if not (isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name == "sequence"):
+            continue
+        for node in ast.walk(fn):
+            if (
+                isinstance(node, ast.Return)
+                and isinstance(node.value, ast.Call)
+                and _call_name(node.value.func) in _SEQ_CALL_NAMES
+                and node.value.args
+                and isinstance(node.value.args[0], ast.List)
+            ):
+                return list(node.value.args[0].elts)
+    return None
+
+
+def _validation_options(result: ValidationResult, config: dict) -> dict:
+    """The ``validation:`` section of the project config (empty when absent)."""
+    section = config.get("validation")
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        result.add(ValidationIssue(
+            severity=Severity.WARNING,
+            code="invalid_validation_section",
+            message=f"validation must be a mapping of options, got {section!r}",
+            hint="Using the default validation options",
+        ))
+        return {}
+    return section
+
+
+def _resolve_max_mission_steps(result: ValidationResult, options: dict) -> int:
+    """Read ``validation.max_mission_steps``, warning about unusable values."""
+    raw = options.get("max_mission_steps", DEFAULT_MAX_MISSION_STEPS)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        result.add(ValidationIssue(
+            severity=Severity.WARNING,
+            code="invalid_max_mission_steps",
+            message=f"validation.max_mission_steps must be a positive integer, got {raw!r}",
+            hint=f"Using the default of {DEFAULT_MAX_MISSION_STEPS}",
+        ))
+        return DEFAULT_MAX_MISSION_STEPS
+
+    ceiling = DEFAULT_MAX_MISSION_STEPS * MAX_MISSION_STEPS_WARN_FACTOR
+    if raw > ceiling:
+        result.add(ValidationIssue(
+            severity=Severity.WARNING,
+            code="max_mission_steps_too_high",
+            message=(
+                f"validation.max_mission_steps is set to {raw}, more than "
+                f"{MAX_MISSION_STEPS_WARN_FACTOR}x the default ({DEFAULT_MAX_MISSION_STEPS})"
+            ),
+            hint="Missions this long are hard to read and debug. Split them into smaller missions or sub-sequences",
+        ))
+    return raw
+
+
+def _check_mission_length(
+    result: ValidationResult,
+    config: dict,
+    project_root: Path,
+) -> None:
+    """WARNING for every mission whose root ``seq([...])`` exceeds ``validation.max_mission_steps``."""
+    options = _validation_options(result, config)
+    limit = _resolve_max_mission_steps(result, options)
+    check_comments = _resolve_check_mission_comments(result, options)
+
+    missions_dir = project_root / "src" / "missions"
+    if not missions_dir.is_dir():
+        return
+
+    for py_file in sorted(missions_dir.glob("*.py")):
+        if py_file.name == "__init__.py":
+            continue
+        try:
+            source = py_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        steps = _root_steps(source)
+        if steps is None:
+            continue
+        rel = py_file.relative_to(project_root)
+        if len(steps) > limit:
+            result.add(ValidationIssue(
+                severity=Severity.WARNING,
+                code="mission_too_long",
+                message=(
+                    f"{rel} has {len(steps)} steps in its "
+                    f"sequence (validation.max_mission_steps: {limit})"
+                ),
+                hint="Split the mission into several missions or group steps into sub-sequences",
+            ))
+        _check_repeated_steps(result, rel, steps)
+        if check_comments:
+            _check_uncommented_steps(result, rel, steps, source)
+
+
+def _resolve_check_mission_comments(result: ValidationResult, options: dict) -> bool:
+    """Read ``validation.check_mission_comments`` (default: on)."""
+    raw = options.get("check_mission_comments", True)
+    if not isinstance(raw, bool):
+        result.add(ValidationIssue(
+            severity=Severity.WARNING,
+            code="invalid_check_mission_comments",
+            message=f"validation.check_mission_comments must be true or false, got {raw!r}",
+            hint="Using the default (true)",
+        ))
+        return True
+    return raw
+
+
+# A step (or block of steps) written out this many times in a row should be a loop.
+LOOP_HINT_MIN_REPEATS = 3
+
+
+def _repeated_runs(steps: List[ast.expr]) -> List[tuple[int, int, int]]:
+    """Back-to-back repetitions in ``steps`` as ``(start, block_len, repeats)``.
+
+    A block of ``block_len`` steps that appears ``repeats >= LOOP_HINT_MIN_REPEATS``
+    times directly after each other. The shortest repeating block wins.
+    """
+    dumps = [ast.dump(step) for step in steps]
+    runs: List[tuple[int, int, int]] = []
+    i = 0
+    while i < len(dumps):
+        for block_len in range(1, (len(dumps) - i) // LOOP_HINT_MIN_REPEATS + 1):
+            block = dumps[i:i + block_len]
+            repeats = 1
+            while dumps[i + repeats * block_len:i + (repeats + 1) * block_len] == block:
+                repeats += 1
+            if repeats >= LOOP_HINT_MIN_REPEATS:
+                runs.append((i, block_len, repeats))
+                i += block_len * repeats - 1
+                break
+        i += 1
+    return runs
+
+
+# More than this many steps in a row without a comment trigger a warning.
+MAX_UNCOMMENTED_STEPS = 6
+
+
+def _comment_lines(source: str) -> tuple[Set[int], Set[int]]:
+    """Line numbers holding a comment, and those holding only a comment."""
+    all_lines: Set[int] = set()
+    only_lines: Set[int] = set()
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type == tokenize.COMMENT:
+                all_lines.add(tok.start[0])
+                if not tok.line[:tok.start[1]].strip():
+                    only_lines.add(tok.start[0])
+    except (tokenize.TokenError, IndentationError):
+        pass
+    return all_lines, only_lines
+
+
+def _check_uncommented_steps(
+    result: ValidationResult,
+    rel_path: Path,
+    steps: List[ast.expr],
+    source: str,
+) -> None:
+    """WARNING for each stretch of more than MAX_UNCOMMENTED_STEPS steps without a comment.
+
+    A step counts as commented when a comment sits on the line directly above it
+    or on its first line. A comment covers only that one step.
+    """
+    any_comment, comment_only = _comment_lines(source)
+    run: List[ast.expr] = []
+
+    def flush() -> None:
+        if len(run) > MAX_UNCOMMENTED_STEPS:
+            result.add(ValidationIssue(
+                severity=Severity.WARNING,
+                code="mission_uncommented",
+                message=(
+                    f"{rel_path}:{run[0].lineno}-{run[-1].end_lineno} has {len(run)} steps "
+                    f"in a row without a comment"
+                ),
+                hint="Add a short comment above the steps that explains what this part of the mission does",
+            ))
+
+    for step in steps:
+        if (step.lineno - 1) in comment_only or step.lineno in any_comment:
+            flush()
+            run = []
+        else:
+            run.append(step)
+    flush()
+
+
+def _check_repeated_steps(
+    result: ValidationResult,
+    rel_path: Path,
+    steps: List[ast.expr],
+) -> None:
+    """WARNING when the same step(s) are written out repeatedly in a row; use loop_for."""
+    for start, block_len, repeats in _repeated_runs(steps):
+        first = steps[start].lineno
+        what = "step" if block_len == 1 else f"block of {block_len} steps"
+        example = "loop_for(<step>, iterations=N)" if block_len == 1 else "loop_for(seq([...]), iterations=N)"
+        result.add(ValidationIssue(
+            severity=Severity.WARNING,
+            code="repeated_steps",
+            message=(
+                f"{rel_path}:{first} repeats the same {what} {repeats} times in a row"
+            ),
+            hint=f"Use a loop instead: {example}".replace("N", str(repeats)),
+        ))
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -624,6 +873,13 @@ def validate_project(
     - Code generation, run in memory — reports everything ``raccoon codegen``
       would reject (optional). Requires the ``raccoon`` package to be
       importable; if it is not, that is itself an error.
+    - Uncommented steps — warns when more than 6 steps in a row have no comment
+      (disable with ``validation.check_mission_comments: false``)
+    - Repeated steps — warns when the same step or block of steps appears 3 or
+      more times in a row in a mission's root ``seq([...])`` (use ``loop_for``)
+    - Mission length — warns when a mission's root ``seq([...])`` has more
+      steps than ``validation.max_mission_steps`` (default 25), and when that limit is
+      set above 3x the default
     - Defs attribute access — flags ``Defs.<attr>`` references that would
       raise ``AttributeError`` at runtime, checked against the names the
       generators produce from the current config (optional)
@@ -655,6 +911,8 @@ def validate_project(
     _check_config_vs_files(result, config_classes, missions_dir)
     _check_files_vs_config(result, config_classes, missions_dir)
     _check_main_imports(result, config_classes, missions_dir, main_py)
+
+    _check_mission_length(result, config, project_root)
 
     if python_compile:
         _check_python_compile(result, project_root)

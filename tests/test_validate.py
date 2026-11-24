@@ -967,3 +967,226 @@ class TestCreateMissionDoesNotTouchMainPy:
         """Mission-number logic lives in the shared layer, not buried in CLI."""
         from raccoon_cli.project_creation import get_next_mission_number
         assert callable(get_next_mission_number)
+
+
+# ---------------------------------------------------------------------------
+# Mission length
+# ---------------------------------------------------------------------------
+
+def _write_long_mission(project: Path, filename: str, step_count: int) -> None:
+    steps = "\n".join(f"            step_{i}()," for i in range(step_count))
+    (project / "src" / "missions" / filename).write_text(
+        "class M010LongMission(Mission):\n"
+        "    def sequence(self) -> Sequential:\n"
+        "        return seq([\n"
+        f"{steps}\n"
+        "        ])\n",
+        encoding="utf-8",
+    )
+
+
+def _set_config(project: Path, **validation_options) -> None:
+    path = project / "raccoon.project.yml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config["validation"] = validation_options
+    path.write_text(yaml.dump(config), encoding="utf-8")
+
+
+class TestMissionLength:
+    def _project(self, tmp_path: Path, steps: int, **config) -> Path:
+        project = _make_project(
+            tmp_path,
+            ["M010LongMission"],
+            ["m010_long_mission.py"],
+            ["from .missions.m010_long_mission import M010LongMission"],
+        )
+        _write_long_mission(project, "m010_long_mission.py", steps)
+        if config:
+            _set_config(project, **config)
+        return project
+
+    def test_default_limit_is_not_exceeded_at_limit(self, tmp_path):
+        project = self._project(tmp_path, validation.DEFAULT_MAX_MISSION_STEPS)
+        assert "mission_too_long" not in _codes(validate_project(project, python_compile=False))
+
+    def test_default_limit_exceeded_warns(self, tmp_path):
+        project = self._project(tmp_path, validation.DEFAULT_MAX_MISSION_STEPS + 1)
+        result = validate_project(project, python_compile=False)
+        assert "mission_too_long" in _codes(result)
+        assert not result.has_errors
+
+    def test_custom_limit_is_respected(self, tmp_path):
+        project = self._project(tmp_path, 6, max_mission_steps=5)
+        assert "mission_too_long" in _codes(validate_project(project, python_compile=False))
+
+    def test_raised_limit_silences_mission_warning(self, tmp_path):
+        project = self._project(tmp_path, 30, max_mission_steps=40)
+        codes = _codes(validate_project(project, python_compile=False))
+        assert "mission_too_long" not in codes
+        assert "max_mission_steps_too_high" not in codes
+
+    def test_limit_above_three_times_default_warns(self, tmp_path):
+        too_high = validation.DEFAULT_MAX_MISSION_STEPS * validation.MAX_MISSION_STEPS_WARN_FACTOR + 1
+        project = self._project(tmp_path, 3, max_mission_steps=too_high)
+        assert "max_mission_steps_too_high" in _codes(validate_project(project, python_compile=False))
+
+    def test_limit_at_three_times_default_does_not_warn(self, tmp_path):
+        limit = validation.DEFAULT_MAX_MISSION_STEPS * validation.MAX_MISSION_STEPS_WARN_FACTOR
+        project = self._project(tmp_path, 3, max_mission_steps=limit)
+        assert "max_mission_steps_too_high" not in _codes(validate_project(project, python_compile=False))
+
+    def test_invalid_limit_warns_and_uses_default(self, tmp_path):
+        project = self._project(tmp_path, validation.DEFAULT_MAX_MISSION_STEPS + 1, max_mission_steps="lots")
+        codes = _codes(validate_project(project, python_compile=False))
+        assert "invalid_max_mission_steps" in codes
+        assert "mission_too_long" in codes
+
+    def test_mission_without_seq_list_is_ignored(self, tmp_path):
+        project = self._project(tmp_path, 1)
+        (project / "src" / "missions" / "m010_long_mission.py").write_text(
+            "class M010LongMission(Mission):\n"
+            "    def sequence(self):\n"
+            "        return build_everything()\n",
+            encoding="utf-8",
+        )
+        assert "mission_too_long" not in _codes(validate_project(project, python_compile=False))
+
+
+class TestRepeatedSteps:
+    def _project(self, tmp_path: Path, steps: list[str]) -> Path:
+        project = _make_project(
+            tmp_path,
+            ["M010LongMission"],
+            ["m010_long_mission.py"],
+            ["from .missions.m010_long_mission import M010LongMission"],
+        )
+        body = "\n".join(f"            {s}," for s in steps)
+        (project / "src" / "missions" / "m010_long_mission.py").write_text(
+            "class M010LongMission(Mission):\n"
+            "    def sequence(self) -> Sequential:\n"
+            "        return seq([\n"
+            f"{body}\n"
+            "        ])\n",
+            encoding="utf-8",
+        )
+        return project
+
+    def _issues(self, project: Path):
+        result = validate_project(project, python_compile=False)
+        return [i for i in result.issues if i.code == "repeated_steps"]
+
+    def test_three_identical_steps_in_a_row_warn_with_loop_for_hint(self, tmp_path):
+        project = self._project(tmp_path, ["a()", "drive_forward(10)", "drive_forward(10)", "drive_forward(10)", "b()"])
+        issues = self._issues(project)
+        assert len(issues) == 1
+        assert "3 times" in issues[0].message
+        assert "loop_for(<step>, iterations=3)" in issues[0].hint
+
+    def test_two_identical_steps_do_not_warn(self, tmp_path):
+        project = self._project(tmp_path, ["drive_forward(10)", "drive_forward(10)", "b()"])
+        assert self._issues(project) == []
+
+    def test_identical_steps_that_are_not_adjacent_do_not_warn(self, tmp_path):
+        project = self._project(tmp_path, ["a()", "b()", "a()", "b()", "a()"][:2] + ["a()", "c()", "a()"])
+        assert self._issues(project) == []
+
+    def test_repeated_block_of_two_steps_warns(self, tmp_path):
+        project = self._project(tmp_path, ["a()", "b()"] * 3 + ["c()"])
+        issues = self._issues(project)
+        assert len(issues) == 1
+        assert "block of 2 steps" in issues[0].message
+        assert "loop_for(seq([...]), iterations=3)" in issues[0].hint
+
+    def test_different_arguments_are_not_a_repetition(self, tmp_path):
+        project = self._project(tmp_path, ["drive_forward(10)", "drive_forward(20)", "drive_forward(30)"])
+        assert self._issues(project) == []
+
+
+class TestUncommentedSteps:
+    def _project(self, tmp_path: Path, body: str, **config) -> Path:
+        project = _make_project(
+            tmp_path,
+            ["M010LongMission"],
+            ["m010_long_mission.py"],
+            ["from .missions.m010_long_mission import M010LongMission"],
+        )
+        (project / "src" / "missions" / "m010_long_mission.py").write_text(
+            "class M010LongMission(Mission):\n"
+            "    def sequence(self) -> Sequential:\n"
+            "        return seq([\n"
+            f"{body}"
+            "        ])\n",
+            encoding="utf-8",
+        )
+        if config:
+            _set_config(project, **config)
+        return project
+
+    @staticmethod
+    def _steps(count: int, start: int = 0) -> str:
+        return "".join(f"            step_{i}(),\n" for i in range(start, start + count))
+
+    def _codes(self, project: Path) -> list[str]:
+        return [i.code for i in validate_project(project, python_compile=False).issues]
+
+    def test_seven_uncommented_steps_warn(self, tmp_path):
+        assert "mission_uncommented" in self._codes(self._project(tmp_path, self._steps(7)))
+
+    def test_six_uncommented_steps_do_not_warn(self, tmp_path):
+        assert "mission_uncommented" not in self._codes(self._project(tmp_path, self._steps(6)))
+
+    def test_comment_above_breaks_the_run(self, tmp_path):
+        body = self._steps(5) + "            # now the second part\n" + self._steps(6, 5)
+        assert "mission_uncommented" not in self._codes(self._project(tmp_path, body))
+
+    def test_comment_covers_only_one_step(self, tmp_path):
+        body = "            # first part\n" + self._steps(8)
+        assert "mission_uncommented" in self._codes(self._project(tmp_path, body))
+
+    def test_trailing_comment_on_step_line_counts(self, tmp_path):
+        body = self._steps(5) + "            step_x(),  # explained\n" + self._steps(6, 5)
+        assert "mission_uncommented" not in self._codes(self._project(tmp_path, body))
+
+    def test_hash_inside_a_string_is_not_a_comment(self, tmp_path):
+        body = self._steps(3) + '            say("# not a comment"),\n' + self._steps(4, 3)
+        assert "mission_uncommented" in self._codes(self._project(tmp_path, body))
+
+    def test_message_names_file_lines_and_count(self, tmp_path):
+        project = self._project(tmp_path, self._steps(8))
+        issue = next(i for i in validate_project(project, python_compile=False).issues if i.code == "mission_uncommented")
+        assert "m010_long_mission.py:4-11" in issue.message
+        assert "8 steps" in issue.message
+
+    def test_option_false_disables_the_check(self, tmp_path):
+        project = self._project(tmp_path, self._steps(10), check_mission_comments=False)
+        assert "mission_uncommented" not in self._codes(project)
+
+    def test_invalid_option_warns_and_keeps_check_on(self, tmp_path):
+        project = self._project(tmp_path, self._steps(10), check_mission_comments="nope")
+        codes = self._codes(project)
+        assert "invalid_check_mission_comments" in codes
+        assert "mission_uncommented" in codes
+
+
+class TestValidationSection:
+    def test_options_outside_validation_key_are_ignored(self, tmp_path):
+        project = _make_project(
+            tmp_path,
+            ["M010LongMission"],
+            ["m010_long_mission.py"],
+            ["from .missions.m010_long_mission import M010LongMission"],
+        )
+        _write_long_mission(project, "m010_long_mission.py", validation.DEFAULT_MAX_MISSION_STEPS + 1)
+        path = project / "raccoon.project.yml"
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        config["max_mission_steps"] = 100
+        path.write_text(yaml.dump(config), encoding="utf-8")
+        assert "mission_too_long" in _codes(validate_project(project, python_compile=False))
+
+    def test_non_mapping_validation_section_warns(self, tmp_path):
+        project = _make_project(tmp_path, [])
+        path = project / "raccoon.project.yml"
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        config["validation"] = 5
+        path.write_text(yaml.dump(config), encoding="utf-8")
+        assert "invalid_validation_section" in _codes(validate_project(project, python_compile=False))
