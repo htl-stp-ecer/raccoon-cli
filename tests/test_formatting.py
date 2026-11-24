@@ -246,6 +246,7 @@ def _project(tmp_path: Path) -> Path:
         yaml.dump({"name": "T", "uuid": "u", "format_version": 2, "missions": []}),
         encoding="utf-8",
     )
+    (tmp_path / "raccoon.formatting.yml").write_text("enabled: true\n", encoding="utf-8")
     (tmp_path / "src" / "missions" / "m010_a_mission.py").write_text(MISSION, encoding="utf-8")
     (tmp_path / "src" / "hardware" / "defs.py").write_text("x = 'generated'\n", encoding="utf-8")
     return tmp_path
@@ -299,6 +300,43 @@ class TestFormatProject:
         path.write_bytes(b"x = 'a'\r\ny = 1\r\n")
         format_project(project)
         assert path.read_bytes() == b'x = "a"\r\ny = 1\r\n'
+
+
+class TestMissingConfigFile:
+    def _without_config(self, tmp_path: Path) -> Path:
+        project = _project(tmp_path)
+        (project / "raccoon.formatting.yml").unlink()
+        return project
+
+    def test_project_function_formats_nothing(self, tmp_path):
+        project = self._without_config(tmp_path)
+        result = format_project(project)
+        assert result.config_missing
+        assert result.changed == []
+        assert (project / "src" / "missions" / "m010_a_mission.py").read_text() == MISSION
+
+    def test_command_warns_and_changes_nothing(self, tmp_path, monkeypatch):
+        project = self._without_config(tmp_path)
+        monkeypatch.chdir(project)
+        result = CliRunner().invoke(main, ["--no-validate", "format"], catch_exceptions=False)
+        assert result.exit_code == 0
+        assert "raccoon.formatting.yml" in result.output
+        assert "nothing was formatted" in result.output
+        assert (project / "src" / "missions" / "m010_a_mission.py").read_text() == MISSION
+
+    def test_check_also_warns_and_changes_nothing(self, tmp_path, monkeypatch):
+        project = self._without_config(tmp_path)
+        monkeypatch.chdir(project)
+        result = CliRunner().invoke(main, ["--no-validate", "format", "--check"], catch_exceptions=False)
+        assert result.exit_code == 0
+        assert "nothing was formatted" in result.output
+
+    def test_file_with_only_enabled_uses_defaults_for_the_rest(self, tmp_path):
+        project = self._without_config(tmp_path)
+        (project / "raccoon.formatting.yml").write_text("enabled: true\n", encoding="utf-8")
+        result = format_project(project)
+        assert not result.config_missing
+        assert len(result.changed) == 1
 
 
 class TestFormatCommand:

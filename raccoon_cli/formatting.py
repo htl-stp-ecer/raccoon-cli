@@ -10,9 +10,10 @@ Black itself is tuned in two ways so that mission code keeps its shape:
 * ``keep_blank_lines`` keeps blank lines that separate groups of steps inside a
   bracket (Black normally removes them). Several blank lines become one.
 
-The settings live in ``raccoon.formatting.yml`` at the project root. The file is
-optional; without it the defaults of :class:`FormattingConfig` apply. With
-``auto_format: true`` ``raccoon run`` formats the project before it starts.
+The settings live in ``raccoon.formatting.yml`` at the project root. Formatting is
+opt-in: a project without that file is not formatted. Options missing from the
+file take the defaults of :class:`FormattingConfig`. With ``auto_format: true``
+``raccoon run`` formats the project before it starts.
 """
 
 from __future__ import annotations
@@ -101,6 +102,11 @@ def parse_formatting_config(raw: object) -> FormattingConfig:
             values[key] = tuple(entries)
 
     return FormattingConfig(**values)
+
+
+def has_formatting_config(project_root: Path) -> bool:
+    """Whether the project has a ``raccoon.formatting.yml``."""
+    return (project_root / FORMATTING_CONFIG_FILE).is_file()
 
 
 def load_formatting_config(project_root: Path) -> FormattingConfig:
@@ -274,6 +280,7 @@ class FormatResult:
     changed: List[Path] = field(default_factory=list)
     unchanged: int = 0
     errors: List[Tuple[Path, str]] = field(default_factory=list)
+    config_missing: bool = False
 
     @property
     def disabled(self) -> bool:
@@ -307,9 +314,14 @@ def format_project(
 ) -> FormatResult:
     """Format the project's source files; with ``check`` nothing is written.
 
-    Paths in the result are relative to ``project_root``.
+    Without ``raccoon.formatting.yml`` (and no explicit ``config``) nothing is
+    formatted and ``config_missing`` is set. Paths in the result are relative to
+    ``project_root``.
     """
-    config = config if config is not None else load_formatting_config(project_root)
+    if config is None:
+        if not has_formatting_config(project_root):
+            return FormatResult(config=FormattingConfig(enabled=False), config_missing=True)
+        config = load_formatting_config(project_root)
     result = FormatResult(config=config)
     if not config.enabled:
         return result
