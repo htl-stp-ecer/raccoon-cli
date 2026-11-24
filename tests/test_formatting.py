@@ -112,6 +112,87 @@ class TestFormatSource:
             format_source("def broken(:\n", DEFAULTS)
 
 
+class TestExplodeCalls:
+    def test_short_parallel_is_one_argument_per_line(self):
+        out = format_source("x = parallel(stop_camera(), motor_off(Defs.m))\n", DEFAULTS)
+        assert out == "x = parallel(\n    stop_camera(),\n    motor_off(Defs.m),\n)\n"
+
+    def test_reported_shutdown_mission(self):
+        source = (
+            "class M999ShutdownMission(Mission):\n"
+            "    def sequence(self) -> Sequential:\n"
+            "        return seq([\n"
+            "            parallel(\n"
+            "                stop_camera(), fully_disable_servos(), motor_off(Defs.cone_pusher_motor)\n"
+            "            ),\n"
+            "        ])\n"
+        )
+        assert format_source(source, DEFAULTS).splitlines()[3:8] == [
+            "            parallel(",
+            "                stop_camera(),",
+            "                fully_disable_servos(),",
+            "                motor_off(Defs.cone_pusher_motor),",
+            "            ),",
+        ]
+
+    def test_short_seq_list_is_exploded_and_stays_hugged(self):
+        assert format_source("x = seq([a(), b()])\n", DEFAULTS) == "x = seq([\n    a(),\n    b(),\n])\n"
+
+    def test_single_argument_is_exploded_too(self):
+        assert format_source("x = parallel(a())\n", DEFAULTS) == "x = parallel(\n    a(),\n)\n"
+
+    def test_existing_trailing_comma_is_not_doubled(self):
+        out = format_source("x = parallel(a(), b(),)\n", DEFAULTS)
+        assert ",," not in out
+
+    def test_parenthesised_last_argument_stays_an_expression(self):
+        out = format_source("x = parallel(a, (b + c))\n", DEFAULTS)
+        assert out == "x = parallel(\n    a,\n    (b + c),\n)\n"
+
+    def test_comment_after_last_argument_is_kept(self):
+        out = format_source("x = parallel(\n    a(),\n    b()  # last\n)\n", DEFAULTS)
+        assert "b(),  # last" in out
+
+    def test_other_calls_are_left_to_black(self):
+        assert format_source("x = foo(a(), b())\n", DEFAULTS) == "x = foo(a(), b())\n"
+
+    def test_call_without_arguments_is_untouched(self):
+        assert format_source("x = parallel()\n", DEFAULTS) == "x = parallel()\n"
+
+    def test_empty_list_argument_is_untouched(self):
+        assert format_source("x = seq([])\n", DEFAULTS) == "x = seq([])\n"
+
+    def test_empty_list_inside_other_arguments_is_untouched(self):
+        out = format_source("x = parallel(a(), [])\n", DEFAULTS)
+        assert out == "x = parallel(\n    a(),\n    [],\n)\n"
+
+    def test_generator_argument_is_not_broken(self):
+        assert format_source("x = seq(a for a in steps)\n", DEFAULTS) == "x = seq(a for a in steps)\n"
+
+    def test_method_calls_match_by_attribute_name(self):
+        out = format_source("x = steps.parallel(a(), b())\n", DEFAULTS)
+        assert out == "x = steps.parallel(\n    a(),\n    b(),\n)\n"
+
+    def test_names_are_configurable(self):
+        config = FormattingConfig(explode_calls=("background",))
+        assert format_source("x = background(a(), b())\n", config).count("\n") == 4
+        assert format_source("x = parallel(a(), b())\n", config) == "x = parallel(a(), b())\n"
+
+    def test_can_be_turned_off_with_an_empty_list(self):
+        config = FormattingConfig(explode_calls=())
+        assert format_source("x = parallel(a(), b())\n", config) == "x = parallel(a(), b())\n"
+
+    def test_result_is_stable_and_keeps_meaning(self):
+        source = "x = seq([a(), parallel(b(), c())])\n"
+        once = format_source(source, DEFAULTS)
+        assert format_source(once, DEFAULTS) == once
+        assert ast.dump(ast.parse(source)) == ast.dump(ast.parse(once))
+
+    def test_non_ascii_text_before_the_call_does_not_shift_the_comma(self):
+        out = format_source('x = parallel(say("äöü"), b())\n', DEFAULTS)
+        assert 'say("äöü"),' in out
+
+
 class TestConfig:
     def test_defaults_without_file(self, tmp_path):
         assert load_formatting_config(tmp_path) == FormattingConfig()
@@ -143,6 +224,8 @@ class TestConfig:
             {"line_length": 5},
             {"exclude": "src/hardware/**"},
             {"exclude": [1]},
+            {"explode_calls": "seq"},
+            {"explode_calls": [1]},
             ["enabled"],
         ],
     )

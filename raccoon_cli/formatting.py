@@ -5,6 +5,8 @@ Black itself is tuned in two ways so that mission code keeps its shape:
 
 * ``hug_brackets`` keeps ``seq([`` and ``])`` on the same line as the call, so the
   steps of a mission are not pushed one indentation level deeper.
+* ``explode_calls`` names calls (default ``seq`` and ``parallel``) whose arguments
+  are always written one per line, however short they are.
 * ``keep_blank_lines`` keeps blank lines that separate groups of steps inside a
   bracket (Black normally removes them). Several blank lines become one.
 
@@ -29,6 +31,7 @@ import yaml
 FORMATTING_CONFIG_FILE = "raccoon.formatting.yml"
 
 DEFAULT_EXCLUDE = ("src/hardware/**",)
+DEFAULT_EXPLODE_CALLS = ("seq", "parallel")
 
 # Black normalises "#text" to "# text", so the marker is already in that form.
 _BLANK_MARKER = "# __raccoon_blank__"
@@ -48,6 +51,7 @@ class FormattingConfig:
     skip_magic_trailing_comma: bool = False
     hug_brackets: bool = True
     keep_blank_lines: bool = True
+    explode_calls: Tuple[str, ...] = DEFAULT_EXPLODE_CALLS
     exclude: Tuple[str, ...] = DEFAULT_EXCLUDE
 
 
@@ -59,7 +63,7 @@ _BOOL_KEYS = (
     "hug_brackets",
     "keep_blank_lines",
 )
-_KNOWN_KEYS = frozenset({*_BOOL_KEYS, "line_length", "exclude"})
+_KNOWN_KEYS = frozenset({*_BOOL_KEYS, "line_length", "explode_calls", "exclude"})
 
 
 def parse_formatting_config(raw: object) -> FormattingConfig:
@@ -89,11 +93,12 @@ def parse_formatting_config(raw: object) -> FormattingConfig:
             raise FormattingConfigError(f"line_length must be an integer of at least 20, got {length!r}")
         values["line_length"] = length
 
-    if "exclude" in raw:
-        exclude = raw["exclude"]
-        if not isinstance(exclude, list) or not all(isinstance(p, str) for p in exclude):
-            raise FormattingConfigError("exclude must be a list of path patterns")
-        values["exclude"] = tuple(exclude)
+    for key in ("exclude", "explode_calls"):
+        if key in raw:
+            entries = raw[key]
+            if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
+                raise FormattingConfigError(f"{key} must be a list of strings")
+            values[key] = tuple(entries)
 
     return FormattingConfig(**values)
 
@@ -161,6 +166,69 @@ def _protect_blank_lines(source: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Calls whose arguments are always one per line
+# ---------------------------------------------------------------------------
+
+def _call_name(func: ast.expr) -> Optional[str]:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _add_trailing_commas(source: str, names: Tuple[str, ...]) -> str:
+    """Put a trailing comma into every call of ``names`` that lacks one.
+
+    Black treats a trailing comma as "keep one item per line", so the arguments
+    of these calls stay exploded however short they are. For ``seq([...])`` the
+    comma goes after the last step in the list, so the list is exploded while
+    ``seq([`` and ``])`` stay hugged.
+    """
+    if not names:
+        return source
+    tree = ast.parse(source)
+    lines = source.split("\n")
+
+    # Significant tokens (no comments / newlines) with character positions.
+    significant: List[tokenize.TokenInfo] = [
+        tok
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline)
+        if tok.type not in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT)
+    ]
+    index_by_end = {tok.end: i for i, tok in enumerate(significant)}
+
+    def char_col(line_no: int, byte_col: int) -> int:
+        return len(lines[line_no - 1].encode("utf-8")[:byte_col].decode("utf-8", errors="ignore"))
+
+    insert_at: Set[Tuple[int, int]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _call_name(node.func) not in names:
+            continue
+        arguments = [*node.args, *node.keywords]
+        if not arguments:
+            continue
+        if len(arguments) == 1 and isinstance(arguments[0], ast.GeneratorExp):
+            continue  # f(x for x in y,) is a syntax error
+        target = node
+        if len(arguments) == 1 and isinstance(arguments[0], ast.List) and not node.keywords:
+            target = arguments[0]
+        closing = (target.end_lineno, char_col(target.end_lineno, target.end_col_offset))
+        position = index_by_end.get(closing)
+        if position is None or position == 0:
+            continue
+        last = significant[position - 1]
+        if last.type == tokenize.OP and last.string in (",", "(", "[", "{"):
+            continue  # already has a comma, or the brackets are empty (seq([]))
+        insert_at.add(last.end)
+
+    for line_no, col in sorted(insert_at, reverse=True):
+        line = lines[line_no - 1]
+        lines[line_no - 1] = line[:col] + "," + line[col:]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Formatting
 # ---------------------------------------------------------------------------
 
@@ -188,7 +256,9 @@ def format_source(source: str, config: FormattingConfig) -> str:
     """
     import black
 
-    to_format = _protect_blank_lines(source) if config.keep_blank_lines else source
+    to_format = _add_trailing_commas(source, config.explode_calls)
+    if config.keep_blank_lines:
+        to_format = _protect_blank_lines(to_format)
     formatted = black.format_str(to_format, mode=_black_mode(config))
     if config.keep_blank_lines:
         formatted = _BLANK_MARKER_RE.sub("", formatted)
