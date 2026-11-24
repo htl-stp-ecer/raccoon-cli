@@ -25,7 +25,9 @@ dependencies = [
     "pyyaml",
     "ruamel.yaml>=0.17",
     "click>=8.0",
-    "black",
+    # raccoon format enables a Black preview feature (hug_parens_with_braces_and_square_brackets)
+    # whose behaviour can change between releases, so the major version is pinned.
+    "black>=26.10,<27",
     "rich>=10.0",
     "questionary>=2.0",
     "jinja2>=3.0",

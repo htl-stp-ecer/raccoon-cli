@@ -24,6 +24,7 @@ from raccoon_cli.commands import (
     shell_command,
     doctor_command,
     upload_command,
+    format_command,
 )
 from raccoon_cli.logging_utils import configure_logging, render_banner, render_summary
 
@@ -36,6 +37,7 @@ CONTEXT_SETTINGS = {
 # `codegen` validates on its own (see commands/codegen.py); every other command
 # (mission, shell, sync, calibrate, ...) does not need a consistent project.
 _AUTO_VALIDATE_COMMANDS = {"run"}
+_AUTO_FORMAT_COMMANDS = {"run"}
 
 
 def _normalize_exit_code(code) -> int:
@@ -120,6 +122,34 @@ def _print_summary(ctx: click.Context) -> None:
     ctx.obj["summary_printed"] = True
 
 
+def _run_auto_format(ctx: click.Context) -> None:
+    """Format the project before `raccoon run` when raccoon.formatting.yml sets auto_format."""
+    if ctx.invoked_subcommand not in _AUTO_FORMAT_COMMANDS:
+        return
+
+    from raccoon_cli.formatting import FormattingConfigError, format_project, load_formatting_config
+    from raccoon_cli.project import ProjectError, find_project_root
+
+    console = ctx.obj["console"]
+    try:
+        project_root = find_project_root()
+        config = load_formatting_config(project_root)
+    except ProjectError:
+        return  # not in a project — let the subcommand handle it
+    except FormattingConfigError as exc:
+        console.print(f"[yellow]⚠ format: {exc} — skipping auto-format[/yellow]")
+        return
+
+    if not (config.enabled and config.auto_format):
+        return
+
+    result = format_project(project_root, config=config)
+    for path in result.changed:
+        console.print(f"[cyan]format:[/cyan] reformatted {path}")
+    for path, message in result.errors:
+        console.print(f"[yellow]⚠ format: skipped {path}: {message}[/yellow]")
+
+
 def _run_auto_validate(ctx: click.Context) -> None:
     """Validate the project before `raccoon run` if we're inside a project."""
     if ctx.obj.get("no_validate"):
@@ -145,6 +175,7 @@ def main(ctx: click.Context, no_validate: bool) -> None:
     """Raccoon - Toolchain CLI for raccoon projects."""
     _setup_context(ctx)
     ctx.obj["no_validate"] = no_validate
+    _run_auto_format(ctx)
     _run_auto_validate(ctx)
 
 
@@ -164,6 +195,7 @@ main.add_command(validate_command)
 main.add_command(shell_command)
 main.add_command(doctor_command)
 main.add_command(upload_command)
+main.add_command(format_command)
 
 
 if __name__ == "__main__":
