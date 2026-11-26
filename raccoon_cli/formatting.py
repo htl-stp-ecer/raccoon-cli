@@ -6,7 +6,8 @@ Black itself is tuned in several ways so that mission code keeps its shape:
 * ``hug_brackets`` keeps ``seq([`` and ``])`` on the same line as the call, so the
   steps of a mission are not pushed one indentation level deeper.
 * ``explode_calls`` names calls (default ``seq`` and ``parallel``) whose arguments
-  are always written one per line, however short they are.
+  are always written one per line, however short they are. A comprehension as the
+  only argument keeps its brackets next to those of the call (``seq([`` ... ``])``).
 * ``explode_operators`` names calls (none by default, typically ``until``) whose
   arguments always start on their own line and are split before every operator,
   however short they are, so each condition of ``a + b + c`` gets its own line.
@@ -208,13 +209,23 @@ def _char_col(lines: List[str], line_no: int, byte_col: int) -> int:
     return len(lines[line_no - 1].encode("utf-8")[:byte_col].decode("utf-8", errors="ignore"))
 
 
+def _sole_comprehension(call: ast.Call) -> Optional[ast.expr]:
+    """The list, set or dict comprehension that is the only argument of ``call``."""
+    if len(call.args) != 1 or call.keywords:
+        return None
+    argument = call.args[0]
+    return argument if isinstance(argument, (ast.ListComp, ast.SetComp, ast.DictComp)) else None
+
+
 def _add_trailing_commas(source: str, names: Tuple[str, ...]) -> str:
     """Put a trailing comma into every call of ``names`` that lacks one.
 
     Black treats a trailing comma as "keep one item per line", so the arguments
     of these calls stay exploded however short they are. For ``seq([...])`` the
     comma goes after the last step in the list, so the list is exploded while
-    ``seq([`` and ``])`` stay hugged.
+    ``seq([`` and ``])`` stay hugged. A comprehension as the only argument gets no
+    comma, and an existing one is removed, because it would keep the brackets of
+    the comprehension apart from those of the call.
     """
     if not names:
         return source
@@ -225,8 +236,15 @@ def _add_trailing_commas(source: str, names: Tuple[str, ...]) -> str:
     index_by_end = {tok.end: i for i, tok in enumerate(significant)}
 
     insert_at: Set[Tuple[int, int]] = set()
+    remove_at: Set[Tuple[int, int]] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or _call_name(node.func) not in names:
+            continue
+        if _sole_comprehension(node) is not None:
+            closing = (node.end_lineno, _char_col(lines, node.end_lineno, node.end_col_offset))
+            comma = significant[index_by_end[closing] - 1]
+            if comma.string == ",":
+                remove_at.add(comma.start)
             continue
         arguments = [*node.args, *node.keywords]
         if not arguments:
@@ -245,9 +263,12 @@ def _add_trailing_commas(source: str, names: Tuple[str, ...]) -> str:
             continue  # already has a comma, or the brackets are empty (seq([]))
         insert_at.add(last.end)
 
-    for line_no, col in sorted(insert_at, reverse=True):
+    for line_no, col in sorted(insert_at | remove_at, reverse=True):
         line = lines[line_no - 1]
-        lines[line_no - 1] = line[:col] + "," + line[col:]
+        if (line_no, col) in remove_at:
+            lines[line_no - 1] = line[:col] + line[col + 1 :]
+        else:
+            lines[line_no - 1] = line[:col] + "," + line[col:]
     return "\n".join(lines)
 
 
@@ -287,14 +308,18 @@ def _operand_gaps(node: ast.expr) -> List[Tuple[ast.expr, ast.expr]]:
     return []
 
 
-def _mark_operator_splits(source: str, names: Tuple[str, ...]) -> str:
+def _mark_splits(source: str, names: Tuple[str, ...], comprehension_calls: Tuple[str, ...]) -> str:
     """Put a marker comment before the arguments of ``names`` and their operators.
 
     Black cannot join lines across such a comment, so it puts the arguments on
     their own lines and splits the expression at these operators. Operators nested deeper (in parentheses or of higher
     precedence) stay together.
+
+    A comprehension that is the only argument of one of ``comprehension_calls``
+    gets a marker before its ``for``: Black only hugs the brackets of a
+    comprehension that does not fit on one line.
     """
-    if not names:
+    if not names and not comprehension_calls:
         return source
     tree = ast.parse(source)
     lines = source.split("\n")
@@ -303,7 +328,17 @@ def _mark_operator_splits(source: str, names: Tuple[str, ...]) -> str:
 
     insert_at: Set[Tuple[int, int]] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or _call_name(node.func) not in names:
+        if not isinstance(node, ast.Call):
+            continue
+        comprehension = _sole_comprehension(node)
+        if comprehension is not None and _call_name(node.func) in comprehension_calls:
+            element = comprehension.value if isinstance(comprehension, ast.DictComp) else comprehension.elt
+            element_end = (element.end_lineno, _char_col(lines, element.end_lineno, element.end_col_offset))
+            position = bisect.bisect_left(starts, element_end)
+            while significant[position].string not in ("for", "async"):
+                position += 1
+            insert_at.add(significant[position].start)
+        if _call_name(node.func) not in names:
             continue
         arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
         if arguments:
@@ -458,7 +493,8 @@ def format_source(source: str, config: FormattingConfig) -> str:
         to_format = _add_trailing_commas(to_format, config.explode_calls)
         if config.keep_blank_lines:
             to_format = _protect_blank_lines(to_format)
-        to_format = _mark_operator_splits(to_format, config.explode_operators)
+        hugged = config.explode_calls if config.hug_brackets else ()
+        to_format = _mark_splits(to_format, config.explode_operators, hugged)
         formatted = black.format_str(to_format, mode=_black_mode(config))
         formatted = _SPLIT_MARKER_RE.sub("", formatted)
         if config.keep_blank_lines:

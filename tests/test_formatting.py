@@ -108,6 +108,25 @@ class TestCommentsAndLineLength:
         assert out.startswith("x = foo(\n    a, b\n)")
 
 
+class TestComprehensionArguments:
+    EXPECTED = "x = seq([\n    step(deg)\n    for deg in [1, 2]\n])\n"
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "x = seq([step(deg) for deg in [1, 2]])\n",
+            "x = seq(\n    [\n        step(deg)\n        for deg in [1, 2]\n    ],\n)\n",
+        ],
+    )
+    def test_list_brackets_stick_to_the_call(self, source):
+        assert format_source(source, DEFAULTS) == self.EXPECTED
+        assert format_source(self.EXPECTED, DEFAULTS) == self.EXPECTED
+
+    def test_other_calls_are_left_to_black(self):
+        source = "x = sum([a for a in b])\n"
+        assert format_source(source, DEFAULTS) == source
+
+
 class TestFormatSource:
     def test_seq_bracket_stays_hugged(self):
         out = format_source(MISSION, DEFAULTS)
