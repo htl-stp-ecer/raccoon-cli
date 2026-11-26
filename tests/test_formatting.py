@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
@@ -19,6 +20,7 @@ from raccoon_cli.formatting import (
     load_formatting_config,
     parse_formatting_config,
 )
+from raccoon_cli.server.routes import commands
 
 MISSION = '''\
 class M010Mission(Mission):
@@ -488,6 +490,15 @@ class TestAutoFormat:
         assert "return seq([" in self._mission(project)
         assert any("m010_a_mission.py" in line for line in ctx.obj["console"].lines)
 
+    def test_no_format_flag_leaves_the_files_alone(self, tmp_path, monkeypatch):
+        project = _project(tmp_path)
+        (project / "raccoon.formatting.yml").write_text("auto_format: true\n", encoding="utf-8")
+        monkeypatch.chdir(project)
+        ctx = _FakeContext("run")
+        ctx.obj["no_format"] = True
+        cli._run_auto_format(ctx)
+        assert self._mission(project) == MISSION
+
     def test_other_commands_do_not_format(self, tmp_path, monkeypatch):
         project = _project(tmp_path)
         (project / "raccoon.formatting.yml").write_text("auto_format: true\n", encoding="utf-8")
@@ -512,3 +523,13 @@ class TestAutoFormat:
     def test_outside_a_project_does_nothing(self, tmp_path, monkeypatch):
         ctx = self._auto(tmp_path, monkeypatch)
         assert ctx.obj["console"].lines == []
+
+
+@pytest.mark.asyncio
+async def test_server_run_validates_but_neither_formats_nor_generates():
+    with patch.object(commands, "_start_command", new=AsyncMock()) as start:
+        await commands.run_project("proj", commands.CommandRequest())
+    argv = start.await_args.kwargs["args"]
+
+    assert argv == ["--no-format", "run", "--local", "--no-codegen"]
+

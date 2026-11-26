@@ -127,6 +127,8 @@ def _print_summary(ctx: click.Context) -> None:
 
 def _run_auto_format(ctx: click.Context) -> None:
     """Format the project before `raccoon run` when raccoon.formatting.yml sets auto_format."""
+    if ctx.obj.get("no_format"):
+        return
     if ctx.invoked_subcommand not in _AUTO_FORMAT_COMMANDS:
         return
 
@@ -173,11 +175,13 @@ def _run_auto_validate(ctx: click.Context) -> None:
 
 @click.group(context_settings=CONTEXT_SETTINGS, no_args_is_help=True, cls=RaccoonGroup)
 @click.option("--no-validate", is_flag=True, help="Skip pre-command project validation.")
+@click.option("--no-format", is_flag=True, help="Skip pre-run auto-formatting.")
 @click.pass_context
-def main(ctx: click.Context, no_validate: bool) -> None:
+def main(ctx: click.Context, no_validate: bool, no_format: bool) -> None:
     """Raccoon - Toolchain CLI for raccoon projects."""
     _setup_context(ctx)
     ctx.obj["no_validate"] = no_validate
+    ctx.obj["no_format"] = no_format
     _run_auto_format(ctx)
     _run_auto_validate(ctx)
 

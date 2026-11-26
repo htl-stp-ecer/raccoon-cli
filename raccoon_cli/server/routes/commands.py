@@ -300,11 +300,12 @@ async def run_project(project_id: str, request: CommandRequest = CommandRequest(
     Returns a command ID and WebSocket URL for output streaming.
     """
     # Use --local to force local execution (we're already on the Pi)
-    # Use --no-codegen because codegen is done client-side before sync
+    # Use --no-format and --no-codegen: both change project files and are done
+    # client-side before sync. Validation stays on.
     return await _start_command(
         project_id=project_id,
         command_type=CommandType.RUN,
-        args=["run", "--local", "--no-codegen", *request.args],
+        args=["--no-format", "run", "--local", "--no-codegen", *request.args],
         env=request.env,
         deploy_services=request.deploy_services,
     )
