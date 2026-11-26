@@ -852,6 +852,88 @@ def _check_repeated_steps(
 
 
 # ---------------------------------------------------------------------------
+# Single-element composite check
+#
+# ``seq([step])`` runs exactly like ``step``, and ``parallel(branch)`` has
+# nothing to run its only branch in parallel with. The step that a mission's
+# ``sequence()`` returns is accepted either way; the steps inside it are checked.
+# ---------------------------------------------------------------------------
+
+def _single_composite_name(node: ast.AST) -> Optional[str]:
+    """``"seq"`` or ``"parallel"`` when *node* is such a call with one element.
+
+    Unpacked arguments (``*steps``) have an unknown length and never count.
+    """
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+        return None
+    if len(node.args) != 1 or node.keywords or isinstance(node.args[0], ast.Starred):
+        return None
+    if node.func.id == "parallel":
+        return "parallel"
+    if node.func.id == "seq":
+        steps = node.args[0]
+        if (
+            isinstance(steps, ast.List)
+            and len(steps.elts) == 1
+            and not isinstance(steps.elts[0], ast.Starred)
+        ):
+            return "seq"
+    return None
+
+
+def _returned_mission_steps(tree: ast.AST) -> Set[ast.expr]:
+    """The expressions that a ``sequence()`` method returns."""
+    return {
+        node.value
+        for cls in ast.walk(tree) if isinstance(cls, ast.ClassDef)
+        for fn in cls.body
+        if isinstance(fn, ast.FunctionDef) and fn.name == "sequence"
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Return) and node.value is not None
+    }
+
+
+def _check_single_element_composites(result: ValidationResult, project_root: Path) -> None:
+    """WARNING for every ``seq([...])`` or ``parallel(...)`` holding one element."""
+    src_root = project_root / "src"
+    if not src_root.exists():
+        return
+
+    for py_file in sorted(src_root.rglob("*.py")):
+        if "__pycache__" in py_file.parts:
+            continue
+        try:
+            tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        except (SyntaxError, OSError, ValueError):
+            continue  # syntax errors are surfaced by the compile check
+
+        rel = py_file.relative_to(project_root)
+        is_mission = rel.parts[:2] == ("src", "missions")
+        accepted = _returned_mission_steps(tree) if is_mission else set()
+        found = [
+            (node.lineno, node.col_offset, name)
+            for node in ast.walk(tree)
+            if node not in accepted and (name := _single_composite_name(node)) is not None
+        ]
+        for lineno, _, name in sorted(found):
+            if name == "seq":
+                message = f"{rel}:{lineno} uses seq([...]) with only one step"
+                hint = "No seq() needed here: use the step directly"
+            else:
+                message = f"{rel}:{lineno} uses parallel(...) with only one argument"
+                hint = (
+                    "No parallel() needed here: use the step directly, "
+                    "or seq([...]) for a list of steps"
+                )
+            result.add(ValidationIssue(
+                severity=Severity.WARNING,
+                code=f"single_element_{name}",
+                message=message,
+                hint=hint,
+            ))
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -873,6 +955,9 @@ def validate_project(
     - Code generation, run in memory — reports everything ``raccoon codegen``
       would reject (optional). Requires the ``raccoon`` package to be
       importable; if it is not, that is itself an error.
+    - Single-element composites — warns for ``seq([...])`` with one step and
+      ``parallel(...)`` with one argument anywhere under src/, except the step
+      that a mission's ``sequence()`` returns
     - Uncommented steps — warns when more than 6 steps in a row have no comment
       (disable with ``validation.check_mission_comments: false``)
     - Repeated steps — warns when the same step or block of steps appears 3 or
@@ -913,6 +998,7 @@ def validate_project(
     _check_main_imports(result, config_classes, missions_dir, main_py)
 
     _check_mission_length(result, config, project_root)
+    _check_single_element_composites(result, project_root)
 
     if python_compile:
         _check_python_compile(result, project_root)

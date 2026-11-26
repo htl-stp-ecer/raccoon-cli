@@ -1190,3 +1190,58 @@ class TestValidationSection:
         config["validation"] = 5
         path.write_text(yaml.dump(config), encoding="utf-8")
         assert "invalid_validation_section" in _codes(validate_project(project, python_compile=False))
+
+
+class TestSingleElementComposites:
+    def _codes_for(self, tmp_path: Path, expression: str) -> list[str]:
+        _write_config(tmp_path)
+        _write_raw_mission(tmp_path, "m010_go_mission.py", f"step = {expression}\n")
+        result = validate_project(tmp_path, codegen_check=False, defs_check=False)
+        return [i.code for i in result.warnings if i.code.startswith("single_element_")]
+
+    @pytest.mark.parametrize("expression", [
+        "seq([a()])",
+        "outer(seq([a()]))",
+    ])
+    def test_seq_with_one_step_warns(self, tmp_path: Path, expression: str):
+        assert self._codes_for(tmp_path, expression) == ["single_element_seq"]
+
+    @pytest.mark.parametrize("expression", [
+        "parallel(a())",
+        "parallel([a(), b()])",
+        "parallel(seq([a(), b()]))",
+    ])
+    def test_parallel_with_one_argument_warns(self, tmp_path: Path, expression: str):
+        assert self._codes_for(tmp_path, expression) == ["single_element_parallel"]
+
+    @pytest.mark.parametrize("expression", [
+        "seq([])",
+        "seq([a(), b()])",
+        "seq([*steps])",
+        "seq(steps)",
+        "parallel(a(), b())",
+        "parallel(*branches)",
+        "other.parallel(a())",
+    ])
+    def test_no_warning(self, tmp_path: Path, expression: str):
+        assert self._codes_for(tmp_path, expression) == []
+
+    @pytest.mark.parametrize(("returned", "expected"), [
+        ("parallel(a())", []),
+        ("parallel([a(), b()])", []),
+        ("parallel(parallel(a()))", ["single_element_parallel"]),
+        ("seq([a()])", []),
+        ("seq([seq([a()])])", ["single_element_seq"]),
+        ("seq([parallel(a())])", ["single_element_parallel"]),
+    ])
+    def test_step_returned_by_a_mission_sequence(
+        self, tmp_path: Path, returned: str, expected: list[str],
+    ):
+        _write_config(tmp_path)
+        _write_raw_mission(
+            tmp_path, "m010_go_mission.py",
+            f"class M010GoMission:\n    def sequence(self):\n        return {returned}\n",
+        )
+        result = validate_project(tmp_path, codegen_check=False, defs_check=False)
+        codes = [i.code for i in result.warnings if i.code.startswith("single_element_")]
+        assert codes == expected

@@ -68,7 +68,7 @@ Projects are git repos created with the setup script of [raccoon-template](https
 | `raccoon calibrate autotune` | Run motor autotune |
 | `raccoon calibrate servos` | Interactively calibrate servo offsets |
 | `raccoon calibrate step-response` | Record a motor step response |
-| `raccoon validate` | Check config, files and imports for consistency; also warns about long, repetitive and uncommented missions |
+| `raccoon validate` | Check config, files and imports for consistency; also warns about long, repetitive and uncommented missions and single-element `seq`/`parallel` |
 | `raccoon format [--check]` | Format the Python files in `src/` with Black. Only projects that have a `raccoon.formatting.yml` are formatted (an empty file is enough); `--check` writes nothing and exits 1 if a file would change |
 | `raccoon migrate` | Apply numbered project migrations |
 
