@@ -8,10 +8,15 @@ Black itself is tuned in several ways so that mission code keeps its shape:
 * ``explode_calls`` names calls (default ``seq`` and ``parallel``) whose arguments
   are always written one per line, however short they are.
 * ``explode_operators`` names calls (none by default, typically ``until``) whose
-  arguments are split before every operator, however short they are, so each
-  condition of ``a + b + c`` gets its own line.
+  arguments always start on their own line and are split before every operator,
+  however short they are, so each condition of ``a + b + c`` gets its own line.
 * ``keep_blank_lines`` keeps blank lines that separate groups of steps inside a
   bracket (Black normally removes them). Several blank lines become one.
+
+Comments behind code do not count towards the line length, so a long comment
+never breaks the code in front of it. A comment keeps its line break only where
+joining the lines would move it behind different code. Tool directives such as
+``# noqa`` or ``# type:`` are left to Black.
 
 The settings live in ``raccoon.formatting.yml`` at the project root. Formatting is
 opt-in: a project without that file is not formatted. Options missing from the
@@ -247,7 +252,7 @@ def _add_trailing_commas(source: str, names: Tuple[str, ...]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Calls whose operator chains are always one operand per line
+# Calls whose conditions are always on their own lines, one per operand
 # ---------------------------------------------------------------------------
 
 _BINARY_PRECEDENCE = (
@@ -283,10 +288,10 @@ def _operand_gaps(node: ast.expr) -> List[Tuple[ast.expr, ast.expr]]:
 
 
 def _mark_operator_splits(source: str, names: Tuple[str, ...]) -> str:
-    """Put a marker comment before the operators in the arguments of ``names``.
+    """Put a marker comment before the arguments of ``names`` and their operators.
 
-    Black cannot join lines across a comment, so it splits the expression at
-    these operators. Operators nested deeper (in parentheses or of higher
+    Black cannot join lines across such a comment, so it puts the arguments on
+    their own lines and splits the expression at these operators. Operators nested deeper (in parentheses or of higher
     precedence) stay together.
     """
     if not names:
@@ -300,7 +305,15 @@ def _mark_operator_splits(source: str, names: Tuple[str, ...]) -> str:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or _call_name(node.func) not in names:
             continue
-        for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+        arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
+        if arguments:
+            # The token behind the opening parenthesis of the call starts its own line.
+            func_end = (node.func.end_lineno, _char_col(lines, node.func.end_lineno, node.func.end_col_offset))
+            position = bisect.bisect_left(starts, func_end)
+            while significant[position].string != "(":
+                position += 1
+            insert_at.add(significant[position + 1].start)
+        for argument in arguments:
             for left, right in _operand_gaps(argument):
                 left_end = (left.end_lineno, _char_col(lines, left.end_lineno, left.end_col_offset))
                 position = bisect.bisect_left(starts, left_end)
@@ -314,9 +327,100 @@ def _mark_operator_splits(source: str, names: Tuple[str, ...]) -> str:
         head, tail = line[:col], line[col:]
         if head.strip():
             lines[line_no - 1] = f"{head}\n{_SPLIT_MARKER}\n{tail}"
-        else:  # the operator already starts its line
+        else:  # the token already starts its line
             lines[line_no - 1] = f"{head}{_SPLIT_MARKER}\n{line}"
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Comments behind code do not count towards the line length
+# ---------------------------------------------------------------------------
+
+# Tokens that formatting neither adds nor removes, used to find a place again.
+_WORD_TOKENS = tuple(
+    kind
+    for kind in (tokenize.NAME, tokenize.NUMBER, tokenize.STRING, getattr(tokenize, "FSTRING_MIDDLE", None))
+    if kind is not None
+)
+_CLOSING = (")", "]", "}")
+_DIRECTIVES = ("fmt:", "type:", "noqa", "pragma", "pylint:")
+
+
+@dataclass(frozen=True)
+class _DetachedComment:
+    number: int  # position among all comments of the file
+    text: str
+    word: int  # index of the last word token before the comment
+    closers: int  # closing brackets between that word and the comment
+
+
+def _detach_comments(source: str, keep: Set[int]) -> Tuple[str, List[_DetachedComment]]:
+    """Take out the comments behind code, except directives and those in ``keep``.
+
+    Black counts a trailing comment towards the line length and would break the
+    code in front of it.
+    """
+    lines = source.split("\n")
+    comments: List[_DetachedComment] = []
+    positions: List[Tuple[int, int]] = []
+    number = -1
+    word = -1
+    closers = 0
+    code_line = 0  # line on which the latest significant token ends
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type in _WORD_TOKENS:
+            word, closers, code_line = word + 1, 0, tok.end[0]
+        elif tok.type == tokenize.OP:
+            closers += tok.string in _CLOSING
+            code_line = tok.end[0]
+        elif tok.type == tokenize.COMMENT:
+            number += 1
+            directive = tok.string.lstrip("#").strip().startswith(_DIRECTIVES)
+            if code_line == tok.start[0] and word >= 0 and number not in keep and not directive:
+                comments.append(_DetachedComment(number, tok.string, word, closers))
+                positions.append(tok.start)
+
+    for line_no, col in reversed(positions):
+        lines[line_no - 1] = lines[line_no - 1][:col].rstrip()
+    return "\n".join(lines), comments
+
+
+def _reattach_comments(source: str, comments: List[_DetachedComment]) -> Tuple[str, Set[int]]:
+    """Put detached comments at the end of the line their code ends on.
+
+    Returns the new source and the numbers of the comments that have no such
+    place, because other code or another comment would share the line.
+    """
+    significant = _significant_tokens(source)
+    words = [i for i, tok in enumerate(significant) if tok.type in _WORD_TOKENS]
+    lines = source.split("\n")
+    placed: Set[int] = set()
+    homeless: Set[int] = set()
+    for comment in comments:
+        position = words[comment.word]
+        remaining = comment.closers
+        while remaining and position + 1 < len(significant):
+            position += 1
+            if significant[position].type in _WORD_TOKENS:
+                break
+            remaining -= significant[position].string in _CLOSING
+        line_no = significant[position].end[0]
+        followers = []
+        for tok in significant[position + 1 :]:
+            if tok.start[0] != line_no:
+                break
+            followers.append(tok.string)
+        # Only punctuation that ends the construct may stand between code and comment.
+        if remaining or line_no in placed or any(f not in (*_CLOSING, ",", ":") for f in followers):
+            homeless.add(comment.number)
+            continue
+        # A line that already has a comment (one that was not detached) is taken.
+        if "#" in lines[line_no - 1][significant[position].end[1] :]:
+            homeless.add(comment.number)
+            continue
+        placed.add(line_no)
+        lines[line_no - 1] += f"  {comment.text}"
+    return "\n".join(lines), homeless
 
 
 # ---------------------------------------------------------------------------
@@ -347,14 +451,22 @@ def format_source(source: str, config: FormattingConfig) -> str:
     """
     import black
 
-    to_format = _add_trailing_commas(source, config.explode_calls)
-    if config.keep_blank_lines:
-        to_format = _protect_blank_lines(to_format)
-    to_format = _mark_operator_splits(to_format, config.explode_operators)
-    formatted = black.format_str(to_format, mode=_black_mode(config))
-    formatted = _SPLIT_MARKER_RE.sub("", formatted)
-    if config.keep_blank_lines:
-        formatted = _BLANK_MARKER_RE.sub("", formatted)
+    # Comments that cannot be moved stay in the code, where Black breaks around them.
+    keep: Set[int] = set()
+    while True:
+        to_format, comments = _detach_comments(source, keep)
+        to_format = _add_trailing_commas(to_format, config.explode_calls)
+        if config.keep_blank_lines:
+            to_format = _protect_blank_lines(to_format)
+        to_format = _mark_operator_splits(to_format, config.explode_operators)
+        formatted = black.format_str(to_format, mode=_black_mode(config))
+        formatted = _SPLIT_MARKER_RE.sub("", formatted)
+        if config.keep_blank_lines:
+            formatted = _BLANK_MARKER_RE.sub("", formatted)
+        formatted, homeless = _reattach_comments(formatted, comments)
+        if not homeless:
+            break
+        keep |= homeless
 
     if ast.dump(ast.parse(source)) != ast.dump(ast.parse(formatted)):
         raise ValueError("formatting would change the meaning of the code; file left untouched")

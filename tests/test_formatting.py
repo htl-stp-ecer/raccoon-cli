@@ -62,13 +62,50 @@ class TestExplodeOperators:
         assert "__raccoon" not in out
         assert format_source(out, self.CONFIG) == out
 
-    def test_single_condition_stays_on_one_line(self):
-        source = "x = drive().until(a())\n"
-        assert format_source(source, self.CONFIG) == source
+    def test_single_condition_gets_its_own_line(self):
+        out = format_source("x = drive().until(a())\n", self.CONFIG)
+        assert out == "x = drive().until(\n    a()\n)\n"
+        assert format_source(out, self.CONFIG) == out
+
+    def test_long_comment_does_not_break_the_condition(self):
+        comment = "# " + "long " * 20 + "comment"
+        source = f"x = drive().until(\n    over_line(\n        rear.left\n    )  {comment}\n    + after_cm(6)\n)\n"
+        out = format_source(source, self.CONFIG)
+        assert out == f"x = drive().until(\n    over_line(rear.left)  {comment}\n    + after_cm(6)\n)\n"
+        assert format_source(out, self.CONFIG) == out
+
+    def test_too_long_condition_is_still_broken(self):
+        source = f"x = drive().until(a() + over_line({'b' * 50}, {'c' * 50}))  # end\n"
+        out = format_source(source, self.CONFIG)
+        assert f"        {'b' * 50},\n" in out
+        assert out.count("# end") == 1
+        assert format_source(out, self.CONFIG) == out
 
     def test_off_by_default(self):
         source = "x = drive().until(a + b)\n"
         assert format_source(source, FormattingConfig()) == source
+
+
+class TestCommentsAndLineLength:
+    LONG = "# " + "long " * 20 + "comment"
+
+    def test_long_comment_does_not_break_the_code(self):
+        source = f"x = foo(a, b)  {self.LONG}\n"
+        assert format_source(source, DEFAULTS) == source
+
+    def test_broken_line_is_joined_again(self):
+        out = format_source(f"x = foo(\n    a, b\n)  {self.LONG}\n", DEFAULTS)
+        assert out == f"x = foo(a, b)  {self.LONG}\n"
+
+    def test_comment_stays_behind_its_code_when_a_line_is_too_long(self):
+        source = f"x = foo(\n    a,  {self.LONG}\n    b\n)\n"
+        out = format_source(source, DEFAULTS)
+        assert f"a,  {self.LONG}\n" in out
+        assert format_source(out, DEFAULTS) == out
+
+    def test_directives_are_left_to_black(self):
+        out = format_source(f"x = foo(a, b)  # noqa {'x' * 90}\n", DEFAULTS)
+        assert out.startswith("x = foo(\n    a, b\n)")
 
 
 class TestFormatSource:
