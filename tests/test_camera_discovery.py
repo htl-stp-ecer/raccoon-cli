@@ -226,6 +226,7 @@ def test_the_list_of_processors_has_the_built_in_ones_first_then_those_of_each_p
         cd, "builtin_processors",
         lambda timeout=0: [{"path": "raccoon_cam.processors.color:ColorBlobs", "name": "ColorBlobs", "description": "Colours", "options": []}],
     )
+    monkeypatch.setattr(cd, "builtin_backends", lambda timeout=0: [])
     project = tmp_path / "bot"
     (project / "src").mkdir(parents=True)
     (project / "src" / "vision.py").write_text(
@@ -238,9 +239,7 @@ def test_the_list_of_processors_has_the_built_in_ones_first_then_those_of_each_p
     assert items[1]["origin"] == {"kind": "project", "project": "Bot"}
     assert (items[1]["path"], items[1]["project_id"], items[1]["description"]) == ("src.vision:Spot", "p1", "Finds a spot.")
     # The backends of the same project are not in the list of processors, and the other way round.
-    assert cd.list_backends([{"id": "p1", "name": "Bot", "path": str(project)}]) == [
-        item for item in cd.list_backends([{"id": "p1", "name": "Bot", "path": str(project)}]) if item["origin"]["kind"] == "builtin"
-    ]
+    assert cd.list_backends([{"id": "p1", "name": "Bot", "path": str(project)}]) == []
 
 
 @needs_raccoon_cam
