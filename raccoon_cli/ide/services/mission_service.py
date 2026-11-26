@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 import libcst as cst
-from contextlib import suppress
+from contextlib import aclosing, suppress
 
 from raccoon_cli.ide.core.analysis.detailed_mission_analyzer import DetailedMissionAnalyzer
 from raccoon_cli.ide.core.analysis.mission_analyzer import MissionAnalyzer
@@ -31,7 +31,8 @@ from raccoon_cli.ide.schemas.mission import DiscoveredMission
 from raccoon_cli.ide.schemas.mission_detail import ParsedMission, ParsedStep, Vector2D, ParsedComment, ParsedGroup, StepArgument
 from raccoon_cli.ide.schemas.simulation import SimulationDelta, SimulationStepData, MissionSimulationData
 from raccoon_cli.ide.config import Settings
-from raccoon_cli.run_recording import make_run_id, build_recording_env
+from raccoon_cli.run_configurations import RunConfiguration
+from raccoon_cli.run_recording import build_recording_env, make_run_id, run_dir_path
 from raccoon_cli import simulation as sim_shared
 import asyncio
 import os
@@ -39,6 +40,7 @@ import sys
 from asyncio.subprocess import PIPE
 import re
 import random
+import signal
 import sqlite3
 import time
 from typing import Optional as _OptionalBool
@@ -60,6 +62,8 @@ class MissionService:
         self._mission_analyzer = MissionAnalyzer()
         # Track running mission processes per project
         self._running_procs: dict[UUID, asyncio.subprocess.Process] = {}
+        self._run_group_signals: dict[asyncio.subprocess.Process, signal.Signals] = {}
+        self._run_start_lock = asyncio.Lock()
         # Simulation cancel flags per project
         self._sim_cancel: dict[UUID, asyncio.Event] = {}
         # Breakpoint wait handles per project (simulation/debug mode only)
@@ -1071,17 +1075,33 @@ class MissionService:
         # Resume any blocked breakpoint so simulation exits cleanly
         self.resume_breakpoint(project_uuid)
 
-        # Stop real process if running
-        proc = self._running_procs.pop(project_uuid, None)
+        proc = self._running_procs.get(project_uuid)
         if proc and proc.returncode is None:
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                proc.kill()
+            await self._terminate_run_process(proc)
             return {"stopped": True, "pid": proc.pid}
+        if cancel_event:
+            return {"stopped": True}
 
         return {"stopped": False, "message": "No running mission found"}
+
+    async def _terminate_run_process(self, proc: asyncio.subprocess.Process) -> None:
+        if proc.returncode is not None:
+            return
+        group_signal = self._run_group_signals.get(proc)
+        with suppress(ProcessLookupError):
+            if group_signal is None:
+                proc.terminate()
+            else:
+                os.killpg(proc.pid, group_signal)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=8.0)
+        except asyncio.TimeoutError:
+            with suppress(ProcessLookupError):
+                if group_signal is None:
+                    proc.kill()
+                else:
+                    os.killpg(proc.pid, signal.SIGKILL)
+            await proc.wait()
 
     async def stream_mission_output(
         self,
@@ -1091,7 +1111,7 @@ class MissionService:
         simulate: bool | str | None = None,
         debug: _OptionalBool[bool] = None,
         record_localization: bool = False,
-        extra_env: Dict[str, str] | None = None,
+        run_config: RunConfiguration | None = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Run the mission and yield structured websocket events with live output.
 
@@ -1154,14 +1174,6 @@ class MissionService:
 
             debug_mode = bool(debug) if debug is not None else False
 
-            if sim_mode is None:
-                # Local execution via run.sh
-                run_script = project_path / "run.sh"
-                if not run_script.exists():
-                    logger.warning(f"run.sh not found for project {project_uuid} at {run_script}")
-                    yield _stamped({"type": "error", "message": "run.sh not found"})
-                    return
-
             # Build planned step timeline for enrichment (only for single-
             # mission runs — whole-project runs use the live step events
             # from raccoon-lib to highlight per-mission).
@@ -1196,18 +1208,22 @@ class MissionService:
                         "message": "Fast simulation requires a specific mission name.",
                     })
                     return
-                # Fast heuristic simulation - yield fake events with delays
-                async for event in self._simulate_mission(project_uuid, mission_name, flattened_steps, debug_mode):
-                    yield event
+                events = self._simulate_mission(project_uuid, mission_name, flattened_steps, debug_mode)
             elif sim_mode == "real":
-                # Real libstp sim — spawn runner subprocess, stream pose + stdout
-                async for event in self._simulate_mission_real(project_uuid, project_path, mission_name, flattened_steps):
-                    yield event
+                events = self._simulate_mission_real(project_uuid, project_path, mission_name, flattened_steps)
             else:
-                # Real execution - run run.sh and stream output
-                async for event in self._execute_mission(project_uuid, project_path, mission_name, flattened_steps, record_localization=record_localization, extra_env=extra_env):
+                events = self._execute_mission(
+                    project_uuid, project_path, mission_name,
+                    debug=debug_mode,
+                    record_localization=record_localization,
+                    run_config=run_config,
+                )
+
+            async with aclosing(events):
+                async for event in events:
                     yield event
 
+            if sim_mode is None:
                 # After execution, send newly recorded timings from this run
                 try:
                     new_timings = await self._read_step_timings(project_path, since_unix=run_start_unix)
@@ -1275,14 +1291,15 @@ class MissionService:
                     cancel_task = asyncio.create_task(cancel_event.wait())
                     resume_task = asyncio.create_task(waiter.wait())
                     try:
-                        done, pending = await asyncio.wait(
+                        done, _ = await asyncio.wait(
                             {cancel_task, resume_task},
                             return_when=asyncio.FIRST_COMPLETED,
                         )
-                        for t in pending:
-                            t.cancel()
-                        state = "resumed" if resume_task in done else "cancelled"
+                        state = "cancelled" if cancel_task in done else "resumed"
                     finally:
+                        cancel_task.cancel()
+                        resume_task.cancel()
+                        await asyncio.gather(cancel_task, resume_task, return_exceptions=True)
                         self._breakpoint_waiters.pop(project_uuid, None)
 
                     yield _stamped({"type": "breakpoint", "state": state, "index": i + 1})
@@ -1357,7 +1374,6 @@ class MissionService:
             return {**event, "timestamp": time.time()}
 
         cancel_event = asyncio.Event()
-        self._sim_cancel[project_uuid] = cancel_event
 
         sim_settings = self._resolve_simulation_settings(project_path)
         python_exe = self._pick_sim_python()
@@ -1393,20 +1409,7 @@ class MissionService:
             env=env,
         )
         self._running_procs[project_uuid] = proc
-
-        yield _stamped({
-            "type": "started",
-            "pid": proc.pid,
-            "sim_mode": "real",
-            "scene": sim_settings["scene"],
-            "scene_source": sim_settings.get("scene_source"),
-        })
-        # Surface the resolved scene in the log stream too — easier to spot
-        # than the JSON ``started`` event when debugging "why empty table?".
-        yield _stamped({
-            "type": "stdout",
-            "line": f"[sim] scene = {sim_settings['scene']}  (source: {sim_settings.get('scene_source')})",
-        })
+        self._sim_cancel[project_uuid] = cancel_event
 
         sim_event_types = {
             "sim_started", "sim_pose", "sim_pose_error",
@@ -1455,18 +1458,29 @@ class MissionService:
         cancel_task = asyncio.create_task(cancel_event.wait())
 
         try:
+            yield _stamped({
+                "type": "started",
+                "pid": proc.pid,
+                "sim_mode": "real",
+                "scene": sim_settings["scene"],
+                "scene_source": sim_settings.get("scene_source"),
+            })
+            # Surface the resolved scene in the log stream too — easier to spot
+            # than the JSON ``started`` event when debugging "why empty table?".
+            yield _stamped({
+                "type": "stdout",
+                "line": f"[sim] scene = {sim_settings['scene']}  (source: {sim_settings.get('scene_source')})",
+            })
+
             while True:
                 pending = [t for t in (stdout_task, stderr_task, cancel_task) if t is not None]
                 if not pending or (stdout_task is None and stderr_task is None):
+                    await proc.wait()
                     break
                 done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
 
                 if cancel_task in done:
-                    proc.terminate()
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=3.0)
-                    except asyncio.TimeoutError:
-                        proc.kill()
+                    await self._terminate_run_process(proc)
                     break
 
                 if stdout_task in done:
@@ -1496,8 +1510,11 @@ class MissionService:
                 with suppress(BaseException):
                     await t
 
-            self._running_procs.pop(project_uuid, None)
-            self._sim_cancel.pop(project_uuid, None)
+            await self._terminate_run_process(proc)
+            if self._running_procs.get(project_uuid) is proc:
+                self._running_procs.pop(project_uuid)
+            if self._sim_cancel.get(project_uuid) is cancel_event:
+                self._sim_cancel.pop(project_uuid)
 
         await proc.wait()
         yield _stamped({"type": "exit", "returncode": proc.returncode})
@@ -1561,94 +1578,96 @@ class MissionService:
         project_uuid: UUID,
         project_path: Path,
         mission_name: str | None,
-        flattened_steps: List[Dict[str, Any]],
         *,
+        debug: bool = False,
         record_localization: bool = False,
-        extra_env: Dict[str, str] | None = None,
+        run_config: RunConfiguration | None = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Execute the mission(s) via run.sh and stream output.
-
-        When ``mission_name`` is None, runs the whole project (``raccoon run``
-        with no filter). When a name is given, it is passed as an extra arg
-        to ``run.sh`` — today ignored by ``src.main`` but preserved for
-        forward-compat with mission filtering.
-        """
-        def _stamped(event: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the shared CLI in a subprocess, retaining legacy launch scripts."""
+        def stamped(event: Dict[str, Any]) -> Dict[str, Any]:
             return {**event, "timestamp": time.time()}
 
-        run_id: str | None = None
-        argv = ["bash", "run.sh"]
+        legacy = (project_path / "run.sh").is_file()
+        run_id = make_run_id() if record_localization else None
+        env = {**os.environ, "COLUMNS": "120", "PYTHONUNBUFFERED": "1"}
+        if legacy:
+            argv = ["bash", "run.sh"]
+            if run_config:
+                env.update(run_config.env)
+                for enabled, name in (
+                    (run_config.dev, "LIBSTP_DEV_MODE"),
+                    (run_config.no_calibrate, "LIBSTP_NO_CALIBRATE"),
+                    (run_config.no_checkpoints, "LIBSTP_NO_CHECKPOINTS"),
+                    (run_config.debug, "LIBSTP_DEBUG"),
+                ):
+                    if enabled:
+                        env.setdefault(name, "1")
+            if debug:
+                env.setdefault("LIBSTP_DEBUG", "1")
+            if run_id:
+                record_hz = run_config.record_hz if run_config else None
+                env.update(build_recording_env(project_path, run_id, record_hz))
+        else:
+            argv = [sys.executable, "-m", "raccoon_cli.cli", "run", "--raw"]
+            if debug:
+                argv.append("--debug")
+            if run_id:
+                argv.extend(["--record-localization", "--run-id", run_id])
+            # Do not infer a profile from the mission name. Match the selected
+            # profile explicitly and leave subsequent arguments to the program.
+            argv.extend(["--run-config", run_config.name if run_config else "", "--"])
         if mission_name:
             argv.append(mission_name)
-        # Fix terminal width so Rich boxes render at a consistent 120-col width
-        # regardless of the parent process's TTY state.
-        run_env = {**os.environ, "COLUMNS": "120", "PYTHONUNBUFFERED": "1"}
-        if extra_env:
-            # Run-config env wins over the inherited environment, but the
-            # recording vars below still take precedence so localization
-            # capture stays predictable.
-            run_env.update({str(k): str(v) for k, v in extra_env.items()})
-        if record_localization:
-            run_id = make_run_id()
-            run_env.update(build_recording_env(project_path, run_id))
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=str(project_path),
-            env=run_env,
-            stdout=PIPE,
-            stderr=PIPE,
-        )
-        self._running_procs[project_uuid] = proc
 
-        yield _stamped({"type": "started", "pid": proc.pid})
-
-        async def read_stream(stream, stream_type):
-            while True:
-                line = await stream.readline()
-                if not line:
-                    break
-                yield _stamped({"type": stream_type, "line": line.decode("utf-8", errors="replace").rstrip()})
-
-        # Read stdout and stderr concurrently
-        stdout_task = asyncio.create_task(self._collect_lines(proc.stdout, "stdout"))
-        stderr_task = asyncio.create_task(self._collect_lines(proc.stderr, "stderr"))
-
-        # Yield lines as they come
-        while not stdout_task.done() or not stderr_task.done():
-            done, pending = await asyncio.wait(
-                {stdout_task, stderr_task},
-                return_when=asyncio.FIRST_COMPLETED,
-                timeout=0.1
+        async with self._run_start_lock:
+            # Another request can reach this point while timings were loaded.
+            await self.stop_mission(project_uuid)
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=project_path,
+                env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=PIPE,
+                stderr=PIPE,
+                start_new_session=os.name == "posix",
             )
-            # Check for any completed reads
-            for task in done:
-                for event in task.result():
-                    yield _stamped(event)
-                # Re-create the task if the stream isn't exhausted
-                if task is stdout_task and proc.stdout:
-                    stdout_task = asyncio.create_task(self._collect_lines(proc.stdout, "stdout"))
-                elif task is stderr_task and proc.stderr:
-                    stderr_task = asyncio.create_task(self._collect_lines(proc.stderr, "stderr"))
+            self._running_procs[project_uuid] = proc
+            if os.name == "posix":
+                # The CLI handles Ctrl+C to stop its local child or remote run.
+                self._run_group_signals[proc] = signal.SIGTERM if legacy else signal.SIGINT
 
-        await proc.wait()
-        self._running_procs.pop(project_uuid, None)
-
-        yield _stamped({"type": "exit", "returncode": proc.returncode})
-        if run_id is not None:
-            yield _stamped({"type": "run_recorded", "run_id": run_id})
-
-    async def _collect_lines(self, stream, stream_type: str) -> List[Dict[str, Any]]:
-        """Collect a batch of lines from a stream."""
-        events = []
-        if stream is None:
-            return events
+        streams = {}
         try:
-            line = await asyncio.wait_for(stream.readline(), timeout=0.1)
-            if line:
-                events.append({"type": stream_type, "line": line.decode("utf-8", errors="replace").rstrip()})
-        except asyncio.TimeoutError:
-            pass
-        return events
+            yield stamped({"type": "started", "pid": proc.pid})
+            for reader, kind in ((proc.stdout, "stdout"), (proc.stderr, "stderr")):
+                assert reader is not None
+                streams[asyncio.create_task(reader.readline())] = (reader, kind)
+            while streams:
+                done, _ = await asyncio.wait(streams, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    reader, kind = streams.pop(task)
+                    line = task.result()
+                    if line:
+                        streams[asyncio.create_task(reader.readline())] = (reader, kind)
+                        yield stamped({
+                            "type": kind,
+                            "line": line.decode("utf-8", errors="replace").rstrip("\r\n"),
+                        })
+            returncode = await proc.wait()
+        finally:
+            for task in streams:
+                task.cancel()
+            await asyncio.gather(*streams, return_exceptions=True)
+            try:
+                await self._terminate_run_process(proc)
+            finally:
+                self._run_group_signals.pop(proc, None)
+                if self._running_procs.get(project_uuid) is proc:
+                    self._running_procs.pop(project_uuid)
+
+        yield stamped({"type": "exit", "returncode": returncode})
+        if run_id is not None and (legacy or (run_dir_path(project_path, run_id) / "localization.jsonl").is_file()):
+            yield stamped({"type": "run_recorded", "run_id": run_id})
 
     def get_mission_simulation_data(self, project_uuid: UUID, mission_name: str) -> Optional[MissionSimulationData]:
         """Get simulation data for a specific mission."""

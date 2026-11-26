@@ -27,6 +27,7 @@ from raccoon_cli.commands.codegen import _resolve_ftmap_paths
 from raccoon_cli.commands.migrate import _get_format_version, _load_migrations
 from raccoon_cli.run_configurations import (
     RunConfiguration,
+    get_run_configuration,
     load_run_configurations,
 )
 from raccoon_cli.run_recording import (
@@ -1062,7 +1063,7 @@ def _run_local(
             returncode = _run_local_streaming_jsonl(
                 cmd_parts, project_root, env, console, log_path=run_log_path
             )
-        elif sys.platform == "win32" or sys.stdout.isatty():
+        elif raw or sys.platform == "win32" or sys.stdout.isatty():
             with _active_program_lock():
                 _ensure_single_active_program(project_root, console)
                 proc = subprocess.Popen(
@@ -1169,6 +1170,7 @@ async def _run_remote(
     record_sensors: bool = True,
     extra_env: dict | None = None,
     run_id: str | None = None,
+    raw: bool = False,
 ) -> None:
     """Run the project on the connected Pi."""
     console: Console = ctx.obj["console"]
@@ -1321,6 +1323,8 @@ async def _run_remote(
         live_holder: dict[str, Live] = {}
 
         def _on_line(line: str) -> None:
+            if raw:
+                print(line, flush=True)
             rec = parse_record(line)
             if rec is not None:
                 view.push(rec)
@@ -1334,20 +1338,26 @@ async def _run_remote(
                 collected.append(line)
             # Not printed here: between the live view's redraws it comes out
             # mangled. It is shown in one piece when the run is over.
-            plain_lines.append(line)
+            if not raw:
+                plain_lines.append(line)
 
         try:
-            with Live(
-                view.render(),
-                console=console,
-                refresh_per_second=12,
-                transient=False,
-            ) as live:
-                live_holder["live"] = live
+            if raw:
                 final_status = handler.stream_to_console(
                     console, on_line=_on_line, echo=False
                 )
-                live.update(view.render())
+            else:
+                with Live(
+                    view.render(),
+                    console=console,
+                    refresh_per_second=12,
+                    transient=False,
+                ) as live:
+                    live_holder["live"] = live
+                    final_status = handler.stream_to_console(
+                        console, on_line=_on_line, echo=False
+                    )
+                    live.update(view.render())
         finally:
             signal.signal(signal.SIGINT, original_handler)
 
@@ -1499,8 +1509,10 @@ def _warn_if_migrations_pending(console: Console, project_root: Path) -> None:
 @click.option(
     "--raw",
     is_flag=True,
-    help="Local runs: inherit the program's stdout directly instead of the live JSONL log viewer.",
+    help="Stream program output directly instead of using the live log viewer.",
 )
+@click.option("--run-id", hidden=True)
+@click.option("--run-config", "run_config_name", hidden=True)
 @click.pass_context
 def run_command(
     ctx: click.Context,
@@ -1518,6 +1530,8 @@ def run_command(
     record_hz: float | None,
     record_sensors: bool,
     raw: bool,
+    run_id: str | None = None,
+    run_config_name: str | None = None,
 ) -> None:
     """Run codegen and then execute src.main.
 
@@ -1571,8 +1585,11 @@ def run_command(
 
         # Resolve run configuration: first positional arg picks one if it
         # matches a known name. CLI flags then layer on top of the config.
-        run_configs = load_run_configurations(project_root, config)
-        args, run_cfg = _extract_run_config(args, run_configs)
+        if run_config_name is None:
+            run_configs = load_run_configurations(project_root, config)
+            args, run_cfg = _extract_run_config(args, run_configs)
+        else:
+            run_cfg = get_run_configuration(project_root, run_config_name, config) if run_config_name else None
         extra_env: dict[str, str] = {}
         if run_cfg is not None:
             console.print(
@@ -1611,7 +1628,10 @@ def run_command(
 
         # One run_id for this invocation — names the unified artifact dir
         # .raccoon/runs/<run_id>/ for the log, localization, profile, manifest.
-        run_id = make_run_id()
+        if run_id is None:
+            run_id = make_run_id()
+        elif not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", run_id):
+            raise click.BadParameter("expected a UTC run timestamp", param_hint="--run-id")
 
         # Check if we should run remotely
         if not local:
@@ -1674,6 +1694,7 @@ def run_command(
                         record_sensors=record_sensors,
                         extra_env=extra_env,
                         run_id=run_id,
+                        raw=raw,
                     )
                 )
                 return
@@ -1710,7 +1731,7 @@ def run_command(
     except ProjectError as exc:
         logger.error(str(exc))
         raise SystemExit(1) from exc
-    except SystemExit:
+    except (SystemExit, click.ClickException):
         raise
     except Exception:
         logger.exception("Unexpected error while running project")
