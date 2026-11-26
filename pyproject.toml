@@ -40,6 +40,7 @@ dependencies = [
     "httpx>=0.24",
     "websocket-client>=1.0",
     # IDE backend dependencies
+    "anyio>=3.7",
     "libcst>=1.0.0",
     "pydantic>=2.0",
     "raccoon-transport>=74",
