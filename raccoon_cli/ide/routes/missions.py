@@ -1,10 +1,12 @@
 """Mission API routes."""
 
+from contextlib import aclosing
 from typing import List, Dict, Any
 from uuid import UUID
 import logging
 import asyncio
 
+from anyio import CancelScope
 from fastapi import APIRouter, Depends, HTTPException, Body, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, field_validator
 
@@ -347,37 +349,32 @@ async def _run_ws_handler(
         # raccoon.project.yml + builtin presets, then layered onto the
         # explicit query-param values (explicit query params still win).
         run_config_param = qp.get("run_config") if qp is not None else None
-        run_config_env: dict[str, str] | None = None
+        run_config = None
         if run_config_param:
             from raccoon_cli.run_configurations import get_run_configuration
             from raccoon_cli.project import ProjectError as _ProjectError
             try:
                 project_path = svc._repo.get_project_path(project_uuid)
                 if project_path and project_path.exists():
-                    rc = get_run_configuration(project_path, run_config_param)
-                    # Map config target → simulate flag if caller did not set one
-                    if simulate is None and rc.target == "simulated":
+                    run_config = get_run_configuration(project_path, run_config_param)
+                    if simulate is None and run_config.target == "simulated":
                         simulate = "real"
-                    if not record_localization and rc.record_localization:
-                        record_localization = True
-                    # Build LIBSTP_* env for the child process — same wire
-                    # format as raccoon_cli/commands/run.py uses.
-                    run_config_env = dict(rc.env)
-                    if rc.dev:
-                        run_config_env.setdefault("LIBSTP_DEV_MODE", "1")
-                    if rc.no_calibrate:
-                        run_config_env.setdefault("LIBSTP_NO_CALIBRATE", "1")
-                    if rc.no_checkpoints:
-                        run_config_env.setdefault("LIBSTP_NO_CHECKPOINTS", "1")
-                    if rc.debug:
-                        run_config_env.setdefault("LIBSTP_DEBUG", "1")
+                    record_localization = record_localization or run_config.record_localization
             except _ProjectError as e:
                 await websocket.send_json({"type": "error", "message": str(e)})
                 return
 
         async def producer():
-            async for event in svc.stream_mission_output(project_uuid, mission_name, simulate=simulate, debug=debug_mode, record_localization=record_localization, extra_env=run_config_env):
-                await websocket.send_json(event)
+            async with aclosing(svc.stream_mission_output(
+                project_uuid,
+                mission_name,
+                simulate=simulate,
+                debug=debug_mode,
+                record_localization=record_localization,
+                run_config=run_config,
+            )) as events:
+                async for event in events:
+                    await websocket.send_json(event)
 
         async def consumer():
             while True:
@@ -402,30 +399,20 @@ async def _run_ws_handler(
         consumer_task = asyncio.create_task(consumer())
         tasks = {producer_task, consumer_task}
         try:
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
-            for task in pending:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 await task
         finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+            # The ASGI handler may itself be cancelled on disconnect. Reap
+            # this run before the handler's cancellation can interrupt cleanup.
+            with CancelScope(shield=True):
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
     except WebSocketDisconnect:
-        # Client disconnected; try to stop the mission gracefully
-        try:
-            await svc.stop_mission(project_uuid)
-        except Exception:
-            pass
+        # Cancelling the producer closes the corresponding run.
+        pass
     except Exception as e:
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
