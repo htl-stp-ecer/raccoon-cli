@@ -322,7 +322,9 @@ async def calibrate_project(
     return await _start_command(
         project_id=project_id,
         command_type=CommandType.CALIBRATE,
-        args=["calibrate", *request.args, "--local"],
+        # Both options belong to the `calibrate` group, so they precede the subcommand.
+        # Codegen is done client-side before sync.
+        args=["calibrate", "--local", "--no-codegen", *request.args],
         env=request.env,
         deploy_services=request.deploy_services,
     )
