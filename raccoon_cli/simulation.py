@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 #: Scene used when a project declares no ``table_map`` (and no explicit
 #: ``simulation.scene``). Only resolvable if it exists project-locally or
-#: under ``RACCOON_SIM_SCENE_DIR`` — see ``runner._resolve_scene``.
+#: among the bundled raccoon scenes — see ``runner._resolve_scene``.
 DEFAULT_SCENE = "empty_table.ftmap"
 
 

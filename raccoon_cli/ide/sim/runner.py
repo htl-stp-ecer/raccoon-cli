@@ -27,8 +27,10 @@ CLI::
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
+import os
 import re
 import sys
 import threading
@@ -55,28 +57,34 @@ def _parse_start(raw: str | None) -> tuple[float, float, float]:
 
 def _resolve_scene(scene: str, project_root: Path) -> Path:
     candidate = Path(scene).expanduser()
-    if candidate.is_absolute() and candidate.exists():
+    if candidate.is_absolute() and candidate.is_file():
         return candidate
     # Project-local — the normal case: robot.physical.table_map is a
     # project-relative .ftmap path.
     local = project_root / candidate
-    if local.exists():
+    if local.is_file():
         return local
-    # Optional shared scene library (e.g. raccoon-lib/scenes for the built-in
-    # empty_table fallback). No hard-coded path — point RACCOON_SIM_SCENE_DIR
-    # (os.pathsep-separated) at it if you rely on bundled scenes.
-    import os
-
     for entry in os.environ.get("RACCOON_SIM_SCENE_DIR", "").split(os.pathsep):
         if not entry.strip():
             continue
         bundled = Path(entry).expanduser() / candidate
-        if bundled.exists():
+        if bundled.is_file():
             return bundled
+
+    # Shipped wheels install scenes beside the raccoon package. Resolve its
+    # location without importing the native bindings before sim setup.
+    if candidate == Path(candidate.name):
+        package = importlib.util.find_spec("raccoon")
+        locations = package.submodule_search_locations if package else None
+        for location in locations or ():
+            bundled = Path(location) / "scenes" / candidate
+            if bundled.is_file():
+                return bundled
+
     raise SystemExit(
-        f"Scene not found: {scene!r}. Looked in {project_root} and "
-        f"$RACCOON_SIM_SCENE_DIR. Configure robot.physical.table_map to a "
-        f"project-relative .ftmap, or set RACCOON_SIM_SCENE_DIR."
+        f"Scene not found: {scene!r}. Looked in {project_root}, "
+        "$RACCOON_SIM_SCENE_DIR, and the installed raccoon scenes. "
+        "Configure robot.physical.table_map to a project-relative .ftmap, or set RACCOON_SIM_SCENE_DIR."
     )
 
 
