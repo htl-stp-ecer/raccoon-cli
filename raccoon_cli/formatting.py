@@ -1,12 +1,15 @@
 """Project source formatting — Black with the project's own settings.
 
 ``raccoon format`` formats the hand-written Python under ``src/`` with Black.
-Black itself is tuned in two ways so that mission code keeps its shape:
+Black itself is tuned in several ways so that mission code keeps its shape:
 
 * ``hug_brackets`` keeps ``seq([`` and ``])`` on the same line as the call, so the
   steps of a mission are not pushed one indentation level deeper.
 * ``explode_calls`` names calls (default ``seq`` and ``parallel``) whose arguments
   are always written one per line, however short they are.
+* ``explode_operators`` names calls (none by default, typically ``until``) whose
+  arguments are split before every operator, however short they are, so each
+  condition of ``a + b + c`` gets its own line.
 * ``keep_blank_lines`` keeps blank lines that separate groups of steps inside a
   bracket (Black normally removes them). Several blank lines become one.
 
@@ -19,6 +22,7 @@ file take the defaults of :class:`FormattingConfig`. With ``auto_format: true``
 from __future__ import annotations
 
 import ast
+import bisect
 import fnmatch
 import io
 import re
@@ -39,6 +43,11 @@ _BLANK_MARKER = "# __raccoon_blank__"
 _BLANK_MARKER_RE = re.compile(r"^[ \t]*" + re.escape(_BLANK_MARKER) + r"[ \t]*$", re.MULTILINE)
 
 
+# Forces Black to split a line before an operator; the whole line is removed again.
+_SPLIT_MARKER = "# __raccoon_split__"
+_SPLIT_MARKER_RE = re.compile(r"^[ \t]*" + re.escape(_SPLIT_MARKER) + r"[ \t]*\n", re.MULTILINE)
+
+
 class FormattingConfigError(ValueError):
     """``raccoon.formatting.yml`` is malformed."""
 
@@ -52,6 +61,7 @@ class FormattingConfig:
     hug_brackets: bool = True
     keep_blank_lines: bool = True
     explode_calls: Tuple[str, ...] = DEFAULT_EXPLODE_CALLS
+    explode_operators: Tuple[str, ...] = ()
     exclude: Tuple[str, ...] = DEFAULT_EXCLUDE
 
 
@@ -62,7 +72,8 @@ _BOOL_KEYS = (
     "hug_brackets",
     "keep_blank_lines",
 )
-_KNOWN_KEYS = frozenset({*_BOOL_KEYS, "line_length", "explode_calls", "exclude"})
+_LIST_KEYS = ("exclude", "explode_calls", "explode_operators")
+_KNOWN_KEYS = frozenset({*_BOOL_KEYS, *_LIST_KEYS, "line_length"})
 
 
 def parse_formatting_config(raw: object) -> FormattingConfig:
@@ -92,7 +103,7 @@ def parse_formatting_config(raw: object) -> FormattingConfig:
             raise FormattingConfigError(f"line_length must be an integer of at least 20, got {length!r}")
         values["line_length"] = length
 
-    for key in ("exclude", "explode_calls"):
+    for key in _LIST_KEYS:
         if key in raw:
             entries = raw[key]
             if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
@@ -181,6 +192,17 @@ def _call_name(func: ast.expr) -> Optional[str]:
     return None
 
 
+def _significant_tokens(source: str) -> List[tokenize.TokenInfo]:
+    """All tokens except comments, newlines and indentation."""
+    skipped = (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT)
+    return [tok for tok in tokenize.generate_tokens(io.StringIO(source).readline) if tok.type not in skipped]
+
+
+def _char_col(lines: List[str], line_no: int, byte_col: int) -> int:
+    """Convert an ``ast`` column (UTF-8 bytes) into a ``tokenize`` column (characters)."""
+    return len(lines[line_no - 1].encode("utf-8")[:byte_col].decode("utf-8", errors="ignore"))
+
+
 def _add_trailing_commas(source: str, names: Tuple[str, ...]) -> str:
     """Put a trailing comma into every call of ``names`` that lacks one.
 
@@ -194,16 +216,8 @@ def _add_trailing_commas(source: str, names: Tuple[str, ...]) -> str:
     tree = ast.parse(source)
     lines = source.split("\n")
 
-    # Significant tokens (no comments / newlines) with character positions.
-    significant: List[tokenize.TokenInfo] = [
-        tok
-        for tok in tokenize.generate_tokens(io.StringIO(source).readline)
-        if tok.type not in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT)
-    ]
+    significant = _significant_tokens(source)
     index_by_end = {tok.end: i for i, tok in enumerate(significant)}
-
-    def char_col(line_no: int, byte_col: int) -> int:
-        return len(lines[line_no - 1].encode("utf-8")[:byte_col].decode("utf-8", errors="ignore"))
 
     insert_at: Set[Tuple[int, int]] = set()
     for node in ast.walk(tree):
@@ -217,7 +231,7 @@ def _add_trailing_commas(source: str, names: Tuple[str, ...]) -> str:
         target = node
         if len(arguments) == 1 and isinstance(arguments[0], ast.List) and not node.keywords:
             target = arguments[0]
-        closing = (target.end_lineno, char_col(target.end_lineno, target.end_col_offset))
+        closing = (target.end_lineno, _char_col(lines, target.end_lineno, target.end_col_offset))
         position = index_by_end.get(closing)
         if position is None or position == 0:
             continue
@@ -229,6 +243,79 @@ def _add_trailing_commas(source: str, names: Tuple[str, ...]) -> str:
     for line_no, col in sorted(insert_at, reverse=True):
         line = lines[line_no - 1]
         lines[line_no - 1] = line[:col] + "," + line[col:]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Calls whose operator chains are always one operand per line
+# ---------------------------------------------------------------------------
+
+_BINARY_PRECEDENCE = (
+    (ast.BitOr,),
+    (ast.BitXor,),
+    (ast.BitAnd,),
+    (ast.LShift, ast.RShift),
+    (ast.Add, ast.Sub),
+    (ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.MatMult),
+)
+
+
+def _operand_gaps(node: ast.expr) -> List[Tuple[ast.expr, ast.expr]]:
+    """Neighbouring operands of the outermost operator chain of ``node``.
+
+    A chain consists of operators of equal precedence: ``a + b - c`` has two
+    gaps, ``a + b | c`` only the one around ``|``.
+    """
+    if isinstance(node, ast.BoolOp):
+        return list(zip(node.values, node.values[1:]))
+    if isinstance(node, ast.Compare):
+        operands = [node.left, *node.comparators]
+        return list(zip(operands, operands[1:]))
+    if isinstance(node, ast.BinOp):
+        for level in _BINARY_PRECEDENCE:
+            if isinstance(node.op, level):
+                left = node.left
+                inner = []
+                if isinstance(left, ast.BinOp) and isinstance(left.op, level):
+                    inner = _operand_gaps(left)
+                return [*inner, (left, node.right)]
+    return []
+
+
+def _mark_operator_splits(source: str, names: Tuple[str, ...]) -> str:
+    """Put a marker comment before the operators in the arguments of ``names``.
+
+    Black cannot join lines across a comment, so it splits the expression at
+    these operators. Operators nested deeper (in parentheses or of higher
+    precedence) stay together.
+    """
+    if not names:
+        return source
+    tree = ast.parse(source)
+    lines = source.split("\n")
+    significant = _significant_tokens(source)
+    starts = [tok.start for tok in significant]
+
+    insert_at: Set[Tuple[int, int]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _call_name(node.func) not in names:
+            continue
+        for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+            for left, right in _operand_gaps(argument):
+                left_end = (left.end_lineno, _char_col(lines, left.end_lineno, left.end_col_offset))
+                position = bisect.bisect_left(starts, left_end)
+                # The operator follows the left operand and its closing parentheses.
+                while significant[position].string == ")":
+                    position += 1
+                insert_at.add(significant[position].start)
+
+    for line_no, col in sorted(insert_at, reverse=True):
+        line = lines[line_no - 1]
+        head, tail = line[:col], line[col:]
+        if head.strip():
+            lines[line_no - 1] = f"{head}\n{_SPLIT_MARKER}\n{tail}"
+        else:  # the operator already starts its line
+            lines[line_no - 1] = f"{head}{_SPLIT_MARKER}\n{line}"
     return "\n".join(lines)
 
 
@@ -263,7 +350,9 @@ def format_source(source: str, config: FormattingConfig) -> str:
     to_format = _add_trailing_commas(source, config.explode_calls)
     if config.keep_blank_lines:
         to_format = _protect_blank_lines(to_format)
+    to_format = _mark_operator_splits(to_format, config.explode_operators)
     formatted = black.format_str(to_format, mode=_black_mode(config))
+    formatted = _SPLIT_MARKER_RE.sub("", formatted)
     if config.keep_blank_lines:
         formatted = _BLANK_MARKER_RE.sub("", formatted)
 

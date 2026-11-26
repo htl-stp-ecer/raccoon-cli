@@ -46,6 +46,31 @@ class M010Mission(Mission):
 DEFAULTS = FormattingConfig()
 
 
+class TestExplodeOperators:
+    CONFIG = FormattingConfig(explode_operators=("until",))
+
+    def test_every_condition_gets_its_own_line(self):
+        out = format_source("x = drive().until(a() + b() + c())\n", self.CONFIG)
+        assert out == "x = drive().until(\n    a()\n    + b()\n    + c()\n)\n"
+
+    def test_only_the_outermost_precedence_is_split(self):
+        out = format_source("x = drive().until(a + b | c)\n", self.CONFIG)
+        assert out == "x = drive().until(\n    a + b\n    | c\n)\n"
+
+    def test_result_is_stable_and_has_no_markers(self):
+        out = format_source("x = drive().until(a > (b) > c)\n", self.CONFIG)
+        assert "__raccoon" not in out
+        assert format_source(out, self.CONFIG) == out
+
+    def test_single_condition_stays_on_one_line(self):
+        source = "x = drive().until(a())\n"
+        assert format_source(source, self.CONFIG) == source
+
+    def test_off_by_default(self):
+        source = "x = drive().until(a + b)\n"
+        assert format_source(source, FormattingConfig()) == source
+
+
 class TestFormatSource:
     def test_seq_bracket_stays_hugged(self):
         out = format_source(MISSION, DEFAULTS)
@@ -226,6 +251,7 @@ class TestConfig:
             {"exclude": [1]},
             {"explode_calls": "seq"},
             {"explode_calls": [1]},
+            {"explode_operators": "until"},
             ["auto_format"],
         ],
     )
