@@ -27,6 +27,7 @@ CLI::
 from __future__ import annotations
 
 import argparse
+import atexit
 import importlib.util
 import json
 import math
@@ -91,10 +92,9 @@ def _resolve_scene(scene: str, project_root: Path) -> Path:
 def _build_sim_robot_config(project_cfg: dict[str, Any]):
     """Translate raccoon.project.yml into a SimRobotConfig.
 
-    Only the geometry/kinematics that the sim physics needs is touched; the
-    rest of the project config (PID, sensors, etc.) is ignored.
+    Mirror the generated robot's geometry and motor wiring in the mock HAL.
     """
-    from raccoon.testing.sim import SimRobotConfig
+    from raccoon.testing.sim import LineSensorMount, SimRobotConfig
 
     robot = project_cfg.get("robot") or {}
     physical = robot.get("physical") or {}
@@ -108,21 +108,53 @@ def _build_sim_robot_config(project_cfg: dict[str, Any]):
         cfg.length_cm = float(length)
     rotc = physical.get("rotation_center") or {}
     if (rx := rotc.get("x_cm")) is not None:
-        cfg.rotation_center_forward_cm = float(rx)
+        cfg.rotation_center_strafe_cm = cfg.width_cm / 2 - float(rx)
     if (ry := rotc.get("y_cm")) is not None:
-        cfg.rotation_center_strafe_cm = float(ry)
+        cfg.rotation_center_forward_cm = float(ry) - cfg.length_cm / 2
 
-    kind = (kin.get("type") or "differential").lower()
-    if kind == "mecanum":
+    if (kin.get("type") or "differential").lower() == "mecanum":
         cfg.drivetrain = "mecanum"
+        wheels = {
+            "fl": ("front_left_motor",),
+            "fr": ("front_right_motor",),
+            "bl": ("back_left_motor", "rear_left_motor"),
+            "br": ("back_right_motor", "rear_right_motor"),
+        }
     else:
         cfg.drivetrain = "diff"
+        wheels = {"left": ("left_motor",), "right": ("right_motor",)}
+
+    definitions = project_cfg.get("definitions") or {}
+    for wheel, names in wheels.items():
+        for name in names:
+            device = definitions.get(kin.get(name))
+            if isinstance(device, dict):
+                if (port := device.get("port")) is not None:
+                    setattr(cfg, f"{wheel}_motor_port", int(port))
+                if (inverted := device.get("inverted")) is not None:
+                    setattr(cfg, f"{wheel}_motor_inverted", bool(inverted))
+                break
 
     if (wr := kin.get("wheel_radius")) is not None:
         cfg.wheel_radius_m = float(wr)
     if (wb := kin.get("wheelbase")) is not None:
         cfg.wheelbase_m = float(wb)
         cfg.track_width_m = float(wb)
+
+    for mount in physical.get("sensors") or []:
+        name = mount.get("name")
+        definition = definitions.get(name) or {}
+        if definition.get("type") != "IRSensor":
+            continue
+        port = definition.get("port")
+        x_cm, y_cm = mount.get("x_cm"), mount.get("y_cm")
+        if port is not None and x_cm is not None and y_cm is not None:
+            cfg.line_sensors.append(LineSensorMount(
+                analog_port=int(port),
+                forward_cm=float(y_cm) - cfg.length_cm / 2,
+                strafe_cm=cfg.width_cm / 2 - float(x_cm),
+                name=name,
+            ))
 
     return cfg
 
@@ -234,6 +266,46 @@ def _install_wait_for_button_bypass() -> None:
     except Exception as exc:  # noqa: BLE001
         _emit({"type": "sim_error",
                "message": f"Could not patch WaitForButton: {exc}"})
+
+
+def _install_mock_transport_compatibility() -> None:
+    """Let headless setup and firmware mode steps run on transport-less wheels."""
+    try:
+        from raccoon.ui import step as ui_step
+        from raccoon.ui.step import get_transport
+    except ImportError:
+        return
+
+    try:
+        get_transport()
+    except RuntimeError as exc:
+        if "mock driver bundle" not in str(exc):
+            raise
+    else:
+        return
+
+    class UnavailableScreenTransport:
+        def __getattr__(self, name: str) -> Any:
+            raise RuntimeError(
+                "This step requires the robot screen. Simulator runs can use "
+                "parameter defaults or saved values for setup prompts."
+            )
+
+    # UIStep acquires transport during mission preload, before AskNumber and
+    # similar steps can honor LIBSTP_NO_CALIBRATE. Defer the error until a
+    # step actually tries to render a screen or listen for events.
+    ui_step.get_transport = UnavailableScreenTransport
+
+    try:
+        from raccoon.step.motion.set_speed_mode import SetSpeedMode, set_speed_mode_enabled
+    except ImportError:
+        return
+
+    async def _set_sim_speed_mode(self, robot) -> None:
+        # The mock platform has no STM32 to acknowledge this command.
+        set_speed_mode_enabled(self._enabled)
+
+    SetSpeedMode._execute_step = _set_sim_speed_mode
 
 
 def _ensure_localization(robot: object) -> None:
@@ -411,12 +483,19 @@ def main(argv: list[str] | None = None) -> int:
 
         async def _run_missions_with_loc(self):  # type: ignore[no-untyped-def]
             _ensure_localization(self)
+            for mount in sim_robot.line_sensors:
+                sensor = getattr(getattr(self, "defs", None), mount.name, None)
+                if sensor is not None:
+                    # SimWorld produces a 10-bit reflectance signal. Physical
+                    # calibration does not describe those simulated readings.
+                    sensor.setCalibration(700.0, 300.0)
             await _original_run_missions(self)
 
         GenericRobot._run_missions = _run_missions_with_loc  # type: ignore[assignment]
 
         _install_step_event_emitter()
         _install_wait_for_button_bypass()
+        _install_mock_transport_compatibility()
     except Exception as exc:  # noqa: BLE001 — non-fatal, just warn
         _emit({"type": "sim_error",
                "message": f"Could not patch GenericRobot hooks: {exc}"})
@@ -467,4 +546,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    exit_code = main()
+    # MockPlatform's native singletons can crash when Python collects them
+    # during interpreter shutdown. The simulator has already detached. Run
+    # registered cleanup and report the mission result without finalizing
+    # the native objects a second time in this dedicated subprocess.
+    atexit._run_exitfuncs()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code & 0xFF)
