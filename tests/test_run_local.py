@@ -8,12 +8,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 import pytest
+from rich.console import Console
 
 from raccoon_cli.commands.run import (
     STDERR_BEGIN,
     STDERR_END,
     _ensure_single_active_program,
     _framed_stderr,
+    _print_program_stderr,
     _run_local,
     _run_local_streaming_jsonl,
 )
@@ -306,3 +308,16 @@ def test_streaming_stderr_on_success_is_printed_saved_and_logged_as_a_warning(fa
     assert (log_path.parent / "stderr.log").exists()
     records = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert {r["level"] for r in records} == {"warn"}
+
+
+def test_stderr_bars_are_cyan_with_a_blue_label():
+    console = Console(force_terminal=True, color_system="standard", width=100)
+    with console.capture() as capture:
+        _print_program_stderr(console, _framed_stderr("boom"), "red")
+
+    out = capture.get()
+    for label in ("BEGIN PROGRAM STDERR", "END PROGRAM STDERR"):
+        assert f"\x1b[34m {label}" not in out  # the spaces around the label stay cyan
+        assert f"\x1b[34m{label}\x1b[0m" in out
+    assert "\x1b[36m=" in out
+    assert "\x1b[31mboom\x1b[0m" in out

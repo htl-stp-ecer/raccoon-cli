@@ -583,11 +583,28 @@ STDERR_END = _stderr_bar("END PROGRAM STDERR")
 
 
 def _print_program_stderr(console: Console, text: str, style: str = "") -> None:
-    """Print *text* as it is, ANSI colours kept, after the live view has ended."""
+    """Print *text* as it is, ANSI colours kept, after the live view has ended.
+
+    *style* applies to the program's output. The BEGIN and END bars always have
+    their own colours.
+    """
     rendered = Text.from_ansi(text.rstrip("\n"))
     if style:
         rendered.stylize(style)
+    for bar in (STDERR_BEGIN, STDERR_END):
+        _colour_stderr_bar(rendered, bar)
     console.print(rendered)
+
+
+def _colour_stderr_bar(rendered: Text, bar: str) -> None:
+    """Colour every occurrence of *bar*: cyan ``=`` around a blue label."""
+    label = bar.strip("= ")
+    start = rendered.plain.find(bar)
+    while start != -1:
+        label_start = start + bar.index(label)
+        rendered.stylize("cyan", start, start + len(bar))
+        rendered.stylize("blue", label_start, label_start + len(label))
+        start = rendered.plain.find(bar, start + len(bar))
 
 
 def _framed_stderr(err: str) -> str:
