@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import sys
+import traceback
 
 import click
 from rich.console import Console
@@ -198,5 +201,42 @@ main.add_command(upload_command)
 main.add_command(format_command)
 
 
+def entry_point() -> None:
+    """Run the CLI as a process (the ``raccoon`` command and ``python -m``).
+
+    Once the robot library is loaded, the process ends with ``os._exit()``: the
+    teardown of its native modules can abort the process (``mutex lock failed`` on
+    macOS), and an exit hook of the library replaces the exit status.
+    """
+    try:
+        main()
+    except SystemExit as exc:
+        if "raccoon" not in sys.modules:
+            raise
+        if exc.code is not None and not isinstance(exc.code, int):
+            print(exc.code, file=sys.stderr)
+        _exit_without_teardown(_normalize_exit_code(exc.code))
+    except Exception:
+        if "raccoon" not in sys.modules:
+            raise
+        traceback.print_exc()
+        _exit_without_teardown(1)
+
+
+def _exit_without_teardown(code: int) -> None:
+    """End the process with *code*, skipping atexit hooks and native destructors."""
+    # Older transport releases have no shutdown_transport()
+    shutdown = getattr(sys.modules.get("raccoon_transport"), "shutdown_transport", None)
+    try:
+        if shutdown is not None:
+            shutdown()
+    except Exception:
+        traceback.print_exc()
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 if __name__ == "__main__":
-    main()
+    entry_point()

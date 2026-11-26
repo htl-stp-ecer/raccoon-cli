@@ -65,7 +65,7 @@ arm = [
 asyncio_mode = "auto"
 
 [project.scripts]
-raccoon = "raccoon_cli.cli:main"
+raccoon = "raccoon_cli.cli:entry_point"
 raccoon-server = "raccoon_cli.server.cli:main"
 
 [tool.setuptools.dynamic]
