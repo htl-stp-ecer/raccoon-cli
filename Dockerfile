@@ -4,14 +4,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# System packages: Python 3.13, build tools, git, Node.js 20
+# System packages: Python 3.13, build tools, git, Node.js 24
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
         build-essential \
         libglib2.0-0 \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
